@@ -6,6 +6,8 @@ import com.hmdp.dto.Result;
 import com.hmdp.dto.UserDTO;
 import com.hmdp.entity.Blog;
 import com.hmdp.service.IBlogService;
+import com.hmdp.service.ShopSummaryService;
+import com.hmdp.utils.LocalCacheManager;
 import com.hmdp.utils.SystemConstants;
 import com.hmdp.utils.UserHolder;
 import org.springframework.web.bind.annotation.*;
@@ -26,10 +28,26 @@ public class BlogController {
 
     @Resource
     private IBlogService blogService;
+    
+    @Resource
+    private ShopSummaryService shopSummaryService;
 
     @PostMapping
     public Result saveBlog(@RequestBody Blog blog) {
-        return blogService.saveBlog(blog);
+        Result result = blogService.saveBlog(blog);
+        
+        // 如果保存成功，更新店铺评价数量缓存
+        if (result.getSuccess() && blog.getShopId() != null) {
+            // 由于我们不知道新的评价数量，所以从缓存中移除该店铺的评价数量
+            // 下次获取时会重新查询数据库
+            String cacheKey = "shop_review_count_" + blog.getShopId();
+            shopSummaryService.getLocalCacheManager().remove(cacheKey, LocalCacheManager.CacheType.SHOP_STATS);
+            // 同样移除店铺存在性缓存，确保下次重新检查
+            String existsCacheKey = "shop_exists_" + blog.getShopId();
+            shopSummaryService.getLocalCacheManager().remove(existsCacheKey, LocalCacheManager.CacheType.SHOP_INFO);
+        }
+        
+        return result;
     }
 
     @PutMapping("/like/{id}")

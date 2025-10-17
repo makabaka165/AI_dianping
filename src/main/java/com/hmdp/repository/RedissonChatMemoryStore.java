@@ -1,0 +1,668 @@
+package com.hmdp.repository;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.hmdp.config.ChatMemoryKeyManager;
+import com.hmdp.entity.SimpleChatMessage;
+import com.hmdp.utils.LocalCacheManager;
+import dev.langchain4j.data.message.AiMessage;
+import dev.langchain4j.data.message.ChatMessage;
+import dev.langchain4j.data.message.SystemMessage;
+import dev.langchain4j.data.message.UserMessage;
+import dev.langchain4j.store.memory.chat.ChatMemoryStore;
+import lombok.Builder;
+import lombok.Data;
+import lombok.extern.slf4j.Slf4j;
+import org.redisson.api.RBucket;
+import org.redisson.api.RedissonClient;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Component;
+
+import javax.annotation.PostConstruct;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
+
+@Component
+@Slf4j
+public class RedissonChatMemoryStore implements ChatMemoryStore {
+
+    private final RedissonClient redissonClient;
+    private final ChatMemoryKeyManager keyManager;
+    private final ObjectMapper objectMapper;
+
+    @Value("${chat.memory.redis.ttl:7200}")
+    private long defaultTtlSeconds;
+
+    // 是否开启详细日志（可以通过配置控制）
+    @Value("${chat.memory.debug.enabled:false}")
+    private boolean debugEnabled;
+
+    // 注入本地缓存管理器
+    @Autowired
+    private LocalCacheManager localCacheManager;
+
+    // 缓存TTL配置
+    private Map<String, Long> ttlConfigCache;
+
+    // ========== 构造函数注入（推荐方式） ==========
+    public RedissonChatMemoryStore(RedissonClient redissonClient,
+                                   ChatMemoryKeyManager keyManager) {
+        this.redissonClient = redissonClient;
+        this.keyManager = keyManager;
+        this.objectMapper = new ObjectMapper();
+        log.info("RedissonChatMemoryStore 初始化完成");
+    }
+
+    @PostConstruct
+    public void init() {
+        // 初始化TTL配置缓存
+        ttlConfigCache = new ConcurrentHashMap<>();
+        ttlConfigCache.put(ChatMemoryKeyManager.SHOP_SUMMARY_PREFIX, 3600L);      // 1小时
+        ttlConfigCache.put(ChatMemoryKeyManager.SHOP_QA_PREFIX, 7200L);           // 2小时
+        ttlConfigCache.put(ChatMemoryKeyManager.SHOP_COMPARE_PREFIX, 1800L);      // 30分钟
+        ttlConfigCache.put(ChatMemoryKeyManager.SHOP_RECOMMEND_PREFIX, 86400L);   // 24小时
+        ttlConfigCache.put(ChatMemoryKeyManager.AI_CHAT_PREFIX, 3600L);           // 1小时
+    }
+
+    // ========== 也支持字段注入（保持兼容） ==========
+
+    @Autowired(required = false)
+    public void setRedissonClient(RedissonClient redissonClient) {
+        // 只在构造函数注入失败时使用
+    }
+
+    @Autowired(required = false)
+    public void setKeyManager(ChatMemoryKeyManager keyManager) {
+        // 只在构造函数注入失败时使用
+    }
+
+    @Autowired(required = false)
+    public void setLocalCacheManager(LocalCacheManager localCacheManager) {
+        this.localCacheManager = localCacheManager;
+    }
+
+    /**
+     * 从 Redis 获取 JSON 字符串 → 反序列化为 SimpleChatMessage 列表。
+     * 通过 convertToLangChainMessage 转换为 ChatMessage 接口的实现类，供 AI 模型使用
+     * @param memoryId
+     * @return
+     */
+    @Override
+    public List<ChatMessage> getMessages(Object memoryId) {
+        String key = memoryId.toString();
+
+        try {
+            // 获取Redis中指定key的字符串值
+            RBucket<String> bucket = redissonClient.getBucket(key);
+            // 从Redis中获取序列化后的JSON字符串
+            String json = bucket.get();
+
+
+            if (json == null || json.isEmpty()) {
+                return new ArrayList<>();
+            }
+
+            //将从Redis获取的JSON字符串反序列化为SimpleChatMessage对象列表
+            //通过 getTypeFactory().constructCollectionType 指定目标类型为包含SimpleChatMessage元素的List集合
+            //将json转换为java对象
+            List<SimpleChatMessage> simpleMessages = objectMapper.readValue(json,
+                    objectMapper.getTypeFactory().constructCollectionType(List.class, SimpleChatMessage.class));
+
+            List<ChatMessage> messages = simpleMessages.stream()
+                    .map(this::convertToLangChainMessage)
+                    .filter(message -> message != null) // 过滤掉null消息
+                    .collect(Collectors.toList());
+
+            // 只在调试模式或首次获取时输出日志
+            if (debugEnabled || messages.size() == 1) {
+                log.debug("获取记忆: {} ({}条消息)", getShortKey(key), messages.size());
+            }
+
+            return messages;
+
+        } catch (Exception e) {
+            log.error("获取记忆失败: {}", getShortKey(key), e);
+            // 发生错误时清除可能损坏的数据
+            try {
+                deleteMessages(memoryId);
+                log.info("已清理损坏的记忆数据: {}", getShortKey(key));
+            } catch (Exception cleanupError) {
+                log.warn("清理损坏数据失败: {}", getShortKey(key));
+            }
+            return new ArrayList<>();
+        }
+    }
+
+    /**
+     * 用户输入或 AI 回复的 ChatMessage 列表通过 convertToSimpleMessage 转换为 SimpleChatMessage。
+     * 使用 ObjectMapper 序列化为 JSON 字符串存储到 Redis
+     * @param memoryId
+     * @param messages
+     */
+    @Override
+    public void updateMessages(Object memoryId, List<ChatMessage> messages) {
+        String key = memoryId.toString();
+
+        try {
+            // 过滤和验证消息
+            List<SimpleChatMessage> simpleMessages = messages.stream()
+                    .filter(this::isValidChatMessage) // 添加消息验证
+                    .map(this::convertToSimpleMessage)
+                    .filter(simpleMsg -> isValidSimpleMessage(simpleMsg)) // 验证转换后的消息
+                    .collect(Collectors.toList());
+
+            String json = objectMapper.writeValueAsString(simpleMessages);
+            RBucket<String> bucket = redissonClient.getBucket(key);
+
+            long ttl = getTtlByFunctionType(key);
+            bucket.set(json, ttl, TimeUnit.SECONDS);
+
+            // 简化日志：只在有意义的变化时输出
+            int messageCount = simpleMessages.size();
+            if (debugEnabled || messageCount == 1 || messageCount % 5 == 0) {
+                log.debug("保存记忆: {} ({}条消息, TTL: {}分钟)",
+                        getShortKey(key), messageCount, ttl / 60);
+            }
+
+        } catch (JsonProcessingException e) {
+            log.error("序列化消息失败: {}", getShortKey(key), e);
+            throw new RuntimeException("保存记忆失败", e);
+        } catch (Exception e) {
+            log.error("更新记忆失败: {}", getShortKey(key), e);
+            throw new RuntimeException("保存记忆失败", e);
+        }
+    }
+
+    @Override
+    public void deleteMessages(Object memoryId) {
+        String key = memoryId.toString();
+
+        try {
+            RBucket<String> bucket = redissonClient.getBucket(key);
+            boolean deleted = bucket.delete();
+
+            if (deleted) {
+                log.info("删除记忆: {}", getShortKey(key));
+            } else if (debugEnabled) {
+                log.debug("记忆不存在: {}", getShortKey(key));
+            }
+
+        } catch (Exception e) {
+            log.error("删除记忆失败: {}", getShortKey(key), e);
+            throw new RuntimeException("删除记忆失败", e);
+        }
+    }
+
+    /**
+     * 验证ChatMessage是否有效
+     */
+    private boolean isValidChatMessage(ChatMessage message) {
+        if (message == null) {
+            log.warn("ChatMessage为null，跳过");
+            return false;
+        }
+
+        try {
+            String text = message.text();
+            if (text == null || text.trim().isEmpty()) {
+                log.warn("ChatMessage文本为空，类型: {}，跳过", message.getClass().getSimpleName());
+                return false;
+            }
+            return true;
+        } catch (Exception e) {
+            log.warn("验证ChatMessage失败: {}", e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * 验证SimpleChatMessage是否有效
+     */
+    private boolean isValidSimpleMessage(SimpleChatMessage simpleMessage) {
+        if (simpleMessage == null) {
+            return false;
+        }
+
+        String text = simpleMessage.getText();
+        String type = simpleMessage.getType();
+
+        return text != null && !text.trim().isEmpty() && type != null;
+    }
+
+    /**
+     * 将 LangChain ChatMessage 转换为简单消息
+     */
+    private SimpleChatMessage convertToSimpleMessage(ChatMessage message) {
+        try {
+            String type = getMessageType(message);
+            String text = cleanMessageText(message.text());
+            return new SimpleChatMessage(type, text);
+        } catch (Exception e) {
+            log.error("转换为SimpleChatMessage失败: {}", e.getMessage());
+            // 返回一个安全的默认消息
+            return new SimpleChatMessage("USER", "消息转换失败");
+        }
+    }
+
+    /**
+     * 清理和验证消息文本
+     */
+    private String cleanMessageText(String text) {
+        if (text == null) {
+            return "空消息";
+        }
+
+        text = text.trim();
+        if (text.isEmpty()) {
+            return "空消息";
+        }
+
+        // 限制消息长度，避免过长的内容
+        if (text.length() > 10000) {
+            text = text.substring(0, 10000) + "...";
+            log.debug("消息内容过长，已截断");
+        }
+
+        return text;
+    }
+
+    /**
+     * 根据消息实例类型获取消息类型字符串
+     */
+    private String getMessageType(ChatMessage message) {
+        if (message instanceof SystemMessage) {
+            return "SYSTEM";
+        } else if (message instanceof UserMessage) {
+            return "USER";
+        } else if (message instanceof AiMessage) {
+            return "AI";
+        } else {
+            String className = message.getClass().getSimpleName();
+
+            if (className.toLowerCase().contains("system")) {
+                return "SYSTEM";
+            } else if (className.toLowerCase().contains("user")) {
+                return "USER";
+            } else if (className.toLowerCase().contains("ai") ||
+                    className.toLowerCase().contains("assistant")) {
+                return "AI";
+            } else {
+                if (debugEnabled) {
+                    log.warn("无法识别消息类型: {}，默认使用USER", className);
+                }
+                return "USER";
+            }
+        }
+    }
+
+    /**
+     * 将simpleMessage转换为 LangChain ChatMessage
+     * 用户输入：用户发送的文本会被封装为 SimpleChatMessage（类型为 USER）。
+     * AI 回复：AI 生成的文本会被封装为 SimpleChatMessage（类型为 AI）。
+     * 系统消息：初始化对话或提示信息（类型为 SYSTEM）
+     */
+    private ChatMessage convertToLangChainMessage(SimpleChatMessage simpleMessage) {
+        try {
+            if (simpleMessage == null) {
+                log.warn("SimpleChatMessage为null，跳过转换");
+                return null;
+            }
+
+            String type = simpleMessage.getType();
+            String text = simpleMessage.getText();
+
+            // 验证和清理文本内容
+            if (text == null || text.trim().isEmpty()) {
+                log.warn("消息文本为空，类型: {}，使用默认文本", type);
+                text = getDefaultTextForType(type);
+            }
+
+            // 最终验证
+            if (text == null || text.trim().isEmpty()) {
+                log.warn("无法为类型 {} 生成有效文本，跳过消息", type);
+                return null;
+            }
+
+            text = text.trim();
+
+            if (type == null) {
+                return UserMessage.from(text);
+            }
+
+            switch (type.toUpperCase()) {
+                case "SYSTEM":
+                    return SystemMessage.from(text);
+                case "USER":
+                    return UserMessage.from(text);
+                case "AI":
+                    return AiMessage.from(text);
+                default:
+                    if (debugEnabled) {
+                        log.warn("未知消息类型: {}，默认使用USER类型", type);
+                    }
+                    return UserMessage.from(text);
+            }
+        } catch (Exception e) {
+            log.error("转换为LangChain消息失败: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * 为不同类型获取默认文本
+     */
+    private String getDefaultTextForType(String type) {
+        if (type == null) {
+            return "默认消息";
+        }
+
+        switch (type.toUpperCase()) {
+            case "SYSTEM":
+                return "系统消息";
+            case "USER":
+                return "用户消息";
+            case "AI":
+                return "AI正在思考...";
+            default:
+                return "默认消息";
+        }
+    }
+
+    /**
+     * 获取简化的key用于日志显示
+     */
+    private String getShortKey(String key) {
+        if (key == null) return "null";
+
+        // 如果是默认key，直接返回
+        if ("default".equals(key)) {
+            return "default";
+        }
+
+        // 提取有意义的部分
+        if (key.contains(":memory:")) {
+            String[] parts = key.split(":");
+            if (parts.length >= 4) {
+                // 格式如: hmdp:memory:shop:summary:1:user123
+                String type = parts[2] + ":" + parts[3]; // shop:summary
+                String id = parts.length > 4 ? parts[4] : "";
+                return type + (id.isEmpty() ? "" : ":" + id);
+            }
+        }
+
+        // 如果key太长，截取后面部分
+        if (key.length() > 30) {
+            return "..." + key.substring(key.length() - 27);
+        }
+
+        return key;
+    }
+
+    /**
+     * 检查记忆是否存在
+     */
+    public boolean exists(Object memoryId) {
+        String key = memoryId.toString();
+        try {
+            RBucket<String> bucket = redissonClient.getBucket(key);
+            return bucket.isExists();
+        } catch (Exception e) {
+            log.error("检查记忆存在性失败: {}", getShortKey(key), e);
+            return false;
+        }
+    }
+
+    /**
+     * 获取记忆的剩余生存时间
+     */
+    public long getTimeToLive(Object memoryId) {
+        String key = memoryId.toString();
+        try {
+            RBucket<String> bucket = redissonClient.getBucket(key);
+            return bucket.remainTimeToLive();
+        } catch (Exception e) {
+            log.error("获取记忆TTL失败: {}", getShortKey(key), e);
+            return -1;
+        }
+    }
+
+    /**
+     * 刷新记忆的过期时间
+     */
+    public void refreshTtl(Object memoryId) {
+        String key = memoryId.toString();
+        try {
+            RBucket<String> bucket = redissonClient.getBucket(key);
+            if (bucket.isExists()) {
+                long ttl = getTtlByFunctionType(key);
+                bucket.expire(ttl, TimeUnit.SECONDS);
+                if (debugEnabled) {
+                    log.debug("刷新记忆TTL: {} ({}分钟)", getShortKey(key), ttl / 60);
+                }
+            }
+        } catch (Exception e) {
+            log.error("刷新记忆TTL失败: {}", getShortKey(key), e);
+        }
+    }
+
+    /**
+     * 按功能类型批量删除
+     */
+    public int deleteMessagesByFunction(String functionType) {
+        String pattern = keyManager.buildPatternKey(functionType);
+
+        try {
+            Iterable<String> keys = redissonClient.getKeys().getKeysByPattern(pattern);
+            int count = 0;
+            for (String key : keys) {
+                if (redissonClient.getBucket(key).delete()) {
+                    count++;
+                }
+            }
+
+            if (count > 0) {
+                log.info("批量删除记忆: {} ({}条)", functionType, count);
+            }
+            return count;
+        } catch (Exception e) {
+            log.error("批量删除记忆失败: {}", functionType, e);
+            throw new RuntimeException("批量删除失败", e);
+        }
+    }
+
+    /**
+     * 获取功能类型的记忆统计
+     */
+    public Map<String, Integer> getMemoryStatsByFunction(String functionType) {
+        String pattern = keyManager.buildPatternKey(functionType);
+        Map<String, Integer> stats = new HashMap<>();
+
+        try {
+            Iterable<String> keys = redissonClient.getKeys().getKeysByPattern(pattern);
+            int totalKeys = 0;
+            int totalMessages = 0;
+
+            for (String key : keys) {
+                totalKeys++;
+                List<ChatMessage> messages = getMessages(key);
+                totalMessages += messages.size();
+            }
+
+            stats.put("totalSessions", totalKeys);
+            stats.put("totalMessages", totalMessages);
+
+            if (debugEnabled && totalKeys > 0) {
+                log.debug("功能统计 {}: {}个会话, {}条消息", functionType, totalKeys, totalMessages);
+            }
+
+            return stats;
+        } catch (Exception e) {
+            log.error("获取记忆统计失败: {}", functionType, e);
+            return new HashMap<>();
+        }
+    }
+
+    /**
+     * 获取所有记忆统计
+     */
+    public Map<String, Map<String, Integer>> getAllMemoryStats() {
+        Map<String, Map<String, Integer>> allStats = new HashMap<>();
+        String[] functionTypes = ChatMemoryKeyManager.getAllFunctionTypes();
+
+        for (String functionType : functionTypes) {
+            allStats.put(functionType, getMemoryStatsByFunction(functionType));
+        }
+
+        return allStats;
+    }
+
+    /**
+     * 根据功能类型获取TTL（使用本地缓存优化）
+     */
+    private long getTtlByFunctionType(String key) {
+        String functionType = keyManager.getFunctionType(key);
+        
+        // 从本地缓存获取TTL配置
+        Long cachedTtl = ttlConfigCache.get(functionType);
+        if (cachedTtl != null) {
+            return cachedTtl;
+        }
+
+        // 如果缓存中没有，则使用默认值
+        return defaultTtlSeconds;
+    }
+
+    /**
+     * 清理所有损坏的记忆数据
+     */
+    public int cleanupCorruptedMemories() {
+        int cleanedCount = 0;
+        try {
+            // 获取所有记忆相关的key
+            Iterable<String> keys = redissonClient.getKeys().getKeysByPattern("*memory*");
+
+            for (String key : keys) {
+                try {
+                    List<ChatMessage> messages = getMessages(key);
+                    // 如果获取消息成功，说明数据正常
+                } catch (Exception e) {
+                    // 如果获取失败，删除这个key
+                    try {
+                        redissonClient.getBucket(key).delete();
+                        cleanedCount++;
+                        log.info("清理损坏的记忆: {}", getShortKey(key));
+                    } catch (Exception deleteError) {
+                        log.warn("删除损坏记忆失败: {}", getShortKey(key));
+                    }
+                }
+            }
+
+            if (cleanedCount > 0) {
+                log.info("清理完成，共清理 {} 个损坏的记忆", cleanedCount);
+            }
+
+        } catch (Exception e) {
+            log.error("清理损坏记忆失败", e);
+        }
+
+        return cleanedCount;
+    }
+
+
+    // ========== 新增：为重构后的服务提供便捷方法 ==========
+
+    /**
+     * 获取记忆的详细信息
+     */
+    public MemoryInfo getMemoryInfo(Object memoryId) {
+        String key = memoryId.toString();
+
+        return MemoryInfo.builder()
+                .memoryKey(key)
+                .exists(exists(memoryId))
+                .messageCount(getMessages(memoryId).size())
+                .ttlSeconds(getTimeToLive(memoryId))
+                .functionType(keyManager.getFunctionType(key))
+                .build();
+    }
+
+    /**
+     * 批量获取记忆统计
+     */
+    public Map<String, MemoryStats> getAllMemoryStatistics() {
+        Map<String, MemoryStats> allStats = new HashMap<>();
+        String[] functionTypes = ChatMemoryKeyManager.getAllFunctionTypes();
+
+        for (String functionType : functionTypes) {
+            Map<String, Integer> stats = getMemoryStatsByFunction(functionType);
+            allStats.put(functionType, MemoryStats.builder()
+                    .functionType(functionType)
+                    .totalSessions(stats.getOrDefault("totalSessions", 0))
+                    .totalMessages(stats.getOrDefault("totalMessages", 0))
+                    .build());
+        }
+
+        return allStats;
+    }
+
+    // ========== 内部类：记忆信息 ==========
+
+    @Data
+    @Builder
+    public static class MemoryInfo {
+        private String memoryKey;
+        private boolean exists;
+        private int messageCount;
+        private long ttlSeconds;
+        private String functionType;
+        
+        // 添加getter方法
+        public String getMemoryKey() {
+            return memoryKey;
+        }
+        
+        public boolean isExists() {
+            return exists;
+        }
+        
+        public int getMessageCount() {
+            return messageCount;
+        }
+        
+        public long getTtlSeconds() {
+            return ttlSeconds;
+        }
+        
+        public String getFunctionType() {
+            return functionType;
+        }
+    }
+
+    @Data
+    @Builder
+    public static class MemoryStats {
+        private String functionType;
+        private int totalSessions;
+        private int totalMessages;
+        
+        // 添加getter方法
+        public String getFunctionType() {
+            return functionType;
+        }
+        
+        public int getTotalSessions() {
+            return totalSessions;
+        }
+        
+        public int getTotalMessages() {
+            return totalMessages;
+        }
+    }
+
+}

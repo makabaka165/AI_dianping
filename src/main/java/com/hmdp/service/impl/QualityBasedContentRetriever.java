@@ -77,7 +77,6 @@ public class QualityBasedContentRetriever implements ContentRetriever {
                     log.debug("匹配片段 (得分: {}): {}", match.score(), segment.text());
                     return Content.from(segment);
                 })
-                .distinct()
                 .collect(Collectors.toList());
     }
 }

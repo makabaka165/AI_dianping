@@ -48,7 +48,11 @@ public class UserController {
      * @param loginForm 登录参数，包含手机号、验证码；或者手机号、密码
      */
     @PostMapping("/login")
-    public Result login(@RequestBody LoginFormDTO loginForm, HttpSession session){
+    public Result login(@RequestBody(required = false) LoginFormDTO loginForm, HttpSession session){
+        // 检查请求体是否为空
+        if (loginForm == null) {
+            return Result.fail("登录信息不能为空");
+        }
         // 实现登录功能
         return userService.login(loginForm, session);
     }
@@ -84,6 +88,7 @@ public class UserController {
         return Result.ok(info);
     }
 
+    // 将这个方法移到最后，避免与/login等固定路径冲突
     @GetMapping("/{id}")
     public Result queryUserById(@PathVariable("id") Long userId){
         // 查询详情

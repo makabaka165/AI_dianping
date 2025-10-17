@@ -6,10 +6,13 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.hmdp.dto.Result;
 import com.hmdp.entity.Shop;
 import com.hmdp.service.IShopService;
+import com.hmdp.service.ShopSummaryService;
 import com.hmdp.utils.SystemConstants;
 import org.springframework.web.bind.annotation.*;
 
 import javax.annotation.Resource;
+import java.util.HashMap;
+import java.util.Map;
 
 /**
  * <p>
@@ -24,6 +27,9 @@ public class ShopController {
 
     @Resource
     public IShopService shopService;
+    
+    @Resource
+    public ShopSummaryService shopSummaryService;
 
     /**
      * 根据id查询商铺信息
@@ -56,41 +62,60 @@ public class ShopController {
     @PutMapping
     public Result updateShop(@RequestBody Shop shop) {
         // 写入数据库
-        return shopService.update(shop);
+        Result result = shopService.update(shop);
+        
+        // 如果更新成功，更新相关的本地缓存
+        if (result.getSuccess()) {
+            // 更新店铺存在性缓存（设置为存在）
+            shopSummaryService.updateShopExistsCache(shop.getId(), true);
+            // 注意：评价数量缓存无法在此处更新，因为评价数据不在shop表中
+            // 但在实际应用中，如果有评价数据的更新操作，也应该更新相应的缓存
+        }
+        
+        return result;
     }
-
+    
     /**
-     * 根据商铺类型分页查询商铺信息
-     * @param typeId 商铺类型
-     * @param current 页码
-     * @return 商铺列表
+     * 获取店铺统计信息
+     * @param id 店铺ID
+     * @return 店铺统计信息
      */
-    @GetMapping("/of/type")
-    public Result queryShopByType(
-            @RequestParam("typeId") Integer typeId,
-            @RequestParam(value = "current", defaultValue = "1") Integer current,
-            @RequestParam(value = "x", required = false) Double x,
-            @RequestParam(value = "y", required = false) Double y
-    ) {
-       return shopService.queryShopByType(typeId, current, x, y);
+    @GetMapping("/{id}/stats")
+    public Result getShopStats(@PathVariable("id") Long id) {
+        Map<String, Object> stats = new HashMap<>();
+        
+        // 使用本地缓存获取店铺存在性
+        boolean exists = shopSummaryService.shopExists(id);
+        stats.put("exists", exists);
+        
+        if (exists) {
+            // 使用本地缓存获取店铺评价数量
+            int reviewCount = shopSummaryService.getShopReviewCount(id);
+            stats.put("reviewCount", reviewCount);
+        }
+        
+        return Result.ok(stats);
     }
-
+    
     /**
-     * 根据商铺名称关键字分页查询商铺信息
-     * @param name 商铺名称关键字
-     * @param current 页码
-     * @return 商铺列表
+     * 获取店铺状态
+     * @param id 店铺ID
+     * @return 店铺状态
      */
-    @GetMapping("/of/name")
-    public Result queryShopByName(
-            @RequestParam(value = "name", required = false) String name,
-            @RequestParam(value = "current", defaultValue = "1") Integer current
-    ) {
-        // 根据类型分页查询
-        Page<Shop> page = shopService.query()
-                .like(StrUtil.isNotBlank(name), "name", name)
-                .page(new Page<>(current, SystemConstants.MAX_PAGE_SIZE));
-        // 返回数据
-        return Result.ok(page.getRecords());
+    @GetMapping("/{id}/status")
+    public Result getShopStatus(@PathVariable("id") Long id) {
+        Map<String, Object> status = new HashMap<>();
+        
+        // 使用本地缓存获取店铺存在性
+        boolean exists = shopSummaryService.shopExists(id);
+        status.put("exists", exists);
+        
+        if (exists) {
+            // 使用本地缓存获取店铺评价数量
+            int reviewCount = shopSummaryService.getShopReviewCount(id);
+            status.put("reviewCount", reviewCount);
+        }
+        
+        return Result.ok(status);
     }
 }
