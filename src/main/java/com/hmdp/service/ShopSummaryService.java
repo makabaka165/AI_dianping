@@ -56,6 +56,14 @@ public class ShopSummaryService {
     public ShopSummaryResult generateShopSummary(Long shopId) {
         log.info("生成店铺{}总结", shopId);
 
+        // 尝试从本地缓存获取结果
+        String cacheKey = LocalCacheManager.CacheKeys.shopSummaryKey(shopId);
+        ShopSummaryResult cachedResult = localCacheManager.get(cacheKey, ShopSummaryResult.class, LocalCacheManager.CacheType.SHOP_SUMMARY);
+        if (cachedResult != null) {
+            log.debug("从本地缓存获取店铺{}总结", shopId);
+            return cachedResult;
+        }
+
         List<Blog> blogs = blogMapper.selectBlogsByShopId(shopId);
         if (blogs.isEmpty()) {
             return createEmptyResult(shopId);
@@ -75,7 +83,7 @@ public class ShopSummaryService {
         String keywordsStr = shopAIService.extractKeywords(combinedContent);
         List<String> keywords = parseKeywords(keywordsStr);
 
-        return ShopSummaryResult.builder()
+        ShopSummaryResult result = ShopSummaryResult.builder()
                 .shopId(shopId)
                 .shopName("店铺" + shopId)
                 .coreSummary(coreSummary)
@@ -84,6 +92,11 @@ public class ShopSummaryService {
                 .overallSentiment(sentiment)
                 .summaryTime(LocalDateTime.now())
                 .build();
+        
+        // 将结果放入本地缓存，缓存5分钟
+        localCacheManager.put(cacheKey, result, LocalCacheManager.CacheType.SHOP_SUMMARY);
+        
+        return result;
     }
 
     /**
@@ -92,6 +105,14 @@ public class ShopSummaryService {
     public ShopSummaryResult generateQualitySummary(Long shopId, Integer minLiked, Integer limit, String userId) {
         log.info("开始生成店铺{}的高质量总结，最小点赞数: {}, 限制数量: {}, 用户: {}",
                 shopId, minLiked, limit, userId);
+
+        // 尝试从本地缓存获取结果
+        String cacheKey = LocalCacheManager.CacheKeys.shopQualitySummaryKey(shopId, minLiked, limit);
+        ShopSummaryResult cachedResult = localCacheManager.get(cacheKey, ShopSummaryResult.class, LocalCacheManager.CacheType.SHOP_SUMMARY);
+        if (cachedResult != null) {
+            log.debug("从本地缓存获取店铺{}高质量总结", shopId);
+            return cachedResult;
+        }
 
         List<Blog> qualityBlogs = blogMapper.selectQualityBlogsByShopId(shopId, minLiked, limit);
         log.info("获取到店铺{}的高质量博客数量: {}", shopId, qualityBlogs.size());
@@ -104,13 +125,18 @@ public class ShopSummaryService {
         String prompt = buildQualitySummaryPrompt(qualityBlogs, shopId);
         String summary = shopAIService.generateSummary(prompt); // ✅ 修复：使用新的AI服务
 
-        return ShopSummaryResult.builder()
+        ShopSummaryResult result = ShopSummaryResult.builder()
                 .shopId(shopId)
                 .shopName("店铺" + shopId)
                 .coreSummary(summary)
                 .totalBlogs(qualityBlogs.size())
                 .summaryTime(LocalDateTime.now())
                 .build();
+        
+        // 将结果放入本地缓存，缓存5分钟
+        localCacheManager.put(cacheKey, result, LocalCacheManager.CacheType.SHOP_SUMMARY);
+        
+        return result;
     }
 
     /**

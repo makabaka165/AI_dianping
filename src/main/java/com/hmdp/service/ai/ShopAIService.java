@@ -25,7 +25,8 @@ import java.util.List;
         tools = {
                 "shopTool", // 注入所有店铺工具
                 "documentManagementTool" // 注入文档管理工具
-        }
+        },
+        maxToolCalls = 10 // 限制每个对话周期内的工具调用次数，避免因推理过程失控导致的重复调用问题
 )
 public interface ShopAIService {
 

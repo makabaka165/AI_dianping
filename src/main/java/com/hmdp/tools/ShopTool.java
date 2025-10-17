@@ -24,6 +24,9 @@ public class ShopTool {
     private LocalCacheManager localCacheManager;
     
     // 移除了对ShopAIService的直接依赖，避免循环依赖问题
+    
+    // 工具调用次数限制，防止无限循环调用
+    private static final int MAX_TOOL_CALLS = 5;
 
     // ========== 店铺信息获取工具 ==========
 
@@ -80,7 +83,7 @@ public class ShopTool {
             String callCounterKey = LocalCacheManager.CacheKeys.threadBasedToolCallCountKey("checkShopExists", shopId);
             Integer callCount = localCacheManager.get(callCounterKey, Integer.class, LocalCacheManager.CacheType.QUICK_CACHE);
             
-            if (callCount != null && callCount > 2) {
+            if (callCount != null && callCount > MAX_TOOL_CALLS) {
                 log.warn("检测到工具调用次数过多，店铺ID: {}, 当前调用次数: {}", shopId, callCount);
                 // 提供一个更友好的提示，告知用户可以尝试其他方式
                 return "为避免重复处理，系统已限制该操作的重复执行。如果您需要再次确认，请稍等片刻或尝试其他相关问题。";
@@ -435,6 +438,21 @@ public class ShopTool {
                 log.warn("用户 {} 在时间段内调用 smartAnalyzeShop 次数超过限制", userId);
                 return "您调用此功能的频率过高，请稍后再试。";
             }
+
+            // 添加调用次数限制，防止无限循环
+            String callCounterKey = LocalCacheManager.CacheKeys.threadBasedToolCallCountKey("smartAnalyzeShop", shopId);
+            Integer callCount = localCacheManager.get(callCounterKey, Integer.class, LocalCacheManager.CacheType.QUICK_CACHE);
+            
+            if (callCount != null && callCount > MAX_TOOL_CALLS) {
+                log.warn("检测到工具调用次数过多，店铺ID: {}, 当前调用次数: {}", shopId, callCount);
+                return "为避免重复处理，系统已限制该操作的重复执行。";
+            }
+            
+            // 更新调用次数
+            if (callCount == null) {
+                callCount = 0;
+            }
+            localCacheManager.put(callCounterKey, callCount + 1, LocalCacheManager.CacheType.QUICK_CACHE);
 
             // 根据查询内容智能选择分析方法
             String query = userQuery.toLowerCase();
