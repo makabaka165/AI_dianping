@@ -36,6 +36,9 @@ public class LocalCacheManager {
     // 时间段调用限制 - 用于流控
     private Map<String, Map<Long, Integer>> timeSegmentCallCounters = new ConcurrentHashMap<>();
 
+    // 店铺相关的缓存键映射，用于快速清理
+    private Map<Long, Set<String>> shopRelatedCacheKeys = new ConcurrentHashMap<>();
+
     // 缓存类型枚举
     public enum CacheType {
         SHOP_INFO,           // 店铺基础信息
@@ -52,6 +55,8 @@ public class LocalCacheManager {
         public static final String SENTIMENT_DISPLAY = "sentiment_display_";
         public static final String TOOL_CALL_COUNT = "tool_call_count";
         public static final String MEMORY_STATS = "memory_stats";
+        public static final String SHOP_SUMMARY = "shop_summary_";
+        public static final String SHOP_QUALITY_SUMMARY = "shop_quality_summary_";
         
         public static String shopExistsKey(Long shopId) {
             return SHOP_EXISTS + shopId;
@@ -117,6 +122,20 @@ public class LocalCacheManager {
                 sb.append(":").append(param);
             }
             return sb.toString();
+        }
+        
+        /**
+         * 生成店铺总结缓存键
+         */
+        public static String shopSummaryKey(Long shopId) {
+            return SHOP_SUMMARY + shopId;
+        }
+        
+        /**
+         * 生成店铺高质量总结缓存键
+         */
+        public static String shopQualitySummaryKey(Long shopId, Integer minLiked, Integer limit) {
+            return SHOP_QUALITY_SUMMARY + shopId + "_" + minLiked + "_" + limit;
         }
     }
 
@@ -211,25 +230,21 @@ public class LocalCacheManager {
             Cache<String, Object> cache = getCacheByType(cacheType);
             cache.put(key, value);
             log.debug("缓存已更新: {}", key);
+            
+            // 如果是店铺相关缓存，记录到映射中
+            if (cacheType == CacheType.SHOP_INFO || cacheType == CacheType.SHOP_STATS || cacheType == CacheType.AI_RESULT) {
+                if (key.contains("shop_")) {
+                    // 提取店铺ID
+                    Long shopId = extractShopIdFromKey(key);
+                    if (shopId != null) {
+                        shopRelatedCacheKeys.computeIfAbsent(shopId, k -> ConcurrentHashMap.newKeySet()).add(key);
+                    }
+                }
+            }
         } catch (Exception e) {
             log.error("设置缓存失败，key: {}", key, e);
         }
     }
-
-    /**
-     * 将值放入缓存（指定过期时间）
-     * 注意：Caffeine不支持单个条目设置不同的过期时间
-     * 这个方法保留duration参数是为了接口兼容性，但实际过期时间仍由缓存配置决定
-     * @param key 缓存键
-     * @param value 缓存值
-     * @param duration 过期时间（分钟）- 注意：此参数当前未被使用
-     */
-//    public void put(String key, Object value, long duration) {
-//        // Caffeine不支持单条目过期时间，此处duration参数仅作接口兼容用途
-//        // 实际过期时间仍由缓存配置决定（写入后5分钟）
-//        put(key, value);
-//        log.debug("缓存已更新: {}，指定过期时间: {}分钟（注意：实际过期时间由缓存配置决定）", key, duration);
-//    }
 
     /**
      * 从缓存中移除指定键的值
@@ -241,9 +256,92 @@ public class LocalCacheManager {
             Cache<String, Object> cache = getCacheByType(cacheType);
             cache.invalidate(key);
             log.debug("缓存已移除: {}", key);
+            
+            // 从映射中移除
+            if (cacheType == CacheType.SHOP_INFO || cacheType == CacheType.SHOP_STATS || cacheType == CacheType.AI_RESULT) {
+                Long shopId = extractShopIdFromKey(key);
+                if (shopId != null) {
+                    Set<String> keys = shopRelatedCacheKeys.get(shopId);
+                    if (keys != null) {
+                        keys.remove(key);
+                    }
+                }
+            }
         } catch (Exception e) {
             log.error("移除缓存失败，key: {}", key, e);
         }
+    }
+
+    /**
+     * 批量清理店铺相关缓存
+     * @param shopId 店铺ID
+     */
+    public void removeShopRelatedCaches(Long shopId) {
+        Set<String> keys = shopRelatedCacheKeys.get(shopId);
+        if (keys != null) {
+            for (String key : keys) {
+                // 根据key判断缓存类型并清理
+                if (key.startsWith(CacheKeys.SHOP_EXISTS)) {
+                    remove(key, CacheType.SHOP_INFO);
+                } else if (key.startsWith(CacheKeys.SHOP_REVIEW_COUNT)) {
+                    remove(key, CacheType.SHOP_STATS);
+                } else if (key.startsWith(CacheKeys.SHOP_SUMMARY)) {
+                    remove(key, CacheType.AI_RESULT);
+                } else if (key.startsWith(CacheKeys.SHOP_QUALITY_SUMMARY)) {
+                    remove(key, CacheType.AI_RESULT);
+                }
+            }
+            shopRelatedCacheKeys.remove(shopId);
+        }
+    }
+
+    /**
+     * 从缓存键中提取店铺ID
+     * @param key 缓存键
+     * @return 店铺ID，如果无法提取则返回null
+     */
+    private Long extractShopIdFromKey(String key) {
+        try {
+            // 从shop_exists_123这样的键中提取123
+            if (key.contains("shop_") && key.contains("_")) {
+                String[] parts = key.split("_");
+                for (int i = 0; i < parts.length; i++) {
+                    if (i > 0 && parts[i - 1].equals("shop") && i < parts.length) {
+                        try {
+                            return Long.parseLong(parts[i]);
+                        } catch (NumberFormatException e) {
+                            // 尝试下一个部分
+                        }
+                    }
+                    // 尝试直接解析数字
+                    try {
+                        return Long.parseLong(parts[i]);
+                    } catch (NumberFormatException e) {
+                        // 继续尝试下一个
+                    }
+                }
+            }
+            // 如果上面的方法不行，尝试从shop_summary_123中提取
+            if (key.contains("shop_summary_")) {
+                String[] parts = key.split("shop_summary_");
+                if (parts.length > 1) {
+                    String idPart = parts[1];
+                    // 提取数字部分
+                    return Long.parseLong(idPart.split("_")[0]);
+                }
+            }
+            if (key.contains("shop_quality_summary_")) {
+                String[] parts = key.split("shop_quality_summary_");
+                if (parts.length > 1) {
+                    String idPart = parts[1];
+                    // 提取数字部分
+                    return Long.parseLong(idPart.split("_")[0]);
+                }
+            }
+        } catch (Exception e) {
+            log.warn("无法从缓存键中提取店铺ID: {}", key, e);
+        }
+        return null;
     }
 
     /**
@@ -303,6 +401,7 @@ public class LocalCacheManager {
         memoryStatsCache.invalidateAll();
         aiResultCache.invalidateAll();
         quickCache.invalidateAll();
+        shopRelatedCacheKeys.clear();
         log.info("已清空所有缓存");
     }
 

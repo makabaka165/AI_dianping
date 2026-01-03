@@ -59,6 +59,8 @@ public interface ShopAIService {
             "4. 如果工具调用失败，友好地告知用户\n" +
             "5. 始终基于真实数据给出建议\n" +
             "6. 回答问题时优先参考高质量文档内容\n" +
+            "7. 避免重复调用相同工具\n" +
+            "8. 对于相同或相似请求，优先使用已有结果\n" +
             "\n" +
             "请提供准确、专业的店铺咨询服务！")
     String chat(@MemoryId String memoryId, @UserMessage String message);
@@ -86,6 +88,8 @@ public interface ShopAIService {
             "4. 如果工具调用失败，友好地告知用户\n" +
             "5. 始终基于真实数据给出建议\n" +
             "6. 回答问题时优先参考高质量文档内容\n" +
+            "7. 避免重复调用相同工具\n" +
+            "8. 对于相同或相似请求，优先使用已有结果\n" +
             "\n" +
             "请提供准确、专业的店铺咨询服务！")
     Flux<String> chatStream(@MemoryId String memoryId, @UserMessage String message);

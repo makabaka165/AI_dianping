@@ -31,7 +31,7 @@ public class MvcConfig implements WebMvcConfigurer {
                         "/api/shop-summary/**",  // ai实际应用的 controller，仅测试用
                         "/document/**"// 新增：文档相关接口无需登录,仅测试用，需要登录用户核验的时候删除
                 ).order(1);
-        // token刷新的拦截器
+        // token刷新的拦截器，order为1，在登录拦截器之前
         registry.addInterceptor(new RefreshTokenInterceptor(stringRedisTemplate)).addPathPatterns("/**").order(0);
     }
 }

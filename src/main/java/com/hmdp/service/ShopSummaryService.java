@@ -8,6 +8,8 @@ import com.hmdp.mapper.BlogMapper;
 import dev.langchain4j.data.message.ChatMessage;
 import com.hmdp.service.ai.ShopAIService;
 import com.hmdp.utils.LocalCacheManager;
+import com.hmdp.service.AIResultQualityService;
+import com.hmdp.service.impl.AIFallbackService;
 import lombok.extern.slf4j.Slf4j;
 import org.redisson.api.RedissonClient;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -43,6 +45,20 @@ public class ShopSummaryService {
     @Autowired
     private LocalCacheManager localCacheManager;
     
+    // 注入AI结果质量验证服务
+    @Autowired
+    private AIResultQualityService aiResultQualityService;
+    
+    // 注入AI降级服务
+    @Autowired
+    private AIFallbackService aiFallbackService;
+    
+    // AI服务调用失败计数器，用于熔断机制
+    private final Map<String, Integer> failureCounters = new HashMap<>();
+    private static final int FAILURE_THRESHOLD = 3; // 连续失败阈值
+    private static final long FAILURE_RESET_TIME = 300000; // 5分钟重置时间
+    private final Map<String, Long> lastFailureTime = new HashMap<>();
+    
     // 提供获取本地缓存管理器的方法
     public LocalCacheManager getLocalCacheManager() {
         return localCacheManager;
@@ -58,7 +74,7 @@ public class ShopSummaryService {
 
         // 尝试从本地缓存获取结果
         String cacheKey = LocalCacheManager.CacheKeys.shopSummaryKey(shopId);
-        ShopSummaryResult cachedResult = localCacheManager.get(cacheKey, ShopSummaryResult.class, LocalCacheManager.CacheType.SHOP_SUMMARY);
+        ShopSummaryResult cachedResult = localCacheManager.get(cacheKey, ShopSummaryResult.class, LocalCacheManager.CacheType.AI_RESULT);
         if (cachedResult != null) {
             log.debug("从本地缓存获取店铺{}总结", shopId);
             return cachedResult;
@@ -71,7 +87,7 @@ public class ShopSummaryService {
 
         // 使用AI服务生成总结
         String summaryPrompt = buildSummaryPrompt(blogs, shopId);
-        String coreSummary = shopAIService.generateSummary(summaryPrompt);
+        String coreSummary = generateSummaryWithFallback(summaryPrompt);
 
         // 情感分析和关键词提取
         String combinedContent = blogs.stream()
@@ -79,8 +95,8 @@ public class ShopSummaryService {
                 .map(Blog::getContent)
                 .collect(Collectors.joining("\n"));
 
-        String sentiment = shopAIService.analyzeSentiment(combinedContent);
-        String keywordsStr = shopAIService.extractKeywords(combinedContent);
+        String sentiment = analyzeSentimentWithFallback(combinedContent);
+        String keywordsStr = extractKeywordsWithFallback(combinedContent);
         List<String> keywords = parseKeywords(keywordsStr);
 
         ShopSummaryResult result = ShopSummaryResult.builder()
@@ -94,7 +110,7 @@ public class ShopSummaryService {
                 .build();
         
         // 将结果放入本地缓存，缓存5分钟
-        localCacheManager.put(cacheKey, result, LocalCacheManager.CacheType.SHOP_SUMMARY);
+        localCacheManager.put(cacheKey, result, LocalCacheManager.CacheType.AI_RESULT);
         
         return result;
     }
@@ -108,7 +124,7 @@ public class ShopSummaryService {
 
         // 尝试从本地缓存获取结果
         String cacheKey = LocalCacheManager.CacheKeys.shopQualitySummaryKey(shopId, minLiked, limit);
-        ShopSummaryResult cachedResult = localCacheManager.get(cacheKey, ShopSummaryResult.class, LocalCacheManager.CacheType.SHOP_SUMMARY);
+        ShopSummaryResult cachedResult = localCacheManager.get(cacheKey, ShopSummaryResult.class, LocalCacheManager.CacheType.AI_RESULT);
         if (cachedResult != null) {
             log.debug("从本地缓存获取店铺{}高质量总结", shopId);
             return cachedResult;
@@ -123,7 +139,7 @@ public class ShopSummaryService {
         }
 
         String prompt = buildQualitySummaryPrompt(qualityBlogs, shopId);
-        String summary = shopAIService.generateSummary(prompt); // ✅ 修复：使用新的AI服务
+        String summary = generateSummaryWithFallback(prompt);
 
         ShopSummaryResult result = ShopSummaryResult.builder()
                 .shopId(shopId)
@@ -134,7 +150,7 @@ public class ShopSummaryService {
                 .build();
         
         // 将结果放入本地缓存，缓存5分钟
-        localCacheManager.put(cacheKey, result, LocalCacheManager.CacheType.SHOP_SUMMARY);
+        localCacheManager.put(cacheKey, result, LocalCacheManager.CacheType.AI_RESULT);
         
         return result;
     }
@@ -168,7 +184,7 @@ public class ShopSummaryService {
         }
 
         String contextPrompt = buildQuestionPrompt(blogs, shopId, question);
-        return shopAIService.analyzeShopData(memoryKey, contextPrompt);
+        return analyzeShopDataWithFallback(memoryKey, contextPrompt);
     }
 
     /**
@@ -185,7 +201,7 @@ public class ShopSummaryService {
             List<Blog> blogs2 = blogMapper.selectBlogsByShopId(shopId2);
 
             String prompt = buildComparePrompt(blogs1, blogs2, shopId1, shopId2, aspect);
-            return shopAIService.analyzeShopData(memoryKey, prompt); // ✅ 修复：使用新的AI服务
+            return analyzeShopDataWithFallback(memoryKey, prompt);
 
         } catch (Exception e) {
             log.error("店铺对比失败，用户: {}, 会话: {}", userId, sessionId, e);
@@ -208,7 +224,7 @@ public class ShopSummaryService {
                     userPreference, category != null ? category : "不限", limit
             );
 
-            return shopAIService.analyzeShopData(memoryKey, prompt); // ✅ 修复：使用新的AI服务
+            return analyzeShopDataWithFallback(memoryKey, prompt);
 
         } catch (Exception e) {
             log.error("推荐失败，用户: {}", userId, e);
@@ -295,6 +311,11 @@ public class ShopSummaryService {
         }
 
         return result;
+    }
+
+    public void clearShopRelatedCaches(Long shopId) {
+        log.info("清除店铺{}相关缓存", shopId);
+        localCacheManager.removeShopRelatedCaches(shopId);
     }
 
     public int cleanupMemoryByFunction(String functionType) {
@@ -644,5 +665,148 @@ public class ShopSummaryService {
     // 获取所有缓存大小
     public Map<String, Long> getAllSizes() {
         return localCacheManager.getAllSizes();
+    }
+    
+    // ========== AI服务容错和降级方法 ==========
+    
+    /**
+     * 带降级的生成总结方法
+     */
+    private String generateSummaryWithFallback(String summaryPrompt) {
+        // 检查是否应该使用降级服务
+        if (shouldUseFallback("generateSummary")) {
+            log.warn("AI服务不可用，使用降级方案生成总结");
+            return aiFallbackService.generateSummaryFallback(1L); // 使用默认ID，实际应用中需要从prompt中提取
+        }
+        
+        try {
+            String result = shopAIService.generateSummary(summaryPrompt);
+            
+            // 验证结果质量
+            AIResultQualityService.QualityCheckResult qualityResult = aiResultQualityService.validateContent(result);
+            if (!qualityResult.isValid()) {
+                log.warn("AI生成的总结质量不佳: {}", qualityResult.getReason());
+                // 使用降级服务
+                return aiFallbackService.generateSummaryFallback(1L);
+            }
+            
+            // 后处理结果
+            return aiResultQualityService.postProcessContent(result);
+            
+        } catch (Exception e) {
+            log.error("AI服务调用失败，使用降级方案", e);
+            recordFailure("generateSummary");
+            return aiFallbackService.generateSummaryFallback(1L);
+        }
+    }
+    
+    /**
+     * 带降级的情感分析方法
+     */
+    private String analyzeSentimentWithFallback(String content) {
+        if (shouldUseFallback("analyzeSentiment")) {
+            log.warn("AI服务不可用，使用降级方案进行情感分析");
+            return aiFallbackService.analyzeSentimentFallback(content);
+        }
+        
+        try {
+            String result = shopAIService.analyzeSentiment(content);
+            return result;
+        } catch (Exception e) {
+            log.error("AI情感分析服务调用失败，使用降级方案", e);
+            recordFailure("analyzeSentiment");
+            return aiFallbackService.analyzeSentimentFallback(content);
+        }
+    }
+    
+    /**
+     * 带降级的关键词提取方法
+     */
+    private String extractKeywordsWithFallback(String content) {
+        if (shouldUseFallback("extractKeywords")) {
+            log.warn("AI服务不可用，使用降级方案提取关键词");
+            return aiFallbackService.extractKeywordsFallback(content);
+        }
+        
+        try {
+            String result = shopAIService.extractKeywords(content);
+            return result;
+        } catch (Exception e) {
+            log.error("AI关键词提取服务调用失败，使用降级方案", e);
+            recordFailure("extractKeywords");
+            return aiFallbackService.extractKeywordsFallback(content);
+        }
+    }
+    
+    /**
+     * 带降级的数据分析方法
+     */
+    private String analyzeShopDataWithFallback(String memoryId, String analysisPrompt) {
+        if (shouldUseFallback("analyzeShopData")) {
+            log.warn("AI服务不可用，使用降级方案进行数据分析");
+            return aiFallbackService.analyzeShopDataFallback(memoryId, analysisPrompt);
+        }
+        
+        try {
+            String result = shopAIService.analyzeShopData(memoryId, analysisPrompt);
+            
+            // 验证结果质量
+            AIResultQualityService.QualityCheckResult qualityResult = aiResultQualityService.validateContent(result);
+            if (!qualityResult.isValid()) {
+                log.warn("AI生成的数据分析质量不佳: {}", qualityResult.getReason());
+                // 使用降级服务
+                return aiFallbackService.analyzeShopDataFallback(memoryId, analysisPrompt);
+            }
+            
+            // 后处理结果
+            return aiResultQualityService.postProcessContent(result);
+            
+        } catch (Exception e) {
+            log.error("AI数据分析服务调用失败，使用降级方案", e);
+            recordFailure("analyzeShopData");
+            return aiFallbackService.analyzeShopDataFallback(memoryId, analysisPrompt);
+        }
+    }
+    
+    /**
+     * 记录服务调用失败
+     */
+    private void recordFailure(String serviceType) {
+        String key = serviceType;
+        long currentTime = System.currentTimeMillis();
+        Long lastTime = lastFailureTime.get(key);
+        
+        // 如果距离上次失败时间超过重置时间，则重置计数器
+        if (lastTime == null || (currentTime - lastTime) > FAILURE_RESET_TIME) {
+            failureCounters.put(key, 1);
+        } else {
+            int count = failureCounters.getOrDefault(key, 0) + 1;
+            failureCounters.put(key, count);
+        }
+        
+        lastFailureTime.put(key, currentTime);
+    }
+    
+    /**
+     * 检查是否应该使用降级服务
+     */
+    private boolean shouldUseFallback(String serviceType) {
+        String key = serviceType;
+        int failureCount = failureCounters.getOrDefault(key, 0);
+        Long lastFailure = lastFailureTime.get(key);
+        
+        // 如果连续失败次数超过阈值，并且距离上次失败时间未超过重置时间，则使用降级服务
+        if (failureCount >= FAILURE_THRESHOLD) {
+            long currentTime = System.currentTimeMillis();
+            if (lastFailure != null && (currentTime - lastFailure) < FAILURE_RESET_TIME) {
+                return true;
+            } else {
+                // 重置失败计数器
+                failureCounters.put(key, 0);
+                lastFailureTime.remove(key);
+            }
+        }
+        
+        return false;
     }
 }
