@@ -1,6 +1,8 @@
 package com.hmdp.controller;
 
 
+import cn.dev33.satoken.annotation.SaCheckLogin;
+import cn.dev33.satoken.annotation.SaCheckPermission;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.hmdp.dto.Result;
 import com.hmdp.dto.UserDTO;
@@ -33,6 +35,7 @@ public class BlogController {
     private ShopSummaryService shopSummaryService;
 
     @PostMapping
+    @SaCheckPermission("blog:create")
     public Result saveBlog(@RequestBody Blog blog) {
         Result result = blogService.saveBlog(blog);
         
@@ -51,11 +54,13 @@ public class BlogController {
     }
 
     @PutMapping("/like/{id}")
+    @SaCheckPermission("blog:like")
     public Result likeBlog(@PathVariable("id") Long id) {
         return blogService.likeBlog(id);
     }
 
     @GetMapping("/of/me")
+    @SaCheckLogin
     public Result queryMyBlog(@RequestParam(value = "current", defaultValue = "1") Integer current) {
         // 获取登录用户
         UserDTO user = UserHolder.getUser();
@@ -95,6 +100,7 @@ public class BlogController {
     }
 
     @GetMapping("/of/follow")
+    @SaCheckLogin
     public Result queryBlogOfFollow(
             @RequestParam("lastId") Long max, @RequestParam(value = "offset", defaultValue = "0") Integer offset){
         return blogService.queryBlogOfFollow(max, offset);

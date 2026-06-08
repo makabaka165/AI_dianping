@@ -1,6 +1,7 @@
 package com.hmdp.controller;
 
 
+import cn.dev33.satoken.annotation.SaCheckPermission;
 import com.hmdp.dto.Result;
 import com.hmdp.service.IVoucherOrderService;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -26,6 +27,7 @@ public class VoucherOrderController {
     private IVoucherOrderService voucherOrderService;
 
     @PostMapping("seckill/{id}")
+    @SaCheckPermission("voucher:seckill")
     public Result seckillVoucher(@PathVariable("id") Long voucherId) {
         return voucherOrderService.seckillVoucher(voucherId);
     }

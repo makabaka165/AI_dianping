@@ -1,5 +1,6 @@
 package com.hmdp.controller;
 
+import cn.dev33.satoken.annotation.SaCheckLogin;
 import cn.hutool.core.io.FileUtil;
 import cn.hutool.core.util.StrUtil;
 import com.hmdp.dto.Result;
@@ -18,6 +19,7 @@ import java.util.UUID;
 public class UploadController {
 
     @PostMapping("blog")
+    @SaCheckLogin
     public Result uploadImage(@RequestParam("file") MultipartFile image) {
         try {
             // 获取原始文件名称
@@ -35,6 +37,7 @@ public class UploadController {
     }
 
     @GetMapping("/blog/delete")
+    @SaCheckLogin
     public Result deleteBlogImg(@RequestParam("name") String filename) {
         File file = new File(SystemConstants.IMAGE_UPLOAD_DIR, filename);
         if (file.isDirectory()) {

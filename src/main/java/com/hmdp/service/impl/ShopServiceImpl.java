@@ -6,6 +6,9 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.hmdp.dto.Result;
 import com.hmdp.entity.Shop;
 import com.hmdp.mapper.ShopMapper;
+import com.hmdp.service.CurrentUserService;
+import com.hmdp.service.IMerchantShopService;
+import com.hmdp.service.IPermissionService;
 import com.hmdp.service.IShopService;
 import com.hmdp.utils.CacheClient;
 import com.hmdp.utils.SystemConstants;
@@ -42,6 +45,15 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
     @Resource
     private CacheClient cacheClient;
 
+    @Resource
+    private CurrentUserService currentUserService;
+
+    @Resource
+    private IPermissionService permissionService;
+
+    @Resource
+    private IMerchantShopService merchantShopService;
+
     @Override
     public Result queryById(Long id) {
         // 解决缓存穿透
@@ -70,11 +82,34 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
         if (id == null) {
             return Result.fail("店铺id不能为空");
         }
+        Long userId = currentUserService.requireCurrentUserId();
+        boolean admin = permissionService.hasRole(userId, "admin");
+        if (!admin && !merchantShopService.isShopOwner(userId, id)) {
+            return Result.fail("无权操作非本人店铺");
+        }
+        if (!admin) {
+            shop = buildMerchantAllowedUpdate(shop);
+        }
         // 1.更新数据库
         updateById(shop);
         // 2.删除缓存
         stringRedisTemplate.delete(CACHE_SHOP_KEY + id);
         return Result.ok();
+    }
+
+    private Shop buildMerchantAllowedUpdate(Shop source) {
+        Shop target = new Shop();
+        target.setId(source.getId());
+        target.setName(source.getName());
+        target.setTypeId(source.getTypeId());
+        target.setImages(source.getImages());
+        target.setArea(source.getArea());
+        target.setAddress(source.getAddress());
+        target.setX(source.getX());
+        target.setY(source.getY());
+        target.setAvgPrice(source.getAvgPrice());
+        target.setOpenHours(source.getOpenHours());
+        return target;
     }
 
     @Override

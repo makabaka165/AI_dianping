@@ -7,6 +7,7 @@ import com.hmdp.dto.Result;
 import com.hmdp.dto.UserDTO;
 import com.hmdp.entity.Follow;
 import com.hmdp.mapper.FollowMapper;
+import com.hmdp.service.CurrentUserService;
 import com.hmdp.service.IFollowService;
 import com.hmdp.service.IUserService;
 import com.hmdp.utils.UserHolder;
@@ -34,11 +35,13 @@ public class FollowServiceImpl extends ServiceImpl<FollowMapper, Follow> impleme
     private StringRedisTemplate stringRedisTemplate;
     @Resource
     private IUserService userService;
+    @Resource
+    private CurrentUserService currentUserService;
 
     @Override
     public Result follow(Long followUserId, Boolean isFollow) {
         // 1.获取登录用户
-        Long userId = UserHolder.getUser().getId();
+        Long userId = currentUserService.requireCurrentUserId();
         String key = "follows:" + userId;
         // 1.判断到底是关注还是取关
         if (isFollow) {
@@ -66,7 +69,7 @@ public class FollowServiceImpl extends ServiceImpl<FollowMapper, Follow> impleme
     @Override
     public Result isFollow(Long followUserId) {
         // 1.获取登录用户
-        Long userId = UserHolder.getUser().getId();
+        Long userId = currentUserService.requireCurrentUserId();
         // 2.查询是否关注 select count(*) from tb_follow where user_id = ? and follow_user_id = ?
         Integer count = query().eq("user_id", userId).eq("follow_user_id", followUserId).count();
         // 3.判断
@@ -76,7 +79,7 @@ public class FollowServiceImpl extends ServiceImpl<FollowMapper, Follow> impleme
     @Override
     public Result followCommons(Long id) {
         // 1.获取当前用户
-        Long userId = UserHolder.getUser().getId();
+        Long userId = currentUserService.requireCurrentUserId();
         String key = "follows:" + userId;
         // 2.求交集
         String key2 = "follows:" + id;

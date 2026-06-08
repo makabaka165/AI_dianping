@@ -1,6 +1,7 @@
 package com.hmdp.controller;
 
 
+import cn.dev33.satoken.annotation.SaCheckLogin;
 import cn.hutool.core.bean.BeanUtil;
 import com.hmdp.dto.LoginFormDTO;
 import com.hmdp.dto.Result;
@@ -14,6 +15,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 
 import javax.annotation.Resource;
+import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpSession;
 
 /**
@@ -38,9 +40,9 @@ public class UserController {
      * 发送手机验证码
      */
     @PostMapping("code")
-    public Result sendCode(@RequestParam("phone") String phone, HttpSession session) {
+    public Result sendCode(@RequestParam("phone") String phone, HttpSession session, HttpServletRequest request) {
         // 发送短信验证码并保存验证码
-        return userService.sendCode(phone, session);
+        return userService.sendCode(phone, session, request);
     }
 
     /**
@@ -62,12 +64,13 @@ public class UserController {
      * @return 无
      */
     @PostMapping("/logout")
-    public Result logout(){
-        // TODO 实现登出功能
-        return Result.fail("功能未完成");
+    @SaCheckLogin
+    public Result logout(HttpServletRequest request){
+        return userService.logout(request.getHeader("authorization"));
     }
 
     @GetMapping("/me")
+    @SaCheckLogin
     public Result me(){
         // 获取当前登录的用户并返回
         UserDTO user = UserHolder.getUser();
@@ -102,11 +105,13 @@ public class UserController {
     }
 
     @PostMapping("/sign")
+    @SaCheckLogin
     public Result sign(){
         return userService.sign();
     }
 
     @GetMapping("/sign/count")
+    @SaCheckLogin
     public Result signCount(){
         return userService.signCount();
     }

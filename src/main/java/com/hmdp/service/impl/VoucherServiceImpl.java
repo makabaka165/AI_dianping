@@ -5,6 +5,9 @@ import com.hmdp.dto.Result;
 import com.hmdp.entity.SeckillVoucher;
 import com.hmdp.entity.Voucher;
 import com.hmdp.mapper.VoucherMapper;
+import com.hmdp.service.CurrentUserService;
+import com.hmdp.service.IMerchantShopService;
+import com.hmdp.service.IPermissionService;
 import com.hmdp.service.ISeckillVoucherService;
 import com.hmdp.service.IVoucherService;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -31,6 +34,12 @@ public class VoucherServiceImpl extends ServiceImpl<VoucherMapper, Voucher> impl
     private ISeckillVoucherService seckillVoucherService;
     @Resource
     private StringRedisTemplate stringRedisTemplate;
+    @Resource
+    private CurrentUserService currentUserService;
+    @Resource
+    private IPermissionService permissionService;
+    @Resource
+    private IMerchantShopService merchantShopService;
 
     @Override
     public Result queryVoucherOfShop(Long shopId) {
@@ -43,6 +52,7 @@ public class VoucherServiceImpl extends ServiceImpl<VoucherMapper, Voucher> impl
     @Override
     @Transactional
     public void addSeckillVoucher(Voucher voucher) {
+        checkCanManageVoucherShop(voucher);
         // 保存优惠券
         save(voucher);
         // 保存秒杀信息
@@ -54,5 +64,21 @@ public class VoucherServiceImpl extends ServiceImpl<VoucherMapper, Voucher> impl
         seckillVoucherService.save(seckillVoucher);
         // 保存秒杀库存到Redis中
         stringRedisTemplate.opsForValue().set(SECKILL_STOCK_KEY + voucher.getId(), voucher.getStock().toString());
+    }
+
+    @Override
+    public boolean save(Voucher entity) {
+        checkCanManageVoucherShop(entity);
+        return super.save(entity);
+    }
+
+    private void checkCanManageVoucherShop(Voucher voucher) {
+        if (voucher == null || voucher.getShopId() == null) {
+            throw new IllegalArgumentException("优惠券所属店铺不能为空");
+        }
+        Long userId = currentUserService.requireCurrentUserId();
+        if (!permissionService.hasRole(userId, "admin") && !merchantShopService.isShopOwner(userId, voucher.getShopId())) {
+            throw new IllegalStateException("无权操作非本人店铺优惠券");
+        }
     }
 }

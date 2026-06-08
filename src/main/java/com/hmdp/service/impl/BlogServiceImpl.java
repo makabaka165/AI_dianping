@@ -11,6 +11,7 @@ import com.hmdp.entity.Blog;
 import com.hmdp.entity.Follow;
 import com.hmdp.entity.User;
 import com.hmdp.mapper.BlogMapper;
+import com.hmdp.service.CurrentUserService;
 import com.hmdp.service.IBlogService;
 import com.hmdp.service.IFollowService;
 import com.hmdp.service.IUserService;
@@ -50,6 +51,9 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
     @Resource
     private IFollowService followService;
 
+    @Resource
+    private CurrentUserService currentUserService;
+
     @Override
     public Result queryHotBlog(Integer current) {
         // 根据用户查询
@@ -82,12 +86,11 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
 
     private void isBlogLiked(Blog blog) {
         // 1.获取登录用户
-        UserDTO user = UserHolder.getUser();
-        if (user == null) {
+        Long userId = currentUserService.getCurrentUserId();
+        if (userId == null) {
             // 用户未登录，无需查询是否点赞
             return;
         }
-        Long userId = user.getId();
         // 2.判断当前登录用户是否已经点赞
         String key = "blog:liked:" + blog.getId();
         Double score = stringRedisTemplate.opsForZSet().score(key, userId.toString());
@@ -97,7 +100,7 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
     @Override
     public Result likeBlog(Long id) {
         // 1.获取登录用户
-        Long userId = UserHolder.getUser().getId();
+        Long userId = currentUserService.requireCurrentUserId();
         // 2.判断当前登录用户是否已经点赞
         String key = BLOG_LIKED_KEY + id;
         Double score = stringRedisTemplate.opsForZSet().score(key, userId.toString());
@@ -145,15 +148,15 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
     @Override
     public Result saveBlog(Blog blog) {
         // 1.获取登录用户
-        UserDTO user = UserHolder.getUser();
-        blog.setUserId(user.getId());
+        Long currentUserId = currentUserService.requireCurrentUserId();
+        blog.setUserId(currentUserId);
         // 2.保存探店笔记
         boolean isSuccess = save(blog);
         if(!isSuccess){
             return Result.fail("新增笔记失败!");
         }
         // 3.查询笔记作者的所有粉丝 select * from tb_follow where follow_user_id = ?
-        List<Follow> follows = followService.query().eq("follow_user_id", user.getId()).list();
+        List<Follow> follows = followService.query().eq("follow_user_id", currentUserId).list();
         // 4.推送笔记id给所有粉丝
         for (Follow follow : follows) {
             // 4.1.获取粉丝id
@@ -169,7 +172,7 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
     @Override
     public Result queryBlogOfFollow(Long max, Integer offset) {
         // 1.获取当前用户
-        Long userId = UserHolder.getUser().getId();
+        Long userId = currentUserService.requireCurrentUserId();
         // 2.查询收件箱 ZREVRANGEBYSCORE key Max Min LIMIT offset count
         String key = FEED_KEY + userId;
         Set<ZSetOperations.TypedTuple<String>> typedTuples = stringRedisTemplate.opsForZSet()

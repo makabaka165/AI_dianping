@@ -1,6 +1,8 @@
 package com.hmdp.controller;
 
 
+import cn.dev33.satoken.annotation.SaCheckPermission;
+import cn.dev33.satoken.annotation.SaMode;
 import cn.hutool.core.util.StrUtil;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.hmdp.dto.Result;
@@ -47,6 +49,7 @@ public class ShopController {
      * @return 商铺id
      */
     @PostMapping
+    @SaCheckPermission("shop:create")
     public Result saveShop(@RequestBody Shop shop) {
         // 写入数据库
         shopService.save(shop);
@@ -60,6 +63,7 @@ public class ShopController {
      * @return 无
      */
     @PutMapping
+    @SaCheckPermission(value = {"shop:update:own", "shop:update"}, mode = SaMode.OR)
     public Result updateShop(@RequestBody Shop shop) {
         // 写入数据库
         Result result = shopService.update(shop);

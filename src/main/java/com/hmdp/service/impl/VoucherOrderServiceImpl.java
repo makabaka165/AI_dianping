@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.hmdp.dto.Result;
 import com.hmdp.entity.VoucherOrder;
 import com.hmdp.mapper.VoucherOrderMapper;
+import com.hmdp.service.CurrentUserService;
 import com.hmdp.service.IVoucherOrderService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -27,6 +28,9 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     @Autowired
     private StringRedisTemplate stringRedisTemplate;
 
+    @Autowired
+    private CurrentUserService currentUserService;
+
     private static final String STREAM_KEY = "stream.orders";
     private static final String GROUP_NAME = "g1";
     private static final String CONSUMER_NAME = "c1";
@@ -44,6 +48,8 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         // 实现秒杀逻辑
         try {
             log.info("开始处理秒杀请求，优惠券ID: {}", voucherId);
+            Long userId = currentUserService.requireCurrentUserId();
+            log.debug("秒杀请求用户ID: {}", userId);
 
             // 这里添加你的秒杀逻辑
             // 例如：
@@ -59,6 +65,11 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
             log.error("秒杀处理失败，优惠券ID: {}", voucherId, e);
             return Result.fail("秒杀失败");
         }
+    }
+
+    @Override
+    public void createVoucherOrder(VoucherOrder voucherOrder) {
+        save(voucherOrder);
     }
 
     @PostConstruct

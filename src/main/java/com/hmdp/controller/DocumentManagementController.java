@@ -1,5 +1,6 @@
 package com.hmdp.controller;
 
+import cn.dev33.satoken.annotation.SaCheckPermission;
 import com.hmdp.entity.DocumentMetadata;
 import com.hmdp.entity.DocumentStatus;
 import com.hmdp.service.impl.DocumentManagementServiceImpl;
@@ -27,6 +28,7 @@ public class DocumentManagementController {
      * 列出所有文档
      */
     @GetMapping("/list")
+    @SaCheckPermission("document:manage")
     public Result listAllDocuments() {
         try {
             List<DocumentMetadata> documents = documentManagementService.listAllDocuments();
@@ -41,6 +43,7 @@ public class DocumentManagementController {
      * 根据ID获取文档详情
      */
     @GetMapping("/{documentId}")
+    @SaCheckPermission("document:manage")
     public Result getDocument(@PathVariable String documentId) {
         try {
             Optional<DocumentMetadata> metadata = documentManagementService.getDocumentMetadata(documentId);
@@ -59,6 +62,7 @@ public class DocumentManagementController {
      * 根据状态列出文档
      */
     @GetMapping("/status/{status}")
+    @SaCheckPermission("document:manage")
     public Result listDocumentsByStatus(@PathVariable String status) {
         try {
             DocumentStatus documentStatus = DocumentStatus.valueOf(status.toUpperCase());
@@ -76,6 +80,7 @@ public class DocumentManagementController {
      * 根据质量评分范围列出文档
      */
     @GetMapping("/quality")
+    @SaCheckPermission("document:manage")
     public Result listDocumentsByQualityScoreRange(@RequestParam double minScore, @RequestParam double maxScore) {
         try {
             List<DocumentMetadata> documents = documentManagementService.listDocumentsByQualityScoreRange(minScore, maxScore);
@@ -90,6 +95,7 @@ public class DocumentManagementController {
      * 获取文档统计信息
      */
     @GetMapping("/statistics")
+    @SaCheckPermission("document:manage")
     public Result getStatistics() {
         try {
             List<DocumentMetadata> allDocuments = documentManagementService.listAllDocuments();
@@ -120,6 +126,7 @@ public class DocumentManagementController {
      * 上传新文档
      */
     @PostMapping("/upload")
+    @SaCheckPermission("document:manage")
     public Result uploadDocument(@RequestParam("file") MultipartFile file,
                                  @RequestParam(required = false) String title,
                                  @RequestParam(required = false) String source) {
@@ -158,6 +165,7 @@ public class DocumentManagementController {
      * 删除文档
      */
     @DeleteMapping("/{documentId}")
+    @SaCheckPermission("document:manage")
     public Result deleteDocument(@PathVariable String documentId) {
         try {
             boolean success = documentManagementService.deleteDocument(documentId);

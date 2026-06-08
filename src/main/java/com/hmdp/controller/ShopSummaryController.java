@@ -1,5 +1,7 @@
 package com.hmdp.controller;
 
+import cn.dev33.satoken.annotation.SaCheckLogin;
+import cn.dev33.satoken.annotation.SaCheckPermission;
 import com.hmdp.config.ChatMemoryKeyManager;
 import com.hmdp.dto.Result;
 import com.hmdp.entity.ShopSummaryResult;
@@ -34,6 +36,7 @@ public class ShopSummaryController {
      * 用户可以用自然语言表达任何需求
      */
     @PostMapping("/ai/chat")
+    @SaCheckPermission("ai:chat")
     public Result smartChat(
             @RequestParam(defaultValue = "default") String sessionId,
             @RequestParam String message
@@ -87,6 +90,7 @@ public class ShopSummaryController {
      * 生成店铺总结（支持记忆，用于后续对话）
      */
     @PostMapping("/{shopId}/with-memory")
+    @SaCheckLogin
     public Result getShopSummaryWithMemory(@PathVariable Long shopId) {
         try {
             String userId = getCurrentUserId();
@@ -110,6 +114,7 @@ public class ShopSummaryController {
      * 快捷智能分析
      */
     @GetMapping("/ai/analyze/{shopId}")  // 改为 /ai/analyze/{shopId}
+    @SaCheckPermission("ai:chat")
     public Result smartAnalyzeShop(@PathVariable Long shopId) {
         try {
             String userId = getCurrentUserId();
@@ -136,6 +141,7 @@ public class ShopSummaryController {
      * 智能问答
      */
     @PostMapping("/ai/ask/{shopId}")  // 改为 /ai/ask/{shopId}
+    @SaCheckPermission("ai:chat")
     public Result smartAskAboutShop(
             @PathVariable Long shopId,
             @RequestParam String question) {
@@ -165,6 +171,7 @@ public class ShopSummaryController {
      * 智能对比
      */
     @PostMapping("/ai/compare")  // 改为 /ai/compare
+    @SaCheckPermission("ai:chat")
     public Result smartCompareShops(
             @RequestParam Long shopId1,
             @RequestParam Long shopId2,
@@ -201,6 +208,7 @@ public class ShopSummaryController {
      * 智能推荐
      */
     @PostMapping("/ai/recommend")  // 改为 /ai/recommend
+    @SaCheckPermission("ai:chat")
     public Result smartRecommendShops(
             @RequestParam String userPreference,
             @RequestParam(required = false) String category,
@@ -237,6 +245,7 @@ public class ShopSummaryController {
      * 生成高质量博客总结（支持记忆）
      */
     @GetMapping("/{shopId}/quality")
+    @SaCheckLogin
     public Result getQualitySummary(
             @PathVariable Long shopId,
             @RequestParam(defaultValue = "5") Integer minLiked,
@@ -265,6 +274,7 @@ public class ShopSummaryController {
      * 智能店铺问答（核心对话功能）
      */
     @PostMapping("/{shopId}/ask")
+    @SaCheckLogin
     public Result askAboutShop(
             @PathVariable Long shopId,
             @RequestParam String question) {
@@ -291,6 +301,7 @@ public class ShopSummaryController {
      * 店铺对比分析（支持记忆）
      */
     @PostMapping("/compare")
+    @SaCheckLogin
     public Result compareShops(
             @RequestParam Long shopId1,
             @RequestParam Long shopId2,
@@ -321,6 +332,7 @@ public class ShopSummaryController {
      * 基于用户偏好的推荐（支持记忆）
      */
     @PostMapping("/recommend")
+    @SaCheckLogin
     public Result recommendShops(
             @RequestParam String userPreference,
             @RequestParam(required = false) String category,
@@ -351,6 +363,7 @@ public class ShopSummaryController {
      * 清除店铺问答记忆
      */
     @DeleteMapping("/{shopId}/memory/qa")
+    @SaCheckLogin
     public Result clearShopQAMemory(@PathVariable Long shopId) {
         try {
             String userId = getCurrentUserId();
@@ -372,6 +385,7 @@ public class ShopSummaryController {
      * 清除店铺总结记忆
      */
     @DeleteMapping("/{shopId}/memory/summary")
+    @SaCheckLogin
     public Result clearShopSummaryMemory(@PathVariable Long shopId) {
         try {
             String userId = getCurrentUserId();
@@ -393,6 +407,7 @@ public class ShopSummaryController {
      * 清除推荐记忆
      */
     @DeleteMapping("/memory/recommend")
+    @SaCheckLogin
     public Result clearRecommendMemory() {
         try {
             String userId = getCurrentUserId();
@@ -413,6 +428,7 @@ public class ShopSummaryController {
      * 清除用户所有记忆
      */
     @DeleteMapping("/memory/all")
+    @SaCheckLogin
     public Result clearAllMemory() {
         try {
             String userId = getCurrentUserId();
@@ -434,6 +450,7 @@ public class ShopSummaryController {
      * 获取记忆统计信息
      */
     @GetMapping("/memory/stats")
+    @SaCheckPermission("ai:memory:manage")
     public Result getMemoryStats() {
         try {
             Map<String, Map<String, Integer>> stats = shopSummaryService.getMemoryStats();
@@ -453,6 +470,7 @@ public class ShopSummaryController {
      * 检查特定记忆状态
      */
     @GetMapping("/memory/{shopId}/status")
+    @SaCheckLogin
     public Result getMemoryStatus(
             @PathVariable Long shopId,
             @RequestParam String type) { // qa, summary, compare, recommend
@@ -498,6 +516,7 @@ public class ShopSummaryController {
      * 刷新记忆过期时间
      */
     @PostMapping("/memory/{shopId}/refresh")
+    @SaCheckLogin
     public Result refreshMemory(
             @PathVariable Long shopId,
             @RequestParam String type) {
@@ -540,13 +559,9 @@ public class ShopSummaryController {
      * 批量清理功能记忆（管理员功能）
      */
     @DeleteMapping("/admin/memory/{functionType}")
+    @SaCheckPermission("ai:memory:manage")
     public Result adminCleanupMemory(@PathVariable String functionType) {
         try {
-            // 这里应该添加管理员权限检查
-            if (!isAdmin()) {
-                return Result.fail("权限不足");
-            }
-
             int count = shopSummaryService.cleanupMemoryByFunction(functionType);
 
             Map<String, Object> resultData = new HashMap<>();

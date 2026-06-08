@@ -65,6 +65,9 @@ public class CommonAIConfig {
     @Value("${langchain4j.open-ai.chat-model.base-url}")
     private String baseUrl;
 
+    @Value("${langchain4j.open-ai.chat-model.temperature:0.3}")
+    private double temperature;
+
     @Value("${langchain4j.open-ai.embedding-model.model-name:text-embedding-v3}")
     private String embeddingModelName;
 
@@ -136,7 +139,7 @@ public class CommonAIConfig {
                 .apiKey(apiKey)
                 .modelName(modelName)
                 .baseUrl(baseUrl)
-                .temperature(0.7)
+                .temperature(temperature)
                 .maxTokens(1500)
                 .logRequests(true)
                 .logResponses(true)
@@ -150,7 +153,7 @@ public class CommonAIConfig {
                 .apiKey(apiKey)
                 .modelName(modelName)
                 .baseUrl(baseUrl)
-                .temperature(0.7)
+                .temperature(temperature)
                 .maxTokens(1500)
                 .logRequests(true)
                 .logResponses(true)
@@ -220,6 +223,11 @@ public class CommonAIConfig {
         try {
             // 检查是否需要初始化数据
             if (shouldInitializeVectorStore(redisEmbeddingStore, embeddingModel)) {
+                if (autoImportData) {
+                    initializeVectorStore(redisEmbeddingStore, embeddingModel, documentQualityAssessor);
+                } else {
+                    log.info("rag.data.auto-import=false, skip vector store import");
+                }
                 log.info("检测到空的Redis向量数据库，开始初始化文档数据...");
                 // 初始化向量存储的逻辑已移至应用启动时执行，避免循环依赖
             } else {
@@ -301,7 +309,7 @@ public class CommonAIConfig {
             // 执行一个测试查询来检查是否有数据
             var testEmbedding = embeddingModel.embed("测试查询").content();
             log.debug("测试查询向量维度: {}", testEmbedding.dimension());
-            var results = embeddingStore.findRelevant(testEmbedding, 1, 0.1);
+            var results = embeddingStore.findRelevant(testEmbedding, 1, 0.0);
 
             boolean hasData = results != null && !results.isEmpty();
             log.info("向量数据库状态检查 - 是否有数据: {}", hasData);

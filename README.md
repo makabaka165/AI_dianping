@@ -272,7 +272,7 @@ git checkout develop
 # 执行 src/main/resources/db/hmdp.sql 创建表结构
 
 # 3. 配置 API Key
-export API_KEY=your_dashscope_api_key
+export DASHSCOPE_API_KEY=your_dashscope_api_key
 
 # 4. 启动 Redis (6379) 和 Redis Stack (6380, 可选)
 # Docker 方式:
@@ -294,7 +294,7 @@ langchain4j:
   open-ai:
     chat-model:
       base-url: https://dashscope.aliyuncs.com/compatible-mode/v1  # 阿里云兼容 OpenAI 协议
-      api-key: ${API_KEY}
+      api-key: ${DASHSCOPE_API_KEY}
       model-name: qwen-plus        # 可按需更换为 qwen-max / gpt-4 等
 
 rag:
