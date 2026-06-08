@@ -26,6 +26,7 @@ public class PermissionServiceImpl implements IPermissionService {
 
     private static final String DEFAULT_ROLE_BUYER = "buyer";
     private static final int ENABLED = 1;
+    private static final int DISABLED = 0;
 
     @Resource
     private PermissionQueryMapper permissionQueryMapper;
@@ -137,6 +138,41 @@ public class PermissionServiceImpl implements IPermissionService {
                     .set("status", ENABLED)
                     .eq("user_id", userId)
                     .eq("role_id", role.getId()));
+        }
+    }
+
+    @Override
+    public void setUserRoleStatus(Long userId, String roleKey, Integer status) {
+        if (userId == null || StrUtil.isBlank(roleKey)) {
+            throw new IllegalArgumentException("userId and roleKey are required");
+        }
+        if (!Arrays.asList("buyer", "merchant", "admin").contains(roleKey)) {
+            throw new IllegalArgumentException("roleKey only supports buyer, merchant, admin");
+        }
+        int targetStatus = Integer.valueOf(ENABLED).equals(status) ? ENABLED : DISABLED;
+        Role role = roleMapper.selectOne(new QueryWrapper<Role>()
+                .eq("role_key", roleKey)
+                .eq("status", ENABLED));
+        if (role == null) {
+            throw new IllegalArgumentException("role not found or disabled");
+        }
+        if (targetStatus == ENABLED) {
+            try {
+                userRoleMapper.insert(new UserRole()
+                        .setUserId(userId)
+                        .setRoleId(role.getId())
+                        .setStatus(ENABLED));
+                return;
+            } catch (DuplicateKeyException ignored) {
+                // Fall through to status update.
+            }
+        }
+        int updated = userRoleMapper.update(null, new UpdateWrapper<UserRole>()
+                .set("status", targetStatus)
+                .eq("user_id", userId)
+                .eq("role_id", role.getId()));
+        if (updated <= 0) {
+            throw new IllegalArgumentException("user role binding does not exist");
         }
     }
 }

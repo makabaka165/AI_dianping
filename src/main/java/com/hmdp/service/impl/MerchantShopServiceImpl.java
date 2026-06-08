@@ -12,6 +12,7 @@ import org.springframework.stereotype.Service;
 public class MerchantShopServiceImpl extends ServiceImpl<MerchantShopMapper, MerchantShop> implements IMerchantShopService {
 
     private static final int ENABLED = 1;
+    private static final int DISABLED = 0;
 
     @Override
     public boolean isShopOwner(Long merchantUserId, Long shopId) {
@@ -44,6 +45,22 @@ public class MerchantShopServiceImpl extends ServiceImpl<MerchantShopMapper, Mer
                     .eq("merchant_user_id", merchantUserId)
                     .eq("shop_id", shopId)
                     .update();
+        }
+    }
+
+    @Override
+    public void unbindMerchantShop(Long merchantUserId, Long shopId, String remark) {
+        if (merchantUserId == null || shopId == null) {
+            throw new IllegalArgumentException("merchantUserId and shopId are required");
+        }
+        boolean updated = update()
+                .set("status", DISABLED)
+                .set("remark", remark)
+                .eq("merchant_user_id", merchantUserId)
+                .eq("shop_id", shopId)
+                .update();
+        if (!updated) {
+            throw new IllegalArgumentException("merchant shop binding does not exist");
         }
     }
 }

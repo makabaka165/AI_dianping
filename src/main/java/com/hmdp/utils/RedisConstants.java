@@ -6,9 +6,14 @@ public class RedisConstants {
     public static final String LOGIN_CODE_COOLDOWN_KEY = "login:code:cooldown:";
     public static final String LOGIN_CODE_DAILY_KEY = "login:code:daily:";
     public static final String LOGIN_CODE_IP_MINUTE_KEY = "login:code:ip:minute:";
+    public static final String LOGIN_FAIL_COUNT_KEY = "login:fail:count:";
+    public static final String LOGIN_BLOCK_KEY = "login:block:";
     public static final Long LOGIN_CODE_COOLDOWN_SECONDS = 60L;
     public static final Long LOGIN_CODE_DAILY_LIMIT = 10L;
     public static final Long LOGIN_CODE_IP_MINUTE_LIMIT = 30L;
+    public static final Long LOGIN_FAIL_LIMIT = 5L;
+    public static final Long LOGIN_FAIL_WINDOW_MINUTES = 15L;
+    public static final Long LOGIN_BLOCK_MINUTES = 15L;
     public static final Long CACHE_NULL_TTL = 2L;
 
     public static final Long CACHE_SHOP_TTL = 30L;

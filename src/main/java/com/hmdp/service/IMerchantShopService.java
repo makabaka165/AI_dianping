@@ -8,4 +8,6 @@ public interface IMerchantShopService extends IService<MerchantShop> {
     boolean isShopOwner(Long merchantUserId, Long shopId);
 
     void bindMerchantShop(Long merchantUserId, Long shopId, String remark);
+
+    void unbindMerchantShop(Long merchantUserId, Long shopId, String remark);
 }

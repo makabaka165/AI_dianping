@@ -4,10 +4,9 @@ import cn.hutool.core.util.StrUtil;
 import com.hmdp.entity.LoginLog;
 import com.hmdp.mapper.LoginLogMapper;
 import com.hmdp.service.ILoginLogService;
+import com.hmdp.utils.RequestContextUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
-import org.springframework.web.context.request.RequestContextHolder;
-import org.springframework.web.context.request.ServletRequestAttributes;
 
 import javax.annotation.Resource;
 import javax.servlet.http.HttpServletRequest;
@@ -26,10 +25,19 @@ public class LoginLogServiceImpl implements ILoginLogService {
 
     @Override
     public void recordLogin(Long userId, String phone, boolean success, String failReason, String tokenId) {
+        recordLogin(userId, phone, success, failReason, tokenId, null, 0, 0);
+    }
+
+    @Override
+    public void recordLogin(Long userId, String phone, boolean success, String failReason, String tokenId,
+                            String deviceFingerprint, Integer riskLevel, Integer failCount) {
         LoginLog loginLog = buildBaseLog(userId, phone, success ? SUCCESS : FAIL, failReason, tokenId)
                 .setAction("login")
                 .setLoginType("sms_code")
-                .setLoginTime(LocalDateTime.now());
+                .setLoginTime(LocalDateTime.now())
+                .setDeviceFingerprint(StrUtil.maxLength(deviceFingerprint, 128))
+                .setRiskLevel(riskLevel == null ? 0 : riskLevel)
+                .setFailCount(failCount == null ? 0 : failCount);
         insertQuietly(loginLog);
     }
 
@@ -51,39 +59,18 @@ public class LoginLogServiceImpl implements ILoginLogService {
     }
 
     private LoginLog buildBaseLog(Long userId, String phone, Integer success, String failReason, String tokenId) {
-        HttpServletRequest request = currentRequest();
+        HttpServletRequest request = RequestContextUtils.currentRequest();
         return new LoginLog()
                 .setUserId(userId)
                 .setPhone(phone)
                 .setSuccess(success)
                 .setFailReason(failReason)
-                .setIp(getClientIp(request))
-                .setUserAgent(request == null ? null : StrUtil.maxLength(request.getHeader("User-Agent"), 512))
+                .setIp(RequestContextUtils.getClientIp(request))
+                .setUserAgent(RequestContextUtils.getUserAgent(request))
                 .setTokenId(StrUtil.maxLength(tokenId, 128))
                 .setRiskLevel(0)
+                .setFailCount(0)
                 .setStatus(ENABLED);
-    }
-
-    private HttpServletRequest currentRequest() {
-        if (!(RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes)) {
-            return null;
-        }
-        return ((ServletRequestAttributes) RequestContextHolder.getRequestAttributes()).getRequest();
-    }
-
-    private String getClientIp(HttpServletRequest request) {
-        if (request == null) {
-            return "unknown";
-        }
-        String forwardedFor = request.getHeader("X-Forwarded-For");
-        if (StrUtil.isNotBlank(forwardedFor) && !"unknown".equalsIgnoreCase(forwardedFor)) {
-            return StrUtil.maxLength(forwardedFor.split(",")[0].trim(), 64);
-        }
-        String realIp = request.getHeader("X-Real-IP");
-        if (StrUtil.isNotBlank(realIp) && !"unknown".equalsIgnoreCase(realIp)) {
-            return StrUtil.maxLength(realIp, 64);
-        }
-        return StrUtil.maxLength(request.getRemoteAddr(), 64);
     }
 
     private void insertQuietly(LoginLog loginLog) {

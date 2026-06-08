@@ -37,6 +37,8 @@ public class LoginLog implements Serializable {
 
     private String userAgent;
 
+    private String deviceFingerprint;
+
     private String tokenId;
 
     private LocalDateTime loginTime;
@@ -44,6 +46,8 @@ public class LoginLog implements Serializable {
     private LocalDateTime logoutTime;
 
     private Integer riskLevel;
+
+    private Integer failCount;
 
     private Integer status;
 

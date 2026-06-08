@@ -1,13 +1,12 @@
 package com.hmdp.service.impl;
 
-import cn.hutool.core.bean.BeanUtil;
 import cn.dev33.satoken.stp.StpUtil;
 import cn.hutool.core.util.RandomUtil;
 import cn.hutool.core.util.StrUtil;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.hmdp.common.ErrorCode;
 import com.hmdp.dto.LoginFormDTO;
 import com.hmdp.dto.Result;
-import com.hmdp.dto.UserDTO;
 import com.hmdp.entity.User;
 import com.hmdp.mapper.UserMapper;
 import com.hmdp.service.CurrentUserService;
@@ -15,12 +14,13 @@ import com.hmdp.service.ILoginLogService;
 import com.hmdp.service.IPermissionService;
 import com.hmdp.service.IUserService;
 import com.hmdp.utils.RegexUtils;
+import com.hmdp.utils.RequestContextUtils;
 import com.hmdp.utils.UserHolder;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.redis.connection.BitFieldSubCommands;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
-import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 
 import javax.annotation.Resource;
@@ -36,29 +36,15 @@ import java.util.concurrent.TimeUnit;
 import static com.hmdp.utils.RedisConstants.*;
 import static com.hmdp.utils.SystemConstants.USER_NICK_NAME_PREFIX;
 
-/**
- * <p>
- * 服务实现类
- * </p>
- *
- * @author 虎哥
- * @since 2021-12-22
- */
 @Slf4j
 @Service
 public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IUserService {
 
-    @Resource
-    private StringRedisTemplate stringRedisTemplate;
-
-    @Resource
-    private IPermissionService permissionService;
-
-    @Resource
-    private ILoginLogService loginLogService;
-
-    @Resource
-    private CurrentUserService currentUserService;
+    private static final int USER_STATUS_ENABLED = 1;
+    private static final int USER_STATUS_DISABLED = 0;
+    private static final int RISK_LOW = 0;
+    private static final int RISK_MEDIUM = 1;
+    private static final int RISK_HIGH = 2;
 
     private static final DefaultRedisScript<Long> VERIFY_CODE_SCRIPT;
     private static final DefaultRedisScript<Long> INCREMENT_WITH_EXPIRE_SCRIPT;
@@ -83,78 +69,93 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
         );
     }
 
+    @Resource
+    private StringRedisTemplate stringRedisTemplate;
+
+    @Resource
+    private IPermissionService permissionService;
+
+    @Resource
+    private ILoginLogService loginLogService;
+
+    @Resource
+    private CurrentUserService currentUserService;
+
     @Override
     public Result sendCode(String phone, HttpSession session, HttpServletRequest request) {
-        // 1.校验手机号
+        String deviceFingerprint = RequestContextUtils.getDeviceFingerprint(request);
         if (RegexUtils.isPhoneInvalid(phone)) {
-            // 2.如果不符合，返回错误信息
-            loginLogService.recordLogin(null, phone, false, "发送验证码手机号格式错误", null);
-            return Result.fail("手机号格式错误！");
+            loginLogService.recordLogin(null, phone, false, "invalid phone when sending code", null,
+                    deviceFingerprint, RISK_LOW, 0);
+            return Result.fail(ErrorCode.PARAM_ERROR, "invalid phone");
         }
-        Result rateLimitResult = checkSendCodeRateLimit(phone, getClientIp(request));
+
+        Result rateLimitResult = checkSendCodeRateLimit(phone, RequestContextUtils.getClientIp(request));
         if (rateLimitResult != null) {
-            loginLogService.recordLogin(null, phone, false, "发送验证码限流：" + rateLimitResult.getErrorMsg(), null);
+            loginLogService.recordLogin(null, phone, false, "send code rate limited: " + rateLimitResult.getErrorMsg(),
+                    null, deviceFingerprint, RISK_MEDIUM, 0);
             return rateLimitResult;
         }
-        // 3.符合，生成验证码
+
         String code = RandomUtil.randomNumbers(6);
-
-        // 4.保存验证码到Redis
         stringRedisTemplate.opsForValue().set(LOGIN_CODE_KEY + phone, code, LOGIN_CODE_TTL, TimeUnit.MINUTES);
-
-        // 5.发送验证码
-        // 当前项目没有接入真实短信服务，保留日志输出用于本地测试；生产环境应替换为短信服务并关闭明文日志。
-        log.debug("发送短信验证码成功，验证码：{}", code);
-        // 返回ok
+        log.debug("sms verify code generated, phone={}, code={}", phone, code);
         return Result.ok();
     }
 
     @Override
     public Result login(LoginFormDTO loginForm, HttpSession session) {
-        // 1.校验手机号
         String phone = loginForm.getPhone();
+        HttpServletRequest request = RequestContextUtils.currentRequest();
+        String deviceFingerprint = RequestContextUtils.getDeviceFingerprint(request);
+
         if (RegexUtils.isPhoneInvalid(phone)) {
-            // 2.如果不符合，返回错误信息
-            loginLogService.recordLogin(null, phone, false, "手机号格式错误", null);
-            return Result.fail("手机号格式错误！");
-        }
-        // 3.从redis获取验证码并校验
-        String code = loginForm.getCode();
-        if (StrUtil.isBlank(code)) {
-            loginLogService.recordLogin(null, phone, false, "验证码为空", null);
-            return Result.fail("验证码不能为空");
+            loginLogService.recordLogin(null, phone, false, "invalid phone", null, deviceFingerprint, RISK_LOW, 0);
+            return Result.fail(ErrorCode.PARAM_ERROR, "invalid phone");
         }
 
-        String codeKey = LOGIN_CODE_KEY + phone;
+        Result blockResult = checkLoginBlocked(phone, deviceFingerprint);
+        if (blockResult != null) {
+            loginLogService.recordLogin(null, phone, false, "login blocked by risk control", null,
+                    deviceFingerprint, RISK_HIGH, getFailCount(phone, deviceFingerprint));
+            return blockResult;
+        }
+
+        String code = loginForm.getCode();
+        if (StrUtil.isBlank(code)) {
+            return recordCaptchaFailure(phone, deviceFingerprint, "empty captcha",
+                    ErrorCode.CAPTCHA_ERROR, "captcha is required");
+        }
+
         Long verifyResult = stringRedisTemplate.execute(
                 VERIFY_CODE_SCRIPT,
-                Collections.singletonList(codeKey),
+                Collections.singletonList(LOGIN_CODE_KEY + phone),
                 code
         );
         if (verifyResult == null || verifyResult == 0) {
-            loginLogService.recordLogin(null, phone, false, "验证码已过期", null);
-            return Result.fail("验证码已过期，请重新获取");
+            return recordCaptchaFailure(phone, deviceFingerprint, "captcha expired",
+                    ErrorCode.CAPTCHA_EXPIRED, "captcha expired");
         }
         if (verifyResult < 0) {
-            loginLogService.recordLogin(null, phone, false, "验证码错误", null);
-            return Result.fail("验证码错误");
+            return recordCaptchaFailure(phone, deviceFingerprint, "captcha mismatch",
+                    ErrorCode.CAPTCHA_ERROR, "captcha mismatch");
         }
 
-        // 4.一致，根据手机号查询用户 select * from tb_user where phone = ?
         User user = query().eq("phone", phone).one();
-
-        // 5.判断用户是否存在
         if (user == null) {
-            // 6.不存在，创建新用户并保存
             user = createUserWithPhone(phone);
             loginLogService.recordRegister(user.getId(), phone);
+        }
+        if (Integer.valueOf(USER_STATUS_DISABLED).equals(user.getStatus())) {
+            loginLogService.recordLogin(user.getId(), phone, false, "account disabled", null,
+                    deviceFingerprint, RISK_HIGH, getFailCount(phone, deviceFingerprint));
+            return Result.fail(ErrorCode.ACCOUNT_DISABLED);
         }
 
         StpUtil.login(user.getId());
         String token = StpUtil.getTokenValue();
-        loginLogService.recordLogin(user.getId(), phone, true, null, token);
-
-        // 8.返回token
+        clearLoginFail(phone, deviceFingerprint);
+        loginLogService.recordLogin(user.getId(), phone, true, null, token, deviceFingerprint, RISK_LOW, 0);
         return Result.ok(token);
     }
 
@@ -172,68 +173,50 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
 
     @Override
     public Result sign() {
-        // 1.获取当前登录用户
         Long userId = currentUserService.requireCurrentUserId();
-        // 2.获取日期
         LocalDateTime now = LocalDateTime.now();
-        // 3.拼接key
         String keySuffix = now.format(DateTimeFormatter.ofPattern(":yyyyMM"));
         String key = USER_SIGN_KEY + userId + keySuffix;
-        // 4.获取今天是本月的第几天
         int dayOfMonth = now.getDayOfMonth();
-        // 5.写入Redis SETBIT key offset 1
         stringRedisTemplate.opsForValue().setBit(key, dayOfMonth - 1, true);
         return Result.ok();
     }
 
     @Override
     public Result signCount() {
-        // 1.获取当前登录用户
         Long userId = currentUserService.requireCurrentUserId();
-        // 2.获取日期
         LocalDateTime now = LocalDateTime.now();
-        // 3.拼接key
         String keySuffix = now.format(DateTimeFormatter.ofPattern(":yyyyMM"));
         String key = USER_SIGN_KEY + userId + keySuffix;
-        // 4.获取今天是本月的第几天
         int dayOfMonth = now.getDayOfMonth();
-        // 5.获取本月截止今天为止的所有的签到记录，返回的是一个十进制的数字 BITFIELD sign:5:202203 GET u14 0
         List<Long> result = stringRedisTemplate.opsForValue().bitField(
                 key,
                 BitFieldSubCommands.create()
                         .get(BitFieldSubCommands.BitFieldType.unsigned(dayOfMonth)).valueAt(0)
         );
         if (result == null || result.isEmpty()) {
-            // 没有任何签到结果
             return Result.ok(0);
         }
         Long num = result.get(0);
         if (num == null || num == 0) {
             return Result.ok(0);
         }
-        // 6.循环遍历
         int count = 0;
         while (true) {
-            // 6.1.让这个数字与1做与运算，得到数字的最后一个bit位  // 判断这个bit位是否为0
             if ((num & 1) == 0) {
-                // 如果为0，说明未签到，结束
                 break;
-            }else {
-                // 如果不为0，说明已签到，计数器+1
-                count++;
             }
-            // 把数字右移一位，抛弃最后一个bit位，继续下一个bit位
+            count++;
             num >>>= 1;
         }
         return Result.ok(count);
     }
 
     private User createUserWithPhone(String phone) {
-        // 1.创建用户
-        User user = new User();
-        user.setPhone(phone);
-        user.setNickName(USER_NICK_NAME_PREFIX + RandomUtil.randomString(10));
-        // 2.保存用户
+        User user = new User()
+                .setPhone(phone)
+                .setNickName(USER_NICK_NAME_PREFIX + RandomUtil.randomString(10))
+                .setStatus(USER_STATUS_ENABLED);
         try {
             save(user);
             permissionService.assignDefaultBuyerRole(user.getId());
@@ -253,7 +236,8 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
                 .setIfAbsent(cooldownKey, "1", LOGIN_CODE_COOLDOWN_SECONDS, TimeUnit.SECONDS);
         if (!Boolean.TRUE.equals(cooldownAllowed)) {
             Long ttl = stringRedisTemplate.getExpire(cooldownKey, TimeUnit.SECONDS);
-            return Result.fail("验证码发送过于频繁，请" + Math.max(ttl == null ? 0 : ttl, 1) + "秒后再试");
+            return Result.fail(ErrorCode.RATE_LIMITED,
+                    "verify code sent too frequently, retry after " + Math.max(ttl == null ? 0 : ttl, 1) + " seconds");
         }
 
         String day = LocalDate.now().format(DateTimeFormatter.BASIC_ISO_DATE);
@@ -261,16 +245,77 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
         Long dailyCount = incrementWithExpire(dailyKey, 2, TimeUnit.DAYS);
         if (dailyCount > LOGIN_CODE_DAILY_LIMIT) {
             stringRedisTemplate.delete(cooldownKey);
-            return Result.fail("今日验证码发送次数已达上限，请明天再试");
+            return Result.fail(ErrorCode.RATE_LIMITED, "daily verify code limit exceeded");
         }
 
         String ipMinuteKey = LOGIN_CODE_IP_MINUTE_KEY + clientIp;
         Long ipMinuteCount = incrementWithExpire(ipMinuteKey, 1, TimeUnit.MINUTES);
         if (ipMinuteCount > LOGIN_CODE_IP_MINUTE_LIMIT) {
             stringRedisTemplate.delete(cooldownKey);
-            return Result.fail("当前网络环境请求过于频繁，请稍后再试");
+            return Result.fail(ErrorCode.RATE_LIMITED, "network requests are too frequent");
         }
         return null;
+    }
+
+    private Result checkLoginBlocked(String phone, String deviceFingerprint) {
+        String blockKey = loginBlockKey(phone, deviceFingerprint);
+        Boolean blocked = stringRedisTemplate.hasKey(blockKey);
+        if (!Boolean.TRUE.equals(blocked)) {
+            return null;
+        }
+        Long ttl = stringRedisTemplate.getExpire(blockKey, TimeUnit.SECONDS);
+        return Result.fail(ErrorCode.LOGIN_BLOCKED,
+                "login temporarily blocked, retry after " + Math.max(ttl == null ? 0 : ttl, 1) + " seconds");
+    }
+
+    private Result recordCaptchaFailure(String phone, String deviceFingerprint, String reason,
+                                        ErrorCode errorCode, String message) {
+        int failCount = increaseLoginFail(phone, deviceFingerprint);
+        loginLogService.recordLogin(null, phone, false, reason, null,
+                deviceFingerprint, calcRiskLevel(failCount), failCount);
+        if (failCount >= LOGIN_FAIL_LIMIT) {
+            return Result.fail(ErrorCode.LOGIN_BLOCKED,
+                    "login temporarily blocked after too many failures");
+        }
+        return Result.fail(errorCode, message);
+    }
+
+    private int increaseLoginFail(String phone, String deviceFingerprint) {
+        Long count = incrementWithExpire(loginFailCountKey(phone, deviceFingerprint),
+                LOGIN_FAIL_WINDOW_MINUTES, TimeUnit.MINUTES);
+        int failCount = count == null ? 0 : count.intValue();
+        if (failCount >= LOGIN_FAIL_LIMIT) {
+            stringRedisTemplate.opsForValue().set(loginBlockKey(phone, deviceFingerprint), "1",
+                    LOGIN_BLOCK_MINUTES, TimeUnit.MINUTES);
+        }
+        return failCount;
+    }
+
+    private int getFailCount(String phone, String deviceFingerprint) {
+        String value = stringRedisTemplate.opsForValue().get(loginFailCountKey(phone, deviceFingerprint));
+        if (StrUtil.isBlank(value)) {
+            return 0;
+        }
+        try {
+            return Integer.parseInt(value);
+        } catch (NumberFormatException e) {
+            return 0;
+        }
+    }
+
+    private void clearLoginFail(String phone, String deviceFingerprint) {
+        stringRedisTemplate.delete(loginFailCountKey(phone, deviceFingerprint));
+        stringRedisTemplate.delete(loginBlockKey(phone, deviceFingerprint));
+    }
+
+    private int calcRiskLevel(int failCount) {
+        if (failCount >= LOGIN_FAIL_LIMIT) {
+            return RISK_HIGH;
+        }
+        if (failCount >= 3) {
+            return RISK_MEDIUM;
+        }
+        return RISK_LOW;
     }
 
     private Long incrementWithExpire(String key, long timeout, TimeUnit unit) {
@@ -283,19 +328,12 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
         return count == null ? 0 : count;
     }
 
-    private String getClientIp(HttpServletRequest request) {
-        if (request == null) {
-            return "unknown";
-        }
-        String forwardedFor = request.getHeader("X-Forwarded-For");
-        if (StrUtil.isNotBlank(forwardedFor) && !"unknown".equalsIgnoreCase(forwardedFor)) {
-            return forwardedFor.split(",")[0].trim();
-        }
-        String realIp = request.getHeader("X-Real-IP");
-        if (StrUtil.isNotBlank(realIp) && !"unknown".equalsIgnoreCase(realIp)) {
-            return realIp;
-        }
-        return request.getRemoteAddr();
+    private String loginFailCountKey(String phone, String deviceFingerprint) {
+        return LOGIN_FAIL_COUNT_KEY + phone + ":" + deviceFingerprint;
+    }
+
+    private String loginBlockKey(String phone, String deviceFingerprint) {
+        return LOGIN_BLOCK_KEY + phone + ":" + deviceFingerprint;
     }
 
     private String normalizeToken(String token) {

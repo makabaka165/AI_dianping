@@ -1,14 +1,15 @@
 package com.hmdp.service.impl;
 
 import cn.hutool.core.util.StrUtil;
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.hmdp.entity.OperationLog;
 import com.hmdp.mapper.OperationLogMapper;
 import com.hmdp.service.CurrentUserService;
 import com.hmdp.service.IOperationLogService;
+import com.hmdp.utils.RequestContextUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
-import org.springframework.web.context.request.RequestContextHolder;
-import org.springframework.web.context.request.ServletRequestAttributes;
 
 import javax.annotation.Resource;
 import javax.servlet.http.HttpServletRequest;
@@ -27,7 +28,7 @@ public class OperationLogServiceImpl implements IOperationLogService {
     @Override
     public void record(String module, String operation, String targetType, String targetId,
                        String detail, boolean success, String failReason) {
-        HttpServletRequest request = currentRequest();
+        HttpServletRequest request = RequestContextUtils.currentRequest();
         OperationLog operationLog = new OperationLog()
                 .setOperatorUserId(currentUserService.getCurrentUserId())
                 .setModule(StrUtil.maxLength(module, 64))
@@ -37,8 +38,8 @@ public class OperationLogServiceImpl implements IOperationLogService {
                 .setDetail(StrUtil.maxLength(detail, 1000))
                 .setSuccess(success ? 1 : 0)
                 .setFailReason(StrUtil.maxLength(failReason, 255))
-                .setIp(getClientIp(request))
-                .setUserAgent(request == null ? null : StrUtil.maxLength(request.getHeader("User-Agent"), 512))
+                .setIp(RequestContextUtils.getClientIp(request))
+                .setUserAgent(RequestContextUtils.getUserAgent(request))
                 .setOperationTime(LocalDateTime.now());
         try {
             operationLogMapper.insert(operationLog);
@@ -47,25 +48,19 @@ public class OperationLogServiceImpl implements IOperationLogService {
         }
     }
 
-    private HttpServletRequest currentRequest() {
-        if (!(RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes)) {
-            return null;
-        }
-        return ((ServletRequestAttributes) RequestContextHolder.getRequestAttributes()).getRequest();
-    }
-
-    private String getClientIp(HttpServletRequest request) {
-        if (request == null) {
-            return "unknown";
-        }
-        String forwardedFor = request.getHeader("X-Forwarded-For");
-        if (StrUtil.isNotBlank(forwardedFor) && !"unknown".equalsIgnoreCase(forwardedFor)) {
-            return StrUtil.maxLength(forwardedFor.split(",")[0].trim(), 64);
-        }
-        String realIp = request.getHeader("X-Real-IP");
-        if (StrUtil.isNotBlank(realIp) && !"unknown".equalsIgnoreCase(realIp)) {
-            return StrUtil.maxLength(realIp, 64);
-        }
-        return StrUtil.maxLength(request.getRemoteAddr(), 64);
+    @Override
+    public Page<OperationLog> pageLogs(Integer current, Integer size, String module, String operation,
+                                       Long operatorUserId, Integer success) {
+        int pageNo = current == null || current < 1 ? 1 : current;
+        int pageSize = size == null ? 10 : Math.min(Math.max(size, 1), 100);
+        return operationLogMapper.selectPage(
+                new Page<>(pageNo, pageSize),
+                new QueryWrapper<OperationLog>()
+                        .eq(StrUtil.isNotBlank(module), "module", module)
+                        .eq(StrUtil.isNotBlank(operation), "operation", operation)
+                        .eq(operatorUserId != null && operatorUserId > 0, "operator_user_id", operatorUserId)
+                        .eq(success != null, "success", success)
+                        .orderByDesc("operation_time")
+        );
     }
 }

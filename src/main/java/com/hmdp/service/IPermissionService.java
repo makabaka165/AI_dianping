@@ -19,4 +19,6 @@ public interface IPermissionService {
     java.util.List<com.hmdp.entity.Permission> listPermissions();
 
     void assignRole(Long userId, String roleKey);
+
+    void setUserRoleStatus(Long userId, String roleKey, Integer status);
 }

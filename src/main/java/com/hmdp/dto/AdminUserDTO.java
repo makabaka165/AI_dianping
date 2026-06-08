@@ -11,6 +11,7 @@ public class AdminUserDTO {
     private String phone;
     private String nickName;
     private String icon;
+    private Integer status;
     private LocalDateTime createTime;
     private List<String> roles;
 }

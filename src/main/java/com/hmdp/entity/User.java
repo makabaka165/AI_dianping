@@ -52,6 +52,8 @@ public class User implements Serializable {
      */
     private String icon = "";
 
+    private Integer status;
+
     /**
      * 创建时间
      */
