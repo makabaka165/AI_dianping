@@ -1,3 +1,18 @@
+hmdp:
+  cache:
+    ttl-jitter-minutes: 5
+    mutex:
+      wait-timeout-millis: 300
+      lease-time-seconds: 10
+    logical:
+      min-physical-ttl-minutes: 10
+    rebuild-executor:
+      core-size: 4
+      max-size: 10
+      queue-capacity: 100
+      keep-alive-seconds: 60
+      await-termination-seconds: 10
+
 server:
   port: 8081  # 更改端口以避免冲突
 spring:

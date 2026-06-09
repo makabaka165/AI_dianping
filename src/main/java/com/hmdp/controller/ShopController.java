@@ -1,125 +1,66 @@
 package com.hmdp.controller;
 
-
 import cn.dev33.satoken.annotation.SaCheckPermission;
 import cn.dev33.satoken.annotation.SaMode;
-import cn.hutool.core.util.StrUtil;
-import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.hmdp.dto.Result;
-import com.hmdp.entity.Shop;
+import com.hmdp.dto.ShopCreateDTO;
+import com.hmdp.dto.ShopUpdateDTO;
 import com.hmdp.service.IShopService;
-import com.hmdp.service.ShopSummaryService;
-import com.hmdp.utils.SystemConstants;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
 
 import javax.annotation.Resource;
-import java.util.HashMap;
-import java.util.Map;
 
-/**
- * <p>
- * 前端控制器
- * </p>
- *
- * @author 虎哥
- */
 @RestController
 @RequestMapping("/shop")
 public class ShopController {
 
     @Resource
-    public IShopService shopService;
-    
-    @Resource
-    public ShopSummaryService shopSummaryService;
+    private IShopService shopService;
 
-    /**
-     * 根据id查询商铺信息
-     * @param id 商铺id
-     * @return 商铺详情数据
-     */
     @GetMapping("/{id}")
     public Result queryShopById(@PathVariable("id") Long id) {
         return shopService.queryById(id);
     }
 
-    /**
-     * 新增商铺信息
-     * @param shop 商铺数据
-     * @return 商铺id
-     */
-    @PostMapping
-    @SaCheckPermission("shop:create")
-    public Result saveShop(@RequestBody Shop shop) {
-        // 写入数据库
-        shopService.save(shop);
-        // 返回店铺id
-        return Result.ok(shop.getId());
+    @GetMapping("/of/type")
+    public Result queryShopByType(
+            @RequestParam("typeId") Integer typeId,
+            @RequestParam(value = "current", defaultValue = "1") Integer current,
+            @RequestParam(value = "x", required = false) Double x,
+            @RequestParam(value = "y", required = false) Double y,
+            @RequestParam(value = "lastDistance", required = false) Double lastDistance,
+            @RequestParam(value = "lastId", required = false) Long lastId,
+            @RequestParam(value = "sortBy", defaultValue = "distance") String sortBy) {
+        return shopService.queryShopByType(typeId, current, x, y, lastDistance, lastId, sortBy);
     }
 
-    /**
-     * 更新商铺信息
-     * @param shop 商铺数据
-     * @return 无
-     */
+    @PostMapping
+    @SaCheckPermission("shop:create")
+    public Result saveShop(@RequestBody @Validated ShopCreateDTO request) {
+        return shopService.createShop(request);
+    }
+
     @PutMapping
     @SaCheckPermission(value = {"shop:update:own", "shop:update"}, mode = SaMode.OR)
-    public Result updateShop(@RequestBody Shop shop) {
-        // 写入数据库
-        Result result = shopService.update(shop);
-        
-        // 如果更新成功，更新相关的本地缓存
-        if (result.getSuccess()) {
-            // 更新店铺存在性缓存（设置为存在）
-            shopSummaryService.updateShopExistsCache(shop.getId(), true);
-            // 注意：评价数量缓存无法在此处更新，因为评价数据不在shop表中
-            // 但在实际应用中，如果有评价数据的更新操作，也应该更新相应的缓存
-        }
-        
-        return result;
+    public Result updateShop(@RequestBody @Validated ShopUpdateDTO request) {
+        return shopService.updateShop(request);
     }
-    
-    /**
-     * 获取店铺统计信息
-     * @param id 店铺ID
-     * @return 店铺统计信息
-     */
+
     @GetMapping("/{id}/stats")
     public Result getShopStats(@PathVariable("id") Long id) {
-        Map<String, Object> stats = new HashMap<>();
-        
-        // 使用本地缓存获取店铺存在性
-        boolean exists = shopSummaryService.shopExists(id);
-        stats.put("exists", exists);
-        
-        if (exists) {
-            // 使用本地缓存获取店铺评价数量
-            int reviewCount = shopSummaryService.getShopReviewCount(id);
-            stats.put("reviewCount", reviewCount);
-        }
-        
-        return Result.ok(stats);
+        return shopService.queryShopStatus(id);
     }
-    
-    /**
-     * 获取店铺状态
-     * @param id 店铺ID
-     * @return 店铺状态
-     */
+
     @GetMapping("/{id}/status")
     public Result getShopStatus(@PathVariable("id") Long id) {
-        Map<String, Object> status = new HashMap<>();
-        
-        // 使用本地缓存获取店铺存在性
-        boolean exists = shopSummaryService.shopExists(id);
-        status.put("exists", exists);
-        
-        if (exists) {
-            // 使用本地缓存获取店铺评价数量
-            int reviewCount = shopSummaryService.getShopReviewCount(id);
-            status.put("reviewCount", reviewCount);
-        }
-        
-        return Result.ok(status);
+        return shopService.queryShopStatus(id);
     }
 }

@@ -7,8 +7,15 @@ import com.hmdp.common.ErrorCode;
 import com.hmdp.dto.Result;
 import com.hmdp.exception.BusinessException;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.validation.BindException;
+import org.springframework.validation.BindingResult;
+import org.springframework.validation.ObjectError;
+import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+
+import javax.validation.ConstraintViolation;
+import javax.validation.ConstraintViolationException;
 
 @Slf4j
 @RestControllerAdvice
@@ -34,6 +41,24 @@ public class WebExceptionAdvice {
         return Result.fail(e.getErrorCode(), e.getMessage());
     }
 
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    public Result handleMethodArgumentNotValidException(MethodArgumentNotValidException e) {
+        return Result.fail(ErrorCode.PARAM_ERROR, firstBindingError(e.getBindingResult()));
+    }
+
+    @ExceptionHandler(BindException.class)
+    public Result handleBindException(BindException e) {
+        return Result.fail(ErrorCode.PARAM_ERROR, firstBindingError(e.getBindingResult()));
+    }
+
+    @ExceptionHandler(ConstraintViolationException.class)
+    public Result handleConstraintViolationException(ConstraintViolationException e) {
+        return Result.fail(ErrorCode.PARAM_ERROR, e.getConstraintViolations().stream()
+                .findFirst()
+                .map(ConstraintViolation::getMessage)
+                .orElse(ErrorCode.PARAM_ERROR.getMessage()));
+    }
+
     @ExceptionHandler({IllegalArgumentException.class, IllegalStateException.class})
     public Result handleIllegalArgumentException(RuntimeException e) {
         return Result.fail(ErrorCode.PARAM_ERROR, e.getMessage());
@@ -43,5 +68,12 @@ public class WebExceptionAdvice {
     public Result handleRuntimeException(RuntimeException e) {
         log.error(e.toString(), e);
         return Result.fail(ErrorCode.SYSTEM_ERROR);
+    }
+
+    private String firstBindingError(BindingResult bindingResult) {
+        return bindingResult.getAllErrors().stream()
+                .findFirst()
+                .map(ObjectError::getDefaultMessage)
+                .orElse(ErrorCode.PARAM_ERROR.getMessage());
     }
 }

@@ -1,6 +1,8 @@
 package com.hmdp.service;
 
 import com.hmdp.dto.Result;
+import com.hmdp.dto.ShopCreateDTO;
+import com.hmdp.dto.ShopUpdateDTO;
 import com.hmdp.entity.Shop;
 import com.baomidou.mybatisplus.extension.service.IService;
 
@@ -16,7 +18,12 @@ public interface IShopService extends IService<Shop> {
 
     Result queryById(Long id);
 
-    Result update(Shop shop);
+    Result createShop(ShopCreateDTO request);
 
-    Result queryShopByType(Integer typeId, Integer current, Double x, Double y);
+    Result updateShop(ShopUpdateDTO request);
+
+    Result queryShopStatus(Long id);
+
+    Result queryShopByType(Integer typeId, Integer current, Double x, Double y,
+                           Double lastDistance, Long lastId, String sortBy);
 }
