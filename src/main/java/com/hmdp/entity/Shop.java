@@ -94,6 +94,11 @@ public class Shop implements Serializable {
     private String openHours;
 
     /**
+     * Optimistic lock version.
+     */
+    private Integer version;
+
+    /**
      * 创建时间
      */
     private LocalDateTime createTime;

@@ -49,6 +49,11 @@ public class ShopType implements Serializable {
     private Integer sort;
 
     /**
+     * 1 enabled, 0 disabled.
+     */
+    private Integer status;
+
+    /**
      * 创建时间
      */
     @JsonIgnore

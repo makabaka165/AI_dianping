@@ -1,6 +1,9 @@
 package com.hmdp.service.impl;
 
 import cn.hutool.json.JSONUtil;
+import com.hmdp.dto.ShopTypeAdminVO;
+import com.hmdp.dto.ShopTypeCreateDTO;
+import com.hmdp.dto.ShopTypeStatusDTO;
 import com.hmdp.dto.ShopTypeVO;
 import com.hmdp.entity.ShopType;
 import com.hmdp.mapper.ShopTypeMapper;
@@ -21,10 +24,12 @@ import java.util.concurrent.TimeUnit;
 
 import static com.hmdp.utils.RedisConstants.CACHE_SHOP_TYPE_KEY;
 import static com.hmdp.utils.RedisConstants.CACHE_SHOP_TYPE_TTL;
+import static com.hmdp.utils.RedisConstants.CACHE_SHOP_TYPE_VERSION_KEY;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -123,9 +128,12 @@ class ShopTypeServiceImplTest {
 
     @Test
     void evictTypeListCacheShouldDeleteRedisKey() {
+        when(stringRedisTemplate.opsForValue()).thenReturn(valueOperations);
+
         shopTypeService.evictTypeListCache();
 
         verify(stringRedisTemplate).delete(CACHE_SHOP_TYPE_KEY);
+        verify(valueOperations).increment(CACHE_SHOP_TYPE_VERSION_KEY);
     }
 
     @Test
@@ -139,6 +147,67 @@ class ShopTypeServiceImplTest {
         assertThat(result).extracting(ShopTypeVO::getName).containsExactly("美食");
         verify(stringRedisTemplate).delete(CACHE_SHOP_TYPE_KEY);
         verify(cacheClient).set(eq(CACHE_SHOP_TYPE_KEY), any(), eq(CACHE_SHOP_TYPE_TTL), eq(TimeUnit.MINUTES));
+    }
+
+    @Test
+    void queryTypeListShouldInvalidateLocalCacheWhenRedisVersionChanges() {
+        stubRedisValueOperations();
+        when(valueOperations.get(CACHE_SHOP_TYPE_VERSION_KEY)).thenReturn("1", "2");
+        when(valueOperations.get(CACHE_SHOP_TYPE_KEY)).thenReturn(null);
+        when(shopTypeMapper.selectList(any()))
+                .thenReturn(List.of(shopType(1L, "Food", 1)))
+                .thenReturn(List.of(shopType(2L, "Tea", 2)));
+
+        List<ShopTypeVO> first = shopTypeService.queryTypeList();
+        List<ShopTypeVO> second = shopTypeService.queryTypeList();
+
+        assertThat(first).extracting(ShopTypeVO::getName).containsExactly("Food");
+        assertThat(second).extracting(ShopTypeVO::getName).containsExactly("Tea");
+        verify(shopTypeMapper, org.mockito.Mockito.times(2)).selectList(any());
+    }
+
+    @Test
+    void createTypeShouldEvictRedisAndIncrementVersion() {
+        stubRedisValueOperations();
+        when(shopTypeMapper.insert(any(ShopType.class))).thenAnswer(invocation -> {
+            ShopType shopType = invocation.getArgument(0);
+            shopType.setId(10L);
+            return 1;
+        });
+
+        ShopTypeAdminVO result = shopTypeService.createType(createTypeRequest());
+
+        assertThat(result.getId()).isEqualTo(10L);
+        assertThat(result.getStatus()).isEqualTo(1);
+        verify(stringRedisTemplate).delete(CACHE_SHOP_TYPE_KEY);
+        verify(valueOperations).increment(CACHE_SHOP_TYPE_VERSION_KEY);
+    }
+
+    @Test
+    void updateTypeStatusShouldEvictRedisAndIncrementVersion() {
+        stubRedisValueOperations();
+        when(shopTypeMapper.selectById(10L)).thenReturn(shopType(10L, "Food", 1));
+        when(shopTypeMapper.update(eq(null), any())).thenReturn(1);
+        ShopTypeStatusDTO request = new ShopTypeStatusDTO();
+        request.setId(10L);
+        request.setStatus(0);
+
+        shopTypeService.updateTypeStatus(request);
+
+        verify(stringRedisTemplate).delete(CACHE_SHOP_TYPE_KEY);
+        verify(valueOperations).increment(CACHE_SHOP_TYPE_VERSION_KEY);
+    }
+
+    @Test
+    void deleteTypeShouldSoftDeleteAndEvictRedisVersion() {
+        stubRedisValueOperations();
+        when(shopTypeMapper.selectById(10L)).thenReturn(shopType(10L, "Food", 1));
+        when(shopTypeMapper.update(eq(null), any())).thenReturn(1);
+
+        shopTypeService.deleteType(10L);
+
+        verify(stringRedisTemplate).delete(CACHE_SHOP_TYPE_KEY);
+        verify(valueOperations).increment(CACHE_SHOP_TYPE_VERSION_KEY);
     }
 
     private ShopType shopType(Long id, String name, Integer sort) {
@@ -159,7 +228,16 @@ class ShopTypeServiceImplTest {
         return vo;
     }
 
+    private ShopTypeCreateDTO createTypeRequest() {
+        ShopTypeCreateDTO request = new ShopTypeCreateDTO();
+        request.setName("Food");
+        request.setIcon("/types/10.png");
+        request.setSort(1);
+        return request;
+    }
+
     private void stubRedisValueOperations() {
         when(stringRedisTemplate.opsForValue()).thenReturn(valueOperations);
+        lenient().when(valueOperations.get(CACHE_SHOP_TYPE_VERSION_KEY)).thenReturn("1");
     }
 }

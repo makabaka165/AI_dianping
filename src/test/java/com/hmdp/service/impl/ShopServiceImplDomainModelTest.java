@@ -9,6 +9,7 @@ import com.hmdp.dto.ShopUpdateDTO;
 import com.hmdp.entity.Shop;
 import com.hmdp.service.CurrentUserService;
 import com.hmdp.service.IMerchantShopService;
+import com.hmdp.service.IOperationLogService;
 import com.hmdp.service.IPermissionService;
 import com.hmdp.service.ShopGeoIndexService;
 import com.hmdp.service.ShopStatsService;
@@ -27,7 +28,9 @@ import java.util.Map;
 import static com.hmdp.utils.RedisConstants.CACHE_SHOP_KEY;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -56,6 +59,9 @@ class ShopServiceImplDomainModelTest {
     @Mock
     private ShopStatsService shopStatsService;
 
+    @Mock
+    private IOperationLogService operationLogService;
+
     private TestableShopServiceImpl shopService;
 
     @BeforeEach
@@ -68,6 +74,7 @@ class ShopServiceImplDomainModelTest {
         ReflectionTestUtils.setField(shopService, "permissionService", permissionService);
         ReflectionTestUtils.setField(shopService, "merchantShopService", merchantShopService);
         ReflectionTestUtils.setField(shopService, "shopStatsService", shopStatsService);
+        ReflectionTestUtils.setField(shopService, "operationLogService", operationLogService);
     }
 
     @Test
@@ -83,8 +90,11 @@ class ShopServiceImplDomainModelTest {
         assertThat(saved.getSold()).isZero();
         assertThat(saved.getComments()).isZero();
         assertThat(saved.getScore()).isZero();
+        assertThat(saved.getVersion()).isZero();
         verify(shopGeoIndexService).addOrUpdateShop(saved);
         verify(shopStatsService).updateShopExistsCache(101L, true);
+        verify(operationLogService).record(eq("shop"), eq("create"), eq("shop"), eq("101"),
+                anyString(), eq(true), isNull());
     }
 
     @Test
@@ -96,6 +106,34 @@ class ShopServiceImplDomainModelTest {
         assertThat(result.getSuccess()).isFalse();
         verify(shopGeoIndexService, never()).addOrUpdateShop(any());
         verify(shopStatsService, never()).updateShopExistsCache(any(), eq(true));
+        verify(operationLogService).record(eq("shop"), eq("create"), eq("shop"), isNull(),
+                anyString(), eq(false), eq("shop create failed"));
+    }
+
+    @Test
+    void createShopShouldBindMerchantUserAutomatically() {
+        shopService.nextSaveId = 102L;
+        when(currentUserService.getCurrentUserId()).thenReturn(9L);
+        when(permissionService.hasRole(9L, "merchant")).thenReturn(true);
+        when(permissionService.hasRole(9L, "admin")).thenReturn(false);
+
+        Result result = shopService.createShop(createRequest());
+
+        assertThat(result.getSuccess()).isTrue();
+        verify(merchantShopService).bindMerchantShop(eq(9L), eq(102L), anyString());
+    }
+
+    @Test
+    void createShopShouldNotBindAdminAutomatically() {
+        shopService.nextSaveId = 103L;
+        when(currentUserService.getCurrentUserId()).thenReturn(1L);
+        when(permissionService.hasRole(1L, "merchant")).thenReturn(true);
+        when(permissionService.hasRole(1L, "admin")).thenReturn(true);
+
+        Result result = shopService.createShop(createRequest());
+
+        assertThat(result.getSuccess()).isTrue();
+        verify(merchantShopService, never()).bindMerchantShop(any(), any(), anyString());
     }
 
     @Test
@@ -106,7 +144,7 @@ class ShopServiceImplDomainModelTest {
         Result result = shopService.updateShop(updateRequest());
 
         assertThat(result.getSuccess()).isFalse();
-        assertThat(result.getCode()).isEqualTo(ErrorCode.NOT_FOUND.getCode());
+        assertThat(result.getCode()).isEqualTo(ErrorCode.SHOP_NOT_FOUND.getCode());
     }
 
     @Test
@@ -132,6 +170,24 @@ class ShopServiceImplDomainModelTest {
         Result result = shopService.updateShop(updateRequest());
 
         assertThat(result.getSuccess()).isFalse();
+        assertThat(result.getCode()).isEqualTo(ErrorCode.SHOP_UPDATE_FAILED.getCode());
+        verify(stringRedisTemplate, never()).delete(any(String.class));
+    }
+
+    @Test
+    void updateShopShouldReturnConflictWhenVersionDoesNotMatch() {
+        Shop oldShop = oldShop();
+        oldShop.setVersion(2);
+        shopService.db.put(100L, oldShop);
+        ShopUpdateDTO request = updateRequest();
+        request.setVersion(1);
+        when(currentUserService.requireCurrentUserId()).thenReturn(1L);
+        when(permissionService.hasRole(1L, "admin")).thenReturn(true);
+
+        Result result = shopService.updateShop(request);
+
+        assertThat(result.getSuccess()).isFalse();
+        assertThat(result.getCode()).isEqualTo(ErrorCode.SHOP_UPDATE_CONFLICT.getCode());
         verify(stringRedisTemplate, never()).delete(any(String.class));
     }
 
@@ -145,6 +201,7 @@ class ShopServiceImplDomainModelTest {
         Result result = shopService.updateShop(updateRequest());
 
         assertThat(result.getSuccess()).isTrue();
+        assertThat(shopService.db.get(100L).getVersion()).isEqualTo(1);
         verify(stringRedisTemplate).delete(CACHE_SHOP_KEY + 100L);
         verify(shopGeoIndexService).refreshShopGeoIndex(eq(oldShop), any(Shop.class));
         verify(shopStatsService).updateShopExistsCache(100L, true);
@@ -231,6 +288,7 @@ class ShopServiceImplDomainModelTest {
         shop.setSold(10);
         shop.setComments(5);
         shop.setScore(45);
+        shop.setVersion(0);
         return shop;
     }
 
@@ -261,11 +319,34 @@ class ShopServiceImplDomainModelTest {
         }
 
         @Override
-        public boolean updateById(Shop entity) {
+        protected boolean updateShopWithOptionalVersion(ShopUpdateDTO request) {
             updateCalled = true;
             if (!updateResult) {
                 return false;
             }
+            Shop old = db.get(request.getId());
+            if (old == null) {
+                return false;
+            }
+            Integer oldVersion = old.getVersion() == null ? 0 : old.getVersion();
+            if (request.getVersion() != null && !request.getVersion().equals(oldVersion)) {
+                return false;
+            }
+            Shop entity = new Shop();
+            entity.setId(request.getId());
+            entity.setName(request.getName());
+            entity.setTypeId(request.getTypeId());
+            entity.setImages(request.getImages());
+            entity.setArea(request.getArea());
+            entity.setAddress(request.getAddress());
+            entity.setX(request.getX() == null ? old.getX() : request.getX());
+            entity.setY(request.getY() == null ? old.getY() : request.getY());
+            entity.setAvgPrice(request.getAvgPrice() == null ? old.getAvgPrice() : request.getAvgPrice());
+            entity.setOpenHours(request.getOpenHours() == null ? old.getOpenHours() : request.getOpenHours());
+            entity.setSold(old.getSold());
+            entity.setComments(old.getComments());
+            entity.setScore(old.getScore());
+            entity.setVersion(oldVersion + 1);
             db.put(entity.getId(), entity);
             return true;
         }

@@ -51,6 +51,9 @@ public class ShopUpdateDTO {
     @Size(max = 32, message = "openHours length must be less than or equal to 32")
     private String openHours;
 
+    @PositiveOrZero(message = "version must be greater than or equal to 0")
+    private Integer version;
+
     @AssertTrue(message = "x and y must be provided together")
     public boolean isCoordinatePairValid() {
         return (x == null) == (y == null);

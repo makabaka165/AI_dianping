@@ -25,5 +25,8 @@ public interface IShopService extends IService<Shop> {
     Result queryShopStatus(Long id);
 
     Result queryShopByType(Integer typeId, Integer current, Double x, Double y,
-                           Double lastDistance, Long lastId, String sortBy);
+                           Double lastDistance, Long lastId, String sortBy,
+                           String keyword, String area, Integer minScore,
+                           Long minAvgPrice, Long maxAvgPrice, Boolean openNow,
+                           Boolean pageResult);
 }

@@ -18,4 +18,5 @@ public class ShopDetailVO {
     private Integer comments;
     private Integer score;
     private String openHours;
+    private Integer version;
 }

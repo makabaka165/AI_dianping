@@ -1,11 +1,13 @@
 package com.hmdp.service.impl;
 
 import cn.hutool.core.util.StrUtil;
+import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.hmdp.common.ErrorCode;
 import com.hmdp.dto.NearbyShopResult;
 import com.hmdp.dto.NearbyShopVO;
+import com.hmdp.dto.PageResult;
 import com.hmdp.dto.Result;
 import com.hmdp.dto.ShopCreateDTO;
 import com.hmdp.dto.ShopDetailVO;
@@ -15,6 +17,7 @@ import com.hmdp.entity.Shop;
 import com.hmdp.mapper.ShopMapper;
 import com.hmdp.service.CurrentUserService;
 import com.hmdp.service.IMerchantShopService;
+import com.hmdp.service.IOperationLogService;
 import com.hmdp.service.IPermissionService;
 import com.hmdp.service.IShopService;
 import com.hmdp.service.ShopGeoIndexService;
@@ -25,7 +28,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.geo.Distance;
 import org.springframework.data.geo.GeoResult;
 import org.springframework.data.geo.GeoResults;
-import org.springframework.data.geo.Metrics;
+import org.springframework.data.geo.Metric;
 import org.springframework.data.redis.connection.RedisGeoCommands;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.domain.geo.GeoReference;
@@ -35,6 +38,7 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import javax.annotation.Resource;
+import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -54,7 +58,20 @@ import static com.hmdp.utils.RedisConstants.SHOP_GEO_KEY;
 public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IShopService {
 
     private static final int MAX_NEARBY_PAGE = 20;
-    private static final double NEARBY_RADIUS_KILOMETERS = 5D;
+    private static final double NEARBY_RADIUS_METERS = 5000D;
+    private static final Metric METERS = new Metric() {
+        private static final long serialVersionUID = 1L;
+
+        @Override
+        public double getMultiplier() {
+            return 6378137D;
+        }
+
+        @Override
+        public String getAbbreviation() {
+            return "m";
+        }
+    };
 
     @Resource
     private StringRedisTemplate stringRedisTemplate;
@@ -77,6 +94,9 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
     @Resource
     private ShopGeoIndexService shopGeoIndexService;
 
+    @Resource
+    private IOperationLogService operationLogService;
+
     @Override
     public Result queryById(Long id) {
         if (id == null || id <= 0) {
@@ -85,7 +105,7 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
         Shop shop = cacheClient.queryWithMutex(
                 CACHE_SHOP_KEY, id, Shop.class, this::getById, CACHE_SHOP_TTL, TimeUnit.MINUTES);
         if (shop == null) {
-            return Result.fail(ErrorCode.NOT_FOUND, "shop does not exist");
+            return Result.fail(ErrorCode.SHOP_NOT_FOUND, "shop does not exist");
         }
         return Result.ok(toDetailVO(shop));
     }
@@ -93,11 +113,23 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
     @Override
     @Transactional
     public Result createShop(ShopCreateDTO request) {
+        Long userId = currentUserService.getCurrentUserId();
+        boolean bindToCurrentMerchant = shouldBindCreatedShopToCurrentUser(userId);
         Shop shop = toCreateEntity(request);
-        boolean saved = save(shop);
-        if (!saved) {
-            return Result.fail("shop create failed");
+        try {
+            boolean saved = save(shop);
+            if (!saved) {
+                recordShopOperation("create", null, buildCreateAuditDetail(request), false, "shop create failed");
+                return Result.fail("shop create failed");
+            }
+            if (bindToCurrentMerchant) {
+                merchantShopService.bindMerchantShop(userId, shop.getId(), "auto bind on shop create");
+            }
+        } catch (RuntimeException e) {
+            recordShopOperation("create", shop.getId(), buildCreateAuditDetail(request), false, e.getMessage());
+            throw e;
         }
+        recordShopOperation("create", shop.getId(), buildCreateAuditDetail(request), true, null);
         runAfterCommit(() -> {
             runGeoSyncAction(() -> shopGeoIndexService.addOrUpdateShop(shop));
             updateShopExistsCache(shop.getId(), true);
@@ -112,20 +144,27 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
         Long userId = currentUserService.requireCurrentUserId();
         boolean admin = permissionService.hasRole(userId, "admin");
         if (!admin && !merchantShopService.isShopOwner(userId, id)) {
+            recordShopOperation("update", id, buildUpdateAuditDetail(request), false, "no permission to update this shop");
             return Result.fail(ErrorCode.FORBIDDEN, "no permission to update this shop");
         }
 
         Shop oldShop = getById(id);
         if (oldShop == null) {
-            return Result.fail(ErrorCode.NOT_FOUND, "shop does not exist");
+            recordShopOperation("update", id, buildUpdateAuditDetail(request), false, "shop does not exist");
+            return Result.fail(ErrorCode.SHOP_NOT_FOUND, "shop does not exist");
         }
 
-        Shop shop = toUpdateEntity(request);
-        boolean updated = updateById(shop);
+        boolean updated = updateShopWithOptionalVersion(request);
         if (!updated) {
-            return Result.fail("shop update failed");
+            ErrorCode errorCode = request.getVersion() == null
+                    ? ErrorCode.SHOP_UPDATE_FAILED
+                    : ErrorCode.SHOP_UPDATE_CONFLICT;
+            String message = request.getVersion() == null ? "shop update failed" : "shop update conflict";
+            recordShopOperation("update", id, buildUpdateAuditDetail(request), false, message);
+            return Result.fail(errorCode, message);
         }
 
+        recordShopOperation("update", id, buildUpdateAuditDetail(request), true, null);
         runAfterCommit(() -> {
             stringRedisTemplate.delete(CACHE_SHOP_KEY + id);
             runGeoSyncAction(() -> shopGeoIndexService.refreshShopGeoIndex(oldShop, getById(id)));
@@ -144,50 +183,88 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
 
     @Override
     public Result queryShopByType(Integer typeId, Integer current, Double x, Double y,
-                                  Double lastDistance, Long lastId, String sortBy) {
-        String validationError = validateShopTypeQuery(typeId, current, x, y, lastDistance, lastId, sortBy);
+                                  Double lastDistance, Long lastId, String sortBy,
+                                  String keyword, String area, Integer minScore,
+                                  Long minAvgPrice, Long maxAvgPrice, Boolean openNow,
+                                  Boolean pageResult) {
+        ShopQueryFilter filter = new ShopQueryFilter(keyword, area, minScore, minAvgPrice, maxAvgPrice,
+                Boolean.TRUE.equals(openNow), Boolean.TRUE.equals(pageResult));
+        String validationError = validateShopTypeQuery(typeId, current, x, y, lastDistance, lastId, sortBy, filter);
         if (validationError != null) {
             return Result.fail(ErrorCode.PARAM_ERROR, validationError);
         }
 
+        String normalizedSortBy = normalizeSortBy(sortBy);
         if (x == null && y == null) {
-            return queryShopByTypeFromDb(typeId, current);
+            return queryShopByTypeFromDb(typeId, current, normalizedSortBy, filter);
         }
 
-        String normalizedSortBy = normalizeSortBy(sortBy);
         if (lastDistance != null && lastId != null) {
-            return queryNearbyShopsByCursor(typeId, x, y, lastDistance, lastId, normalizedSortBy);
+            return queryNearbyShopsByCursor(typeId, current, x, y, lastDistance, lastId, normalizedSortBy, filter);
         }
-        return queryNearbyShopsByPage(typeId, current, x, y, normalizedSortBy);
+        return queryNearbyShopsByPage(typeId, current, x, y, normalizedSortBy, filter);
     }
 
-    private Result queryShopByTypeFromDb(Integer typeId, Integer current) {
+    public Result queryShopByType(Integer typeId, Integer current, Double x, Double y,
+                                  Double lastDistance, Long lastId, String sortBy) {
+        return queryShopByType(typeId, current, x, y, lastDistance, lastId, sortBy,
+                null, null, null, null, null, false, false);
+    }
+
+    private Result queryShopByTypeFromDb(Integer typeId, Integer current, String sortBy, ShopQueryFilter filter) {
         Page<Shop> page = query()
                 .eq("type_id", typeId)
+                .like(StrUtil.isNotBlank(filter.keyword), "name", filter.keyword)
+                .eq(StrUtil.isNotBlank(filter.area), "area", filter.area)
+                .ge(filter.minScore != null, "score", filter.minScore)
+                .ge(filter.minAvgPrice != null, "avg_price", filter.minAvgPrice)
+                .le(filter.maxAvgPrice != null, "avg_price", filter.maxAvgPrice)
+                .orderByDesc("score".equals(sortBy), "score")
+                .orderByDesc("sold".equals(sortBy), "sold")
                 .page(new Page<>(current, SystemConstants.DEFAULT_PAGE_SIZE));
-        return Result.ok(toNearbyVOList(page.getRecords()));
+        List<NearbyShopVO> list = toNearbyVOList(filterShops(page.getRecords(), filter));
+        if (filter.pageResult) {
+            return Result.ok(PageResult.of(list, current, SystemConstants.DEFAULT_PAGE_SIZE,
+                    page.getTotal(), current * SystemConstants.DEFAULT_PAGE_SIZE < page.getTotal(), null));
+        }
+        return Result.ok(list);
     }
 
-    private Result queryNearbyShopsByPage(Integer typeId, Integer current, Double x, Double y, String sortBy) {
+    private Result queryNearbyShopsByPage(Integer typeId, Integer current, Double x, Double y,
+                                          String sortBy, ShopQueryFilter filter) {
         int from = (current - 1) * SystemConstants.DEFAULT_PAGE_SIZE;
         int end = current * SystemConstants.DEFAULT_PAGE_SIZE;
         List<GeoResult<RedisGeoCommands.GeoLocation<String>>> geoResults = searchGeo(typeId, x, y, end);
         if (geoResults.size() <= from) {
-            return Result.ok(Collections.emptyList());
+            List<NearbyShopVO> empty = Collections.emptyList();
+            if (filter.pageResult) {
+                return Result.ok(PageResult.of(empty, current, SystemConstants.DEFAULT_PAGE_SIZE,
+                        null, false, null));
+            }
+            return Result.ok(empty);
         }
 
         List<GeoResult<RedisGeoCommands.GeoLocation<String>>> pageResults = geoResults.subList(from, geoResults.size());
         List<Shop> shops = buildNearbyShopList(typeId, pageResults, false, null, null, sortBy);
-        return Result.ok(toNearbyVOList(shops));
+        shops = filterShops(shops, filter);
+        sortNearbyShops(shops, sortBy);
+        List<NearbyShopVO> list = toNearbyVOList(shops);
+        if (filter.pageResult) {
+            return Result.ok(PageResult.of(list, current, SystemConstants.DEFAULT_PAGE_SIZE,
+                    null, geoResults.size() == end, null));
+        }
+        return Result.ok(list);
     }
 
-    private Result queryNearbyShopsByCursor(Integer typeId, Double x, Double y,
-                                            Double lastDistance, Long lastId, String sortBy) {
+    private Result queryNearbyShopsByCursor(Integer typeId, Integer current, Double x, Double y,
+                                            Double lastDistance, Long lastId, String sortBy,
+                                            ShopQueryFilter filter) {
         int pageSize = SystemConstants.DEFAULT_PAGE_SIZE;
         int limit = pageSize * 3 + 1;
         List<GeoResult<RedisGeoCommands.GeoLocation<String>>> geoResults = searchGeo(typeId, x, y, limit);
         List<Shop> distanceOrderedShops = buildNearbyShopList(
                 typeId, geoResults, true, lastDistance, lastId, "distance");
+        distanceOrderedShops = filterShops(distanceOrderedShops, filter);
 
         boolean hasMore = distanceOrderedShops.size() > pageSize;
         List<Shop> pageWindow = distanceOrderedShops;
@@ -206,6 +283,12 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
             result.setLastDistance(lastShop.getDistance());
             result.setLastId(lastShop.getId());
         }
+        if (filter.pageResult) {
+            Map<String, Object> cursor = new HashMap<>();
+            cursor.put("lastDistance", result.getLastDistance());
+            cursor.put("lastId", result.getLastId());
+            return Result.ok(PageResult.of(result.getList(), current, pageSize, null, hasMore, cursor));
+        }
         return Result.ok(result);
     }
 
@@ -214,7 +297,7 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
                 .search(
                         SHOP_GEO_KEY + typeId,
                         GeoReference.fromCoordinate(x, y),
-                        new Distance(NEARBY_RADIUS_KILOMETERS, Metrics.KILOMETERS),
+                        new Distance(NEARBY_RADIUS_METERS, METERS),
                         RedisGeoCommands.GeoSearchCommandArgs.newGeoSearchArgs().includeDistance().limit(limit)
                 );
         if (results == null) {
@@ -316,8 +399,83 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
         return distanceCompare < 0 || (distanceCompare == 0 && shopId <= lastId);
     }
 
+    private List<Shop> filterShops(List<Shop> shops, ShopQueryFilter filter) {
+        if (shops == null || shops.isEmpty()) {
+            return Collections.emptyList();
+        }
+        return shops.stream()
+                .filter(shop -> matchesKeyword(shop, filter.keyword))
+                .filter(shop -> StrUtil.isBlank(filter.area) || StrUtil.equals(filter.area, shop.getArea()))
+                .filter(shop -> filter.minScore == null || (shop.getScore() != null && shop.getScore() >= filter.minScore))
+                .filter(shop -> filter.minAvgPrice == null || (shop.getAvgPrice() != null && shop.getAvgPrice() >= filter.minAvgPrice))
+                .filter(shop -> filter.maxAvgPrice == null || (shop.getAvgPrice() != null && shop.getAvgPrice() <= filter.maxAvgPrice))
+                .filter(shop -> !filter.openNow || isOpenNow(shop.getOpenHours()))
+                .collect(Collectors.toList());
+    }
+
+    private boolean matchesKeyword(Shop shop, String keyword) {
+        if (StrUtil.isBlank(keyword)) {
+            return true;
+        }
+        return StrUtil.containsIgnoreCase(shop.getName(), keyword)
+                || StrUtil.containsIgnoreCase(shop.getAddress(), keyword);
+    }
+
+    private boolean isOpenNow(String openHours) {
+        if (StrUtil.isBlank(openHours)) {
+            return false;
+        }
+        int now = LocalTime.now().getHour() * 60 + LocalTime.now().getMinute();
+        String[] ranges = openHours.split(",");
+        for (String range : ranges) {
+            String[] parts = range.trim().split("-");
+            if (parts.length != 2) {
+                continue;
+            }
+            Integer start = parseMinuteOfDay(parts[0]);
+            Integer end = parseMinuteOfDay(parts[1]);
+            if (start == null || end == null) {
+                continue;
+            }
+            if (start.equals(end)) {
+                return true;
+            }
+            if (end > start && now >= start && now < end) {
+                return true;
+            }
+            if (end < start && (now >= start || now < end)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private Integer parseMinuteOfDay(String value) {
+        if (StrUtil.isBlank(value)) {
+            return null;
+        }
+        String[] parts = value.trim().split(":");
+        if (parts.length != 2) {
+            return null;
+        }
+        try {
+            int hour = Integer.parseInt(parts[0]);
+            int minute = Integer.parseInt(parts[1]);
+            if (hour == 24 && minute == 0) {
+                return 24 * 60;
+            }
+            if (hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+                return null;
+            }
+            return hour * 60 + minute;
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
     private String validateShopTypeQuery(Integer typeId, Integer current, Double x, Double y,
-                                         Double lastDistance, Long lastId, String sortBy) {
+                                         Double lastDistance, Long lastId, String sortBy,
+                                         ShopQueryFilter filter) {
         if (typeId == null || typeId <= 0) {
             return "typeId must be greater than 0";
         }
@@ -345,6 +503,18 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
         if (!isSupportedSortBy(sortBy)) {
             return "sortBy only supports distance, score or sold";
         }
+        if (filter.minScore != null && (filter.minScore < 0 || filter.minScore > 50)) {
+            return "minScore must be between 0 and 50";
+        }
+        if (filter.minAvgPrice != null && filter.minAvgPrice < 0) {
+            return "minAvgPrice must be greater than or equal to 0";
+        }
+        if (filter.maxAvgPrice != null && filter.maxAvgPrice < 0) {
+            return "maxAvgPrice must be greater than or equal to 0";
+        }
+        if (filter.minAvgPrice != null && filter.maxAvgPrice != null && filter.minAvgPrice > filter.maxAvgPrice) {
+            return "minAvgPrice must be less than or equal to maxAvgPrice";
+        }
         if (x != null && lastDistance == null && current > MAX_NEARBY_PAGE) {
             return "current must be less than or equal to 20 for nearby shop page query";
         }
@@ -358,6 +528,62 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
 
     private String normalizeSortBy(String sortBy) {
         return StrUtil.isBlank(sortBy) ? "distance" : sortBy.trim().toLowerCase(Locale.ROOT);
+    }
+
+    private boolean shouldBindCreatedShopToCurrentUser(Long userId) {
+        if (userId == null) {
+            return false;
+        }
+        return permissionService.hasRole(userId, "merchant") && !permissionService.hasRole(userId, "admin");
+    }
+
+    protected boolean updateShopWithOptionalVersion(ShopUpdateDTO request) {
+        UpdateWrapper<Shop> wrapper = new UpdateWrapper<>();
+        wrapper.eq("id", request.getId());
+        if (request.getVersion() != null) {
+            wrapper.eq("version", request.getVersion());
+        }
+        wrapper.set("name", request.getName());
+        wrapper.set("type_id", request.getTypeId());
+        wrapper.set("images", request.getImages());
+        wrapper.set("area", request.getArea());
+        wrapper.set("address", request.getAddress());
+        if (request.getX() != null) {
+            wrapper.set("x", request.getX());
+        }
+        if (request.getY() != null) {
+            wrapper.set("y", request.getY());
+        }
+        if (request.getAvgPrice() != null) {
+            wrapper.set("avg_price", request.getAvgPrice());
+        }
+        if (request.getOpenHours() != null) {
+            wrapper.set("open_hours", request.getOpenHours());
+        }
+        wrapper.setSql("version = version + 1");
+        return baseMapper.update(null, wrapper) > 0;
+    }
+
+    private String buildCreateAuditDetail(ShopCreateDTO request) {
+        return "name=" + request.getName() + ", typeId=" + request.getTypeId()
+                + ", address=" + request.getAddress();
+    }
+
+    private String buildUpdateAuditDetail(ShopUpdateDTO request) {
+        return "name=" + request.getName() + ", typeId=" + request.getTypeId()
+                + ", version=" + request.getVersion();
+    }
+
+    private void recordShopOperation(String operation, Long shopId, String detail, boolean success, String failReason) {
+        if (operationLogService == null) {
+            return;
+        }
+        try {
+            operationLogService.record("shop", operation, "shop",
+                    shopId == null ? null : String.valueOf(shopId), detail, success, failReason);
+        } catch (Exception e) {
+            log.warn("Record shop operation log failed, operation={}, shopId={}", operation, shopId, e);
+        }
     }
 
     private void runAfterCommit(Runnable action) {
@@ -413,6 +639,7 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
         shop.setSold(0);
         shop.setComments(0);
         shop.setScore(0);
+        shop.setVersion(0);
         return shop;
     }
 
@@ -465,5 +692,28 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
         vo.setComments(shop.getComments());
         vo.setScore(shop.getScore());
         vo.setOpenHours(shop.getOpenHours());
+        vo.setVersion(shop.getVersion());
+    }
+
+    private static class ShopQueryFilter {
+        private final String keyword;
+        private final String area;
+        private final Integer minScore;
+        private final Long minAvgPrice;
+        private final Long maxAvgPrice;
+        private final boolean openNow;
+        private final boolean pageResult;
+
+        private ShopQueryFilter(String keyword, String area, Integer minScore,
+                                Long minAvgPrice, Long maxAvgPrice,
+                                boolean openNow, boolean pageResult) {
+            this.keyword = StrUtil.isBlank(keyword) ? null : keyword.trim();
+            this.area = StrUtil.isBlank(area) ? null : area.trim();
+            this.minScore = minScore;
+            this.minAvgPrice = minAvgPrice;
+            this.maxAvgPrice = maxAvgPrice;
+            this.openNow = openNow;
+            this.pageResult = pageResult;
+        }
     }
 }

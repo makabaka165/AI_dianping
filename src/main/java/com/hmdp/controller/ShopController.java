@@ -38,12 +38,20 @@ public class ShopController {
             @RequestParam(value = "y", required = false) Double y,
             @RequestParam(value = "lastDistance", required = false) Double lastDistance,
             @RequestParam(value = "lastId", required = false) Long lastId,
-            @RequestParam(value = "sortBy", defaultValue = "distance") String sortBy) {
-        return shopService.queryShopByType(typeId, current, x, y, lastDistance, lastId, sortBy);
+            @RequestParam(value = "sortBy", defaultValue = "distance") String sortBy,
+            @RequestParam(value = "keyword", required = false) String keyword,
+            @RequestParam(value = "area", required = false) String area,
+            @RequestParam(value = "minScore", required = false) Integer minScore,
+            @RequestParam(value = "minAvgPrice", required = false) Long minAvgPrice,
+            @RequestParam(value = "maxAvgPrice", required = false) Long maxAvgPrice,
+            @RequestParam(value = "openNow", defaultValue = "false") Boolean openNow,
+            @RequestParam(value = "pageResult", defaultValue = "false") Boolean pageResult) {
+        return shopService.queryShopByType(typeId, current, x, y, lastDistance, lastId, sortBy,
+                keyword, area, minScore, minAvgPrice, maxAvgPrice, openNow, pageResult);
     }
 
     @PostMapping
-    @SaCheckPermission("shop:create")
+    @SaCheckPermission(value = {"shop:create:own", "shop:create"}, mode = SaMode.OR)
     public Result saveShop(@RequestBody @Validated ShopCreateDTO request) {
         return shopService.createShop(request);
     }
