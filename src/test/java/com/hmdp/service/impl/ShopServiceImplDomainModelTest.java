@@ -161,7 +161,7 @@ class ShopServiceImplDomainModelTest {
     }
 
     @Test
-    void updateShopShouldReturnFailWhenUpdateByIdFails() {
+    void updateShopShouldReturnConflictWhenConditionalUpdateAffectsNoRows() {
         shopService.db.put(100L, oldShop());
         shopService.updateResult = false;
         when(currentUserService.requireCurrentUserId()).thenReturn(1L);
@@ -170,7 +170,7 @@ class ShopServiceImplDomainModelTest {
         Result result = shopService.updateShop(updateRequest());
 
         assertThat(result.getSuccess()).isFalse();
-        assertThat(result.getCode()).isEqualTo(ErrorCode.SHOP_UPDATE_FAILED.getCode());
+        assertThat(result.getCode()).isEqualTo(ErrorCode.SHOP_UPDATE_CONFLICT.getCode());
         verify(stringRedisTemplate, never()).delete(any(String.class));
     }
 
@@ -273,6 +273,7 @@ class ShopServiceImplDomainModelTest {
         dto.setY(31.2);
         dto.setAvgPrice(99L);
         dto.setOpenHours("09:00-21:00");
+        dto.setVersion(0);
         return dto;
     }
 
@@ -319,7 +320,7 @@ class ShopServiceImplDomainModelTest {
         }
 
         @Override
-        protected boolean updateShopWithOptionalVersion(ShopUpdateDTO request) {
+        protected boolean updateShopWithVersion(ShopUpdateDTO request) {
             updateCalled = true;
             if (!updateResult) {
                 return false;
@@ -329,7 +330,7 @@ class ShopServiceImplDomainModelTest {
                 return false;
             }
             Integer oldVersion = old.getVersion() == null ? 0 : old.getVersion();
-            if (request.getVersion() != null && !request.getVersion().equals(oldVersion)) {
+            if (!request.getVersion().equals(oldVersion)) {
                 return false;
             }
             Shop entity = new Shop();

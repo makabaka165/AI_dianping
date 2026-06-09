@@ -5,7 +5,6 @@ import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.hmdp.common.ErrorCode;
-import com.hmdp.dto.NearbyShopResult;
 import com.hmdp.dto.NearbyShopVO;
 import com.hmdp.dto.PageResult;
 import com.hmdp.dto.Result;
@@ -57,7 +56,6 @@ import static com.hmdp.utils.RedisConstants.SHOP_GEO_KEY;
 @Service
 public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IShopService {
 
-    private static final int MAX_NEARBY_PAGE = 20;
     private static final double NEARBY_RADIUS_METERS = 5000D;
     private static final Metric METERS = new Metric() {
         private static final long serialVersionUID = 1L;
@@ -154,12 +152,10 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
             return Result.fail(ErrorCode.SHOP_NOT_FOUND, "shop does not exist");
         }
 
-        boolean updated = updateShopWithOptionalVersion(request);
+        boolean updated = updateShopWithVersion(request);
         if (!updated) {
-            ErrorCode errorCode = request.getVersion() == null
-                    ? ErrorCode.SHOP_UPDATE_FAILED
-                    : ErrorCode.SHOP_UPDATE_CONFLICT;
-            String message = request.getVersion() == null ? "shop update failed" : "shop update conflict";
+            ErrorCode errorCode = ErrorCode.SHOP_UPDATE_CONFLICT;
+            String message = "shop update conflict";
             recordShopOperation("update", id, buildUpdateAuditDetail(request), false, message);
             return Result.fail(errorCode, message);
         }
@@ -199,16 +195,7 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
             return queryShopByTypeFromDb(typeId, current, normalizedSortBy, filter);
         }
 
-        if (lastDistance != null && lastId != null) {
-            return queryNearbyShopsByCursor(typeId, current, x, y, lastDistance, lastId, normalizedSortBy, filter);
-        }
-        return queryNearbyShopsByPage(typeId, current, x, y, normalizedSortBy, filter);
-    }
-
-    public Result queryShopByType(Integer typeId, Integer current, Double x, Double y,
-                                  Double lastDistance, Long lastId, String sortBy) {
-        return queryShopByType(typeId, current, x, y, lastDistance, lastId, sortBy,
-                null, null, null, null, null, false, false);
+        return queryNearbyShopsByCursor(typeId, current, x, y, lastDistance, lastId, normalizedSortBy, filter);
     }
 
     private Result queryShopByTypeFromDb(Integer typeId, Integer current, String sortBy, ShopQueryFilter filter) {
@@ -223,37 +210,8 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
                 .orderByDesc("sold".equals(sortBy), "sold")
                 .page(new Page<>(current, SystemConstants.DEFAULT_PAGE_SIZE));
         List<NearbyShopVO> list = toNearbyVOList(filterShops(page.getRecords(), filter));
-        if (filter.pageResult) {
-            return Result.ok(PageResult.of(list, current, SystemConstants.DEFAULT_PAGE_SIZE,
-                    page.getTotal(), current * SystemConstants.DEFAULT_PAGE_SIZE < page.getTotal(), null));
-        }
-        return Result.ok(list);
-    }
-
-    private Result queryNearbyShopsByPage(Integer typeId, Integer current, Double x, Double y,
-                                          String sortBy, ShopQueryFilter filter) {
-        int from = (current - 1) * SystemConstants.DEFAULT_PAGE_SIZE;
-        int end = current * SystemConstants.DEFAULT_PAGE_SIZE;
-        List<GeoResult<RedisGeoCommands.GeoLocation<String>>> geoResults = searchGeo(typeId, x, y, end);
-        if (geoResults.size() <= from) {
-            List<NearbyShopVO> empty = Collections.emptyList();
-            if (filter.pageResult) {
-                return Result.ok(PageResult.of(empty, current, SystemConstants.DEFAULT_PAGE_SIZE,
-                        null, false, null));
-            }
-            return Result.ok(empty);
-        }
-
-        List<GeoResult<RedisGeoCommands.GeoLocation<String>>> pageResults = geoResults.subList(from, geoResults.size());
-        List<Shop> shops = buildNearbyShopList(typeId, pageResults, false, null, null, sortBy);
-        shops = filterShops(shops, filter);
-        sortNearbyShops(shops, sortBy);
-        List<NearbyShopVO> list = toNearbyVOList(shops);
-        if (filter.pageResult) {
-            return Result.ok(PageResult.of(list, current, SystemConstants.DEFAULT_PAGE_SIZE,
-                    null, geoResults.size() == end, null));
-        }
-        return Result.ok(list);
+        return Result.ok(PageResult.of(list, current, SystemConstants.DEFAULT_PAGE_SIZE,
+                page.getTotal(), current * SystemConstants.DEFAULT_PAGE_SIZE < page.getTotal(), null));
     }
 
     private Result queryNearbyShopsByCursor(Integer typeId, Integer current, Double x, Double y,
@@ -275,21 +233,17 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
         List<Shop> displayShops = new ArrayList<>(pageWindow);
         sortNearbyShops(displayShops, sortBy);
 
-        NearbyShopResult result = new NearbyShopResult();
-        result.setList(toNearbyVOList(displayShops));
-        result.setHasMore(hasMore);
+        Double nextLastDistance = null;
+        Long nextLastId = null;
         if (!pageWindow.isEmpty()) {
             Shop lastShop = pageWindow.get(pageWindow.size() - 1);
-            result.setLastDistance(lastShop.getDistance());
-            result.setLastId(lastShop.getId());
+            nextLastDistance = lastShop.getDistance();
+            nextLastId = lastShop.getId();
         }
-        if (filter.pageResult) {
-            Map<String, Object> cursor = new HashMap<>();
-            cursor.put("lastDistance", result.getLastDistance());
-            cursor.put("lastId", result.getLastId());
-            return Result.ok(PageResult.of(result.getList(), current, pageSize, null, hasMore, cursor));
-        }
-        return Result.ok(result);
+        Map<String, Object> cursor = new HashMap<>();
+        cursor.put("lastDistance", nextLastDistance);
+        cursor.put("lastId", nextLastId);
+        return Result.ok(PageResult.of(toNearbyVOList(displayShops), current, pageSize, null, hasMore, cursor));
     }
 
     private List<GeoResult<RedisGeoCommands.GeoLocation<String>>> searchGeo(Integer typeId, Double x, Double y, int limit) {
@@ -324,7 +278,8 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
                 continue;
             }
             double distance = result.getDistance().getValue();
-            if (cursorMode && isBeforeOrAtCursor(distance, shopId, lastDistance, lastId)) {
+            if (cursorMode && lastDistance != null && lastId != null
+                    && isBeforeOrAtCursor(distance, shopId, lastDistance, lastId)) {
                 continue;
             }
             ids.add(shopId);
@@ -503,6 +458,9 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
         if (!isSupportedSortBy(sortBy)) {
             return "sortBy only supports distance, score or sold";
         }
+        if (!filter.pageResult) {
+            return "pageResult=true is required";
+        }
         if (filter.minScore != null && (filter.minScore < 0 || filter.minScore > 50)) {
             return "minScore must be between 0 and 50";
         }
@@ -515,8 +473,8 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
         if (filter.minAvgPrice != null && filter.maxAvgPrice != null && filter.minAvgPrice > filter.maxAvgPrice) {
             return "minAvgPrice must be less than or equal to maxAvgPrice";
         }
-        if (x != null && lastDistance == null && current > MAX_NEARBY_PAGE) {
-            return "current must be less than or equal to 20 for nearby shop page query";
+        if (x != null && current > 1 && lastDistance == null) {
+            return "lastDistance and lastId are required for nearby cursor pagination after first page";
         }
         return null;
     }
@@ -537,12 +495,10 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
         return permissionService.hasRole(userId, "merchant") && !permissionService.hasRole(userId, "admin");
     }
 
-    protected boolean updateShopWithOptionalVersion(ShopUpdateDTO request) {
+    protected boolean updateShopWithVersion(ShopUpdateDTO request) {
         UpdateWrapper<Shop> wrapper = new UpdateWrapper<>();
         wrapper.eq("id", request.getId());
-        if (request.getVersion() != null) {
-            wrapper.eq("version", request.getVersion());
-        }
+        wrapper.eq("version", request.getVersion());
         wrapper.set("name", request.getName());
         wrapper.set("type_id", request.getTypeId());
         wrapper.set("images", request.getImages());
@@ -640,21 +596,6 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
         shop.setComments(0);
         shop.setScore(0);
         shop.setVersion(0);
-        return shop;
-    }
-
-    private Shop toUpdateEntity(ShopUpdateDTO request) {
-        Shop shop = new Shop();
-        shop.setId(request.getId());
-        shop.setName(request.getName());
-        shop.setTypeId(request.getTypeId());
-        shop.setImages(request.getImages());
-        shop.setArea(request.getArea());
-        shop.setAddress(request.getAddress());
-        shop.setX(request.getX());
-        shop.setY(request.getY());
-        shop.setAvgPrice(request.getAvgPrice());
-        shop.setOpenHours(request.getOpenHours());
         return shop;
     }
 

@@ -15,7 +15,6 @@ public enum ErrorCode {
     SHOP_NOT_FOUND(40410, "Shop not found"),
     SHOP_TYPE_NOT_FOUND(40420, "Shop type not found"),
     SHOP_UPDATE_CONFLICT(40910, "Shop update conflict"),
-    SHOP_UPDATE_FAILED(50010, "Shop update failed"),
     SHOP_TYPE_UPDATE_FAILED(50020, "Shop type update failed"),
     SHOP_GEO_REBUILD_FAILED(50030, "Shop GEO rebuild failed"),
     BUSINESS_ERROR(50000, "Business error"),

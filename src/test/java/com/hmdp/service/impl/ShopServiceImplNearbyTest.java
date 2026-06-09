@@ -1,7 +1,6 @@
 package com.hmdp.service.impl;
 
 import com.hmdp.common.ErrorCode;
-import com.hmdp.dto.NearbyShopResult;
 import com.hmdp.dto.NearbyShopVO;
 import com.hmdp.dto.PageResult;
 import com.hmdp.dto.Result;
@@ -67,7 +66,7 @@ class ShopServiceImplNearbyTest {
 
     @Test
     void queryShopByTypeShouldRejectInvalidParams() {
-        Result result = shopService.queryShopByType(1, 0, 120.15, 30.31, null, null, "distance");
+        Result result = query(1, 0, 120.15, 30.31, null, null, "distance");
 
         assertThat(result.getSuccess()).isFalse();
         assertThat(result.getCode()).isEqualTo(ErrorCode.PARAM_ERROR.getCode());
@@ -80,7 +79,7 @@ class ShopServiceImplNearbyTest {
                 .thenReturn(geoResults(List.of(geo("1", 100D), geo("2", 200D))));
         shopService.setDbShops(List.of(shop(1L, 1L, 40, 10), shop(2L, 1L, 45, 20)));
 
-        Result result = shopService.queryShopByType(1, 1, 120.15, 30.31, null, null, "distance");
+        Result result = query(1, 1, 120.15, 30.31, null, null, "distance");
 
         ArgumentCaptor<Distance> distanceCaptor = ArgumentCaptor.forClass(Distance.class);
         verify(geoOperations).search(eq(SHOP_GEO_KEY + 1), any(GeoReference.class), distanceCaptor.capture(), any());
@@ -101,7 +100,7 @@ class ShopServiceImplNearbyTest {
                 .thenReturn(geoResults(List.of(geo("1", 100D), geo("99", 150D), geo("2", 200D))));
         shopService.setDbShops(List.of(shop(1L, 1L, 40, 10), shop(2L, 2L, 45, 20)));
 
-        Result result = shopService.queryShopByType(1, 1, 120.15, 30.31, null, null, "distance");
+        Result result = query(1, 1, 120.15, 30.31, null, null, "distance");
 
         List<NearbyShopVO> shops = dataAsList(result);
         assertThat(shops).extracting(NearbyShopVO::getId).containsExactly(1L);
@@ -124,12 +123,13 @@ class ShopServiceImplNearbyTest {
                 shop(10L, 1L, 40, 10), shop(11L, 1L, 40, 10)
         ));
 
-        Result result = shopService.queryShopByType(1, 1, 120.15, 30.31, 200D, 2L, "distance");
+        Result result = query(1, 1, 120.15, 30.31, 200D, 2L, "distance");
 
-        NearbyShopResult nearby = (NearbyShopResult) result.getData();
+        PageResult<NearbyShopVO> nearby = dataAsPage(result);
         assertThat(nearby.getList()).extracting(NearbyShopVO::getId).containsExactly(3L, 4L, 5L, 6L, 7L);
-        assertThat(nearby.getLastDistance()).isEqualTo(700D);
-        assertThat(nearby.getLastId()).isEqualTo(7L);
+        Map<?, ?> cursor = (Map<?, ?>) nearby.getCursor();
+        assertThat(cursor.get("lastDistance")).isEqualTo(700D);
+        assertThat(cursor.get("lastId")).isEqualTo(7L);
         assertThat(nearby.getHasMore()).isTrue();
     }
 
@@ -144,7 +144,7 @@ class ShopServiceImplNearbyTest {
                 shop(3L, 1L, 45, 20)
         ));
 
-        Result result = shopService.queryShopByType(1, 1, 120.15, 30.31, null, null, "score");
+        Result result = query(1, 1, 120.15, 30.31, null, null, "score");
 
         List<NearbyShopVO> shops = dataAsList(result);
         assertThat(shops).extracting(NearbyShopVO::getId).containsExactly(2L, 3L, 1L);
@@ -167,12 +167,13 @@ class ShopServiceImplNearbyTest {
                 shop(6L, 1L, 20, 10)
         ));
 
-        Result result = shopService.queryShopByType(1, 1, 120.15, 30.31, 0D, 1L, "score");
+        Result result = query(1, 1, 120.15, 30.31, 0D, 1L, "score");
 
-        NearbyShopResult nearby = (NearbyShopResult) result.getData();
+        PageResult<NearbyShopVO> nearby = dataAsPage(result);
         assertThat(nearby.getList()).extracting(NearbyShopVO::getId).containsExactly(2L, 3L, 4L, 5L, 1L);
-        assertThat(nearby.getLastDistance()).isEqualTo(500D);
-        assertThat(nearby.getLastId()).isEqualTo(5L);
+        Map<?, ?> cursor = (Map<?, ?>) nearby.getCursor();
+        assertThat(cursor.get("lastDistance")).isEqualTo(500D);
+        assertThat(cursor.get("lastId")).isEqualTo(5L);
     }
 
     @Test
@@ -186,7 +187,7 @@ class ShopServiceImplNearbyTest {
                 shop(3L, 1L, 45, 20)
         ));
 
-        Result result = shopService.queryShopByType(1, 1, 120.15, 30.31, null, null, "sold");
+        Result result = query(1, 1, 120.15, 30.31, null, null, "sold");
 
         List<NearbyShopVO> shops = dataAsList(result);
         assertThat(shops).extracting(NearbyShopVO::getId).containsExactly(3L, 1L, 2L);
@@ -207,14 +208,14 @@ class ShopServiceImplNearbyTest {
         ));
 
         Result result = shopService.queryShopByType(1, 1, 120.15, 30.31, null, null,
-                "distance", "noodles", "A", 40, 50L, 100L, true, false);
+                "distance", "noodles", "A", 40, 50L, 100L, true, true);
 
         List<NearbyShopVO> shops = dataAsList(result);
         assertThat(shops).extracting(NearbyShopVO::getId).containsExactly(1L);
     }
 
     @Test
-    void geoPageQueryShouldReturnPageResultWhenRequested() {
+    void geoQueryShouldReturnPageResult() {
         when(stringRedisTemplate.opsForGeo()).thenReturn(geoOperations);
         when(geoOperations.search(eq(SHOP_GEO_KEY + 1), any(GeoReference.class), any(Distance.class), any()))
                 .thenReturn(geoResults(List.of(geo("1", 100D), geo("2", 200D))));
@@ -223,17 +224,44 @@ class ShopServiceImplNearbyTest {
         Result result = shopService.queryShopByType(1, 1, 120.15, 30.31, null, null,
                 "distance", null, null, null, null, null, false, true);
 
-        @SuppressWarnings("unchecked")
-        PageResult<NearbyShopVO> page = (PageResult<NearbyShopVO>) result.getData();
+        PageResult<NearbyShopVO> page = dataAsPage(result);
         assertThat(page.getList()).extracting(NearbyShopVO::getId).containsExactly(1L, 2L);
         assertThat(page.getCurrent()).isEqualTo(1);
         assertThat(page.getSize()).isEqualTo(5);
         assertThat(page.getHasMore()).isFalse();
     }
 
+    @Test
+    void legacyListResponseShouldBeRejectedAfterPageResultReplacement() {
+        Result result = shopService.queryShopByType(1, 1, 120.15, 30.31, null, null,
+                "distance", null, null, null, null, null, false, false);
+
+        assertThat(result.getSuccess()).isFalse();
+        assertThat(result.getCode()).isEqualTo(ErrorCode.PARAM_ERROR.getCode());
+    }
+
+    @Test
+    void nearbySecondPageShouldRequireCursorAfterGeoPageModeRemoved() {
+        Result result = query(1, 2, 120.15, 30.31, null, null, "distance");
+
+        assertThat(result.getSuccess()).isFalse();
+        assertThat(result.getCode()).isEqualTo(ErrorCode.PARAM_ERROR.getCode());
+    }
+
     @SuppressWarnings("unchecked")
     private List<NearbyShopVO> dataAsList(Result result) {
-        return (List<NearbyShopVO>) result.getData();
+        return ((PageResult<NearbyShopVO>) result.getData()).getList();
+    }
+
+    @SuppressWarnings("unchecked")
+    private PageResult<NearbyShopVO> dataAsPage(Result result) {
+        return (PageResult<NearbyShopVO>) result.getData();
+    }
+
+    private Result query(Integer typeId, Integer current, Double x, Double y,
+                         Double lastDistance, Long lastId, String sortBy) {
+        return shopService.queryShopByType(typeId, current, x, y, lastDistance, lastId, sortBy,
+                null, null, null, null, null, false, true);
     }
 
     private GeoResult<RedisGeoCommands.GeoLocation<String>> geo(String id, Double distance) {

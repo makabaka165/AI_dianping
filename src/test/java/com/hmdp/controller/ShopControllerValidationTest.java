@@ -16,7 +16,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.validation.beanvalidation.LocalValidatorFactoryBean;
 
-import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -81,29 +81,42 @@ class ShopControllerValidationTest {
     void updateShopShouldReturnParamErrorWhenOnlyOneCoordinateProvided() throws Exception {
         mockMvc.perform(put("/shop")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"id\":1,\"name\":\"shop\",\"typeId\":1,\"images\":\"img\",\"address\":\"addr\",\"x\":120.1}"))
+                        .content("{\"id\":1,\"name\":\"shop\",\"typeId\":1,\"images\":\"img\",\"address\":\"addr\",\"x\":120.1,\"version\":0}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(false))
                 .andExpect(jsonPath("$.code").value(ErrorCode.PARAM_ERROR.getCode()));
     }
 
     @Test
-    void statsAndStatusShouldDelegateToSameServiceMethod() throws Exception {
+    void updateShopShouldReturnParamErrorWhenVersionMissing() throws Exception {
+        mockMvc.perform(put("/shop")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"id\":1,\"name\":\"shop\",\"typeId\":1,\"images\":\"img\",\"address\":\"addr\",\"x\":120.1,\"y\":30.2}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.code").value(ErrorCode.PARAM_ERROR.getCode()));
+    }
+
+    @Test
+    void statusShouldDelegateToShopStatusServiceMethod() throws Exception {
         ShopStatusVO vo = new ShopStatusVO();
         vo.setExists(true);
         vo.setReviewCount(7);
         when(shopService.queryShopStatus(1L)).thenReturn(Result.ok(vo));
-
-        mockMvc.perform(get("/shop/1/stats"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.exists").value(true))
-                .andExpect(jsonPath("$.data.reviewCount").value(7));
 
         mockMvc.perform(get("/shop/1/status"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.exists").value(true))
                 .andExpect(jsonPath("$.data.reviewCount").value(7));
 
-        verify(shopService, times(2)).queryShopStatus(1L);
+        verify(shopService).queryShopStatus(1L);
+    }
+
+    @Test
+    void statsEndpointShouldBeRemovedAfterStatusReplacement() throws Exception {
+        mockMvc.perform(get("/shop/1/stats"))
+                .andExpect(status().isNotFound());
+
+        verify(shopService, never()).queryShopStatus(1L);
     }
 }

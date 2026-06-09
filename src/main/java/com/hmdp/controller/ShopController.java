@@ -45,7 +45,7 @@ public class ShopController {
             @RequestParam(value = "minAvgPrice", required = false) Long minAvgPrice,
             @RequestParam(value = "maxAvgPrice", required = false) Long maxAvgPrice,
             @RequestParam(value = "openNow", defaultValue = "false") Boolean openNow,
-            @RequestParam(value = "pageResult", defaultValue = "false") Boolean pageResult) {
+            @RequestParam(value = "pageResult", defaultValue = "true") Boolean pageResult) {
         return shopService.queryShopByType(typeId, current, x, y, lastDistance, lastId, sortBy,
                 keyword, area, minScore, minAvgPrice, maxAvgPrice, openNow, pageResult);
     }
@@ -60,11 +60,6 @@ public class ShopController {
     @SaCheckPermission(value = {"shop:update:own", "shop:update"}, mode = SaMode.OR)
     public Result updateShop(@RequestBody @Validated ShopUpdateDTO request) {
         return shopService.updateShop(request);
-    }
-
-    @GetMapping("/{id}/stats")
-    public Result getShopStats(@PathVariable("id") Long id) {
-        return shopService.queryShopStatus(id);
     }
 
     @GetMapping("/{id}/status")
