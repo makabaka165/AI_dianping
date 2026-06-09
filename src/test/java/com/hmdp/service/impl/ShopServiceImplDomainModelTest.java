@@ -10,6 +10,7 @@ import com.hmdp.entity.Shop;
 import com.hmdp.service.CurrentUserService;
 import com.hmdp.service.IMerchantShopService;
 import com.hmdp.service.IPermissionService;
+import com.hmdp.service.ShopGeoIndexService;
 import com.hmdp.service.ShopStatsService;
 import com.hmdp.utils.CacheClient;
 import org.junit.jupiter.api.BeforeEach;
@@ -17,7 +18,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.data.redis.core.GeoOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.test.util.ReflectionTestUtils;
 
@@ -25,7 +25,6 @@ import java.util.HashMap;
 import java.util.Map;
 
 import static com.hmdp.utils.RedisConstants.CACHE_SHOP_KEY;
-import static com.hmdp.utils.RedisConstants.SHOP_GEO_KEY;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -40,7 +39,7 @@ class ShopServiceImplDomainModelTest {
     private StringRedisTemplate stringRedisTemplate;
 
     @Mock
-    private GeoOperations<String, String> geoOperations;
+    private ShopGeoIndexService shopGeoIndexService;
 
     @Mock
     private CacheClient cacheClient;
@@ -63,6 +62,7 @@ class ShopServiceImplDomainModelTest {
     void setUp() {
         shopService = new TestableShopServiceImpl();
         ReflectionTestUtils.setField(shopService, "stringRedisTemplate", stringRedisTemplate);
+        ReflectionTestUtils.setField(shopService, "shopGeoIndexService", shopGeoIndexService);
         ReflectionTestUtils.setField(shopService, "cacheClient", cacheClient);
         ReflectionTestUtils.setField(shopService, "currentUserService", currentUserService);
         ReflectionTestUtils.setField(shopService, "permissionService", permissionService);
@@ -72,7 +72,6 @@ class ShopServiceImplDomainModelTest {
 
     @Test
     void createShopShouldPersistSystemDefaultsAndSyncCaches() {
-        when(stringRedisTemplate.opsForGeo()).thenReturn(geoOperations);
         shopService.nextSaveId = 101L;
 
         Result result = shopService.createShop(createRequest());
@@ -84,7 +83,7 @@ class ShopServiceImplDomainModelTest {
         assertThat(saved.getSold()).isZero();
         assertThat(saved.getComments()).isZero();
         assertThat(saved.getScore()).isZero();
-        verify(geoOperations).add(eq(SHOP_GEO_KEY + 1L), any(), eq("101"));
+        verify(shopGeoIndexService).addOrUpdateShop(saved);
         verify(shopStatsService).updateShopExistsCache(101L, true);
     }
 
@@ -95,7 +94,7 @@ class ShopServiceImplDomainModelTest {
         Result result = shopService.createShop(createRequest());
 
         assertThat(result.getSuccess()).isFalse();
-        verify(stringRedisTemplate, never()).opsForGeo();
+        verify(shopGeoIndexService, never()).addOrUpdateShop(any());
         verify(shopStatsService, never()).updateShopExistsCache(any(), eq(true));
     }
 
@@ -138,8 +137,8 @@ class ShopServiceImplDomainModelTest {
 
     @Test
     void updateShopShouldDeleteRedisRefreshGeoAndSyncSummaryCache() {
-        when(stringRedisTemplate.opsForGeo()).thenReturn(geoOperations);
-        shopService.db.put(100L, oldShop());
+        Shop oldShop = oldShop();
+        shopService.db.put(100L, oldShop);
         when(currentUserService.requireCurrentUserId()).thenReturn(1L);
         when(permissionService.hasRole(1L, "admin")).thenReturn(true);
 
@@ -147,8 +146,7 @@ class ShopServiceImplDomainModelTest {
 
         assertThat(result.getSuccess()).isTrue();
         verify(stringRedisTemplate).delete(CACHE_SHOP_KEY + 100L);
-        verify(geoOperations).remove(SHOP_GEO_KEY + 1L, "100");
-        verify(geoOperations).add(eq(SHOP_GEO_KEY + 2L), any(), eq("100"));
+        verify(shopGeoIndexService).refreshShopGeoIndex(eq(oldShop), any(Shop.class));
         verify(shopStatsService).updateShopExistsCache(100L, true);
     }
 

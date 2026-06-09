@@ -17,6 +17,7 @@ import com.hmdp.service.CurrentUserService;
 import com.hmdp.service.IMerchantShopService;
 import com.hmdp.service.IPermissionService;
 import com.hmdp.service.IShopService;
+import com.hmdp.service.ShopGeoIndexService;
 import com.hmdp.service.ShopStatsService;
 import com.hmdp.utils.CacheClient;
 import com.hmdp.utils.SystemConstants;
@@ -25,7 +26,6 @@ import org.springframework.data.geo.Distance;
 import org.springframework.data.geo.GeoResult;
 import org.springframework.data.geo.GeoResults;
 import org.springframework.data.geo.Metrics;
-import org.springframework.data.geo.Point;
 import org.springframework.data.redis.connection.RedisGeoCommands;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.domain.geo.GeoReference;
@@ -74,6 +74,9 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
     @Resource
     private ShopStatsService shopStatsService;
 
+    @Resource
+    private ShopGeoIndexService shopGeoIndexService;
+
     @Override
     public Result queryById(Long id) {
         if (id == null || id <= 0) {
@@ -96,7 +99,7 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
             return Result.fail("shop create failed");
         }
         runAfterCommit(() -> {
-            addShopToGeo(shop);
+            runGeoSyncAction(() -> shopGeoIndexService.addOrUpdateShop(shop));
             updateShopExistsCache(shop.getId(), true);
         });
         return Result.ok(shop.getId());
@@ -125,7 +128,7 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
 
         runAfterCommit(() -> {
             stringRedisTemplate.delete(CACHE_SHOP_KEY + id);
-            refreshShopGeoIndex(oldShop, id);
+            runGeoSyncAction(() -> shopGeoIndexService.refreshShopGeoIndex(oldShop, getById(id)));
             updateShopExistsCache(id, true);
         });
         return Result.ok();
@@ -378,29 +381,12 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
         }
     }
 
-    private void refreshShopGeoIndex(Shop oldShop, Long shopId) {
-        removeShopFromGeo(oldShop);
-        Shop latestShop = getById(shopId);
-        addShopToGeo(latestShop);
-    }
-
-    private void removeShopFromGeo(Shop shop) {
-        if (shop == null || shop.getTypeId() == null || shop.getId() == null) {
-            return;
+    private void runGeoSyncAction(Runnable action) {
+        try {
+            action.run();
+        } catch (Exception e) {
+            log.warn("Shop GEO synchronization failed", e);
         }
-        stringRedisTemplate.opsForGeo().remove(SHOP_GEO_KEY + shop.getTypeId(), shop.getId().toString());
-    }
-
-    private void addShopToGeo(Shop shop) {
-        if (shop == null || shop.getTypeId() == null || shop.getId() == null
-                || shop.getX() == null || shop.getY() == null) {
-            return;
-        }
-        stringRedisTemplate.opsForGeo().add(
-                SHOP_GEO_KEY + shop.getTypeId(),
-                new Point(shop.getX(), shop.getY()),
-                shop.getId().toString()
-        );
     }
 
     private void updateShopExistsCache(Long shopId, boolean exists) {
