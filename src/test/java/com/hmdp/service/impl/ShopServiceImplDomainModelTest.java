@@ -10,12 +10,11 @@ import com.hmdp.entity.Shop;
 import com.hmdp.service.CurrentUserService;
 import com.hmdp.service.IMerchantShopService;
 import com.hmdp.service.IPermissionService;
-import com.hmdp.service.ShopSummaryService;
+import com.hmdp.service.ShopStatsService;
 import com.hmdp.utils.CacheClient;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.redis.core.GeoOperations;
@@ -24,8 +23,6 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.HashMap;
 import java.util.Map;
-import java.util.concurrent.TimeUnit;
-import java.util.function.Function;
 
 import static com.hmdp.utils.RedisConstants.CACHE_SHOP_KEY;
 import static com.hmdp.utils.RedisConstants.SHOP_GEO_KEY;
@@ -58,7 +55,7 @@ class ShopServiceImplDomainModelTest {
     private IMerchantShopService merchantShopService;
 
     @Mock
-    private ShopSummaryService shopSummaryService;
+    private ShopStatsService shopStatsService;
 
     private TestableShopServiceImpl shopService;
 
@@ -70,7 +67,7 @@ class ShopServiceImplDomainModelTest {
         ReflectionTestUtils.setField(shopService, "currentUserService", currentUserService);
         ReflectionTestUtils.setField(shopService, "permissionService", permissionService);
         ReflectionTestUtils.setField(shopService, "merchantShopService", merchantShopService);
-        ReflectionTestUtils.setField(shopService, "shopSummaryService", shopSummaryService);
+        ReflectionTestUtils.setField(shopService, "shopStatsService", shopStatsService);
     }
 
     @Test
@@ -88,7 +85,7 @@ class ShopServiceImplDomainModelTest {
         assertThat(saved.getComments()).isZero();
         assertThat(saved.getScore()).isZero();
         verify(geoOperations).add(eq(SHOP_GEO_KEY + 1L), any(), eq("101"));
-        verify(shopSummaryService).updateShopExistsCache(101L, true);
+        verify(shopStatsService).updateShopExistsCache(101L, true);
     }
 
     @Test
@@ -99,7 +96,7 @@ class ShopServiceImplDomainModelTest {
 
         assertThat(result.getSuccess()).isFalse();
         verify(stringRedisTemplate, never()).opsForGeo();
-        verify(shopSummaryService, never()).updateShopExistsCache(any(), eq(true));
+        verify(shopStatsService, never()).updateShopExistsCache(any(), eq(true));
     }
 
     @Test
@@ -152,7 +149,7 @@ class ShopServiceImplDomainModelTest {
         verify(stringRedisTemplate).delete(CACHE_SHOP_KEY + 100L);
         verify(geoOperations).remove(SHOP_GEO_KEY + 1L, "100");
         verify(geoOperations).add(eq(SHOP_GEO_KEY + 2L), any(), eq("100"));
-        verify(shopSummaryService).updateShopExistsCache(100L, true);
+        verify(shopStatsService).updateShopExistsCache(100L, true);
     }
 
     @Test
@@ -173,7 +170,9 @@ class ShopServiceImplDomainModelTest {
 
     @Test
     void queryShopStatusShouldReturnReviewCountOnlyWhenShopExists() {
-        when(shopSummaryService.shopExists(100L)).thenReturn(false);
+        ShopStatusVO missingStatus = new ShopStatusVO();
+        missingStatus.setExists(false);
+        when(shopStatsService.queryShopStatus(100L)).thenReturn(missingStatus);
 
         Result missing = shopService.queryShopStatus(100L);
 
@@ -181,8 +180,10 @@ class ShopServiceImplDomainModelTest {
         assertThat(missingVo.getExists()).isFalse();
         assertThat(missingVo.getReviewCount()).isNull();
 
-        when(shopSummaryService.shopExists(101L)).thenReturn(true);
-        when(shopSummaryService.getShopReviewCount(101L)).thenReturn(12);
+        ShopStatusVO existsStatus = new ShopStatusVO();
+        existsStatus.setExists(true);
+        existsStatus.setReviewCount(12);
+        when(shopStatsService.queryShopStatus(101L)).thenReturn(existsStatus);
 
         Result exists = shopService.queryShopStatus(101L);
 

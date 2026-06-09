@@ -17,7 +17,7 @@ import com.hmdp.service.CurrentUserService;
 import com.hmdp.service.IMerchantShopService;
 import com.hmdp.service.IPermissionService;
 import com.hmdp.service.IShopService;
-import com.hmdp.service.ShopSummaryService;
+import com.hmdp.service.ShopStatsService;
 import com.hmdp.utils.CacheClient;
 import com.hmdp.utils.SystemConstants;
 import lombok.extern.slf4j.Slf4j;
@@ -72,7 +72,7 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
     private IMerchantShopService merchantShopService;
 
     @Resource
-    private ShopSummaryService shopSummaryService;
+    private ShopStatsService shopStatsService;
 
     @Override
     public Result queryById(Long id) {
@@ -404,19 +404,13 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
     }
 
     private void updateShopExistsCache(Long shopId, boolean exists) {
-        if (shopSummaryService != null) {
-            shopSummaryService.updateShopExistsCache(shopId, exists);
+        if (shopStatsService != null) {
+            shopStatsService.updateShopExistsCache(shopId, exists);
         }
     }
 
     private ShopStatusVO buildShopStatusVO(Long id) {
-        boolean exists = shopSummaryService.shopExists(id);
-        ShopStatusVO vo = new ShopStatusVO();
-        vo.setExists(exists);
-        if (exists) {
-            vo.setReviewCount(shopSummaryService.getShopReviewCount(id));
-        }
-        return vo;
+        return shopStatsService.queryShopStatus(id);
     }
 
     private Shop toCreateEntity(ShopCreateDTO request) {

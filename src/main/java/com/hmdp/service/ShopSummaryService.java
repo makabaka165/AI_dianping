@@ -44,6 +44,9 @@ public class ShopSummaryService {
     // 注入本地缓存管理器
     @Autowired
     private LocalCacheManager localCacheManager;
+
+    @Autowired
+    private ShopStatsService shopStatsService;
     
     // 注入AI结果质量验证服务
     @Autowired
@@ -486,6 +489,9 @@ public class ShopSummaryService {
     }
 
     public boolean shopExists(Long shopId) {
+        if (shopStatsService != null) {
+            return shopStatsService.shopExists(shopId);
+        }
         // 尝试从本地缓存获取结果
         String cacheKey = LocalCacheManager.CacheKeys.shopExistsKey(shopId);
         Boolean cachedResult = localCacheManager.get(cacheKey, Boolean.class, LocalCacheManager.CacheType.SHOP_INFO);
@@ -515,12 +521,19 @@ public class ShopSummaryService {
      * @param exists 存在性状态
      */
     public void updateShopExistsCache(Long shopId, boolean exists) {
+        if (shopStatsService != null) {
+            shopStatsService.updateShopExistsCache(shopId, exists);
+            return;
+        }
         String cacheKey = LocalCacheManager.CacheKeys.shopExistsKey(shopId);
         localCacheManager.put(cacheKey, exists, LocalCacheManager.CacheType.SHOP_INFO);
         log.info("更新店铺{}存在性缓存为: {}", shopId, exists);
     }
 
     public int getShopReviewCount(Long shopId) {
+        if (shopStatsService != null) {
+            return shopStatsService.getShopReviewCount(shopId);
+        }
         // 尝试从本地缓存获取结果
         String cacheKey = LocalCacheManager.CacheKeys.shopReviewCountKey(shopId);
         Integer cachedCount = localCacheManager.get(cacheKey, Integer.class, LocalCacheManager.CacheType.SHOP_STATS);
@@ -550,6 +563,10 @@ public class ShopSummaryService {
      * @param count 评价数量
      */
     public void updateShopReviewCountCache(Long shopId, int count) {
+        if (shopStatsService != null) {
+            shopStatsService.updateShopReviewCountCache(shopId, count);
+            return;
+        }
         String cacheKey = LocalCacheManager.CacheKeys.shopReviewCountKey(shopId);
         localCacheManager.put(cacheKey, count, LocalCacheManager.CacheType.SHOP_STATS);
         log.info("更新店铺{}评价数量缓存为: {}", shopId, count);
