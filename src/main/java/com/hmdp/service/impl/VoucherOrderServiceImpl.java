@@ -9,6 +9,9 @@ import com.hmdp.service.CurrentUserService;
 import com.hmdp.service.IVoucherOrderService;
 import com.hmdp.utils.RedisIdWorker;
 import lombok.extern.slf4j.Slf4j;
+import org.redisson.api.RBlockingDeque;
+import org.redisson.api.RDelayedQueue;
+import org.redisson.api.RedissonClient;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.dao.DuplicateKeyException;
@@ -28,8 +31,11 @@ import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.data.redis.serializer.StringRedisSerializer;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import javax.annotation.PostConstruct;
 import javax.annotation.PreDestroy;
@@ -47,6 +53,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
+import static com.hmdp.utils.RedisConstants.SECKILL_STOCK_KEY;
+
 @Service
 @Slf4j
 public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, VoucherOrder> implements IVoucherOrderService {
@@ -58,8 +66,15 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     static final int MAX_DELIVERY_COUNT = 5;
     static final Duration STREAM_BLOCK_TIMEOUT = Duration.ofSeconds(2);
     static final Duration PENDING_IDLE_TIMEOUT = Duration.ofSeconds(30);
+    static final String ORDER_CLOSE_QUEUE = "queue:voucher-order:close";
+    static final long ORDER_PAY_TIMEOUT_MINUTES = 15L;
+    static final Duration ORDER_CLOSE_POLL_TIMEOUT = Duration.ofSeconds(2);
+    static final int EXPIRED_ORDER_SCAN_LIMIT = 100;
 
     private static final String ORDER_ID_PREFIX = "voucher_order";
+    private static final String SECKILL_ORDER_KEY_PREFIX = "seckill:order:";
+    private static final int ORDER_STATUS_UNPAID = 1;
+    private static final int ORDER_STATUS_CANCELED = 4;
     private static final DefaultRedisScript<Long> SECKILL_SCRIPT;
 
     static {
@@ -80,6 +95,9 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     @Resource
     private SeckillVoucherMapper seckillVoucherMapper;
 
+    @Resource
+    private RedissonClient redissonClient;
+
     @Lazy
     @Resource
     private IVoucherOrderService voucherOrderService;
@@ -90,6 +108,14 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         t.setDaemon(true);
         return t;
     });
+    private final ExecutorService closeOrderExecutor = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "voucher-order-close-handler");
+        t.setDaemon(true);
+        return t;
+    });
+
+    private RBlockingDeque<Long> orderCloseBlockingDeque;
+    private RDelayedQueue<Long> orderCloseDelayedQueue;
 
     private volatile boolean running = false;
 
@@ -137,6 +163,9 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     @Transactional
     public void createVoucherOrder(VoucherOrder voucherOrder) {
         validateVoucherOrder(voucherOrder);
+        if (voucherOrder.getStatus() == null) {
+            voucherOrder.setStatus(ORDER_STATUS_UNPAID);
+        }
         try {
             boolean saved = save(voucherOrder);
             if (!saved) {
@@ -152,6 +181,58 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         if (updated != 1) {
             throw new IllegalStateException("秒杀券库存不足，订单落库回滚");
         }
+        registerAfterCommit(() -> enqueueOrderCloseTask(voucherOrder.getId()));
+    }
+
+    @Override
+    @Transactional
+    public boolean closeUnpaidVoucherOrder(Long orderId) {
+        if (orderId == null || orderId <= 0) {
+            return false;
+        }
+        VoucherOrder voucherOrder = getOrderById(orderId);
+        if (voucherOrder == null) {
+            log.warn("待关闭订单不存在，orderId={}", orderId);
+            return false;
+        }
+        if (!Integer.valueOf(ORDER_STATUS_UNPAID).equals(voucherOrder.getStatus())) {
+            log.info("订单无需关闭，orderId={}, status={}", orderId, voucherOrder.getStatus());
+            return false;
+        }
+        boolean canceled = markUnpaidOrderCanceled(orderId);
+        if (!canceled) {
+            log.info("订单状态已变化，跳过关闭，orderId={}", orderId);
+            return false;
+        }
+        int restored = seckillVoucherMapper.restoreStock(voucherOrder.getVoucherId());
+        if (restored != 1) {
+            throw new IllegalStateException("秒杀券库存回补失败，orderId=" + orderId);
+        }
+        registerAfterCommit(() -> restoreRedisSeckillState(voucherOrder));
+        log.info("超时未支付订单已关闭，orderId={}, userId={}, voucherId={}",
+                orderId, voucherOrder.getUserId(), voucherOrder.getVoucherId());
+        return true;
+    }
+
+    @Override
+    public int closeExpiredUnpaidVoucherOrders(int limit) {
+        int safeLimit = limit <= 0 ? EXPIRED_ORDER_SCAN_LIMIT : Math.min(limit, EXPIRED_ORDER_SCAN_LIMIT);
+        List<VoucherOrder> expiredOrders = queryExpiredUnpaidOrders(safeLimit);
+        if (expiredOrders == null || expiredOrders.isEmpty()) {
+            return 0;
+        }
+        IVoucherOrderService orderService = voucherOrderService == null ? this : voucherOrderService;
+        int closed = 0;
+        for (VoucherOrder expiredOrder : expiredOrders) {
+            try {
+                if (orderService.closeUnpaidVoucherOrder(expiredOrder.getId())) {
+                    closed++;
+                }
+            } catch (Exception e) {
+                log.error("补偿关闭超时未支付订单失败，orderId={}", expiredOrder.getId(), e);
+            }
+        }
+        return closed;
     }
 
     @PostConstruct
@@ -160,23 +241,30 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
             log.error("优惠券订单处理服务启动失败，Redis Stream不可用");
             return;
         }
+        initializeCloseOrderQueue();
         running = true;
         executor.submit(new VoucherOrderHandler());
+        closeOrderExecutor.submit(new VoucherOrderCloseHandler());
         log.info("优惠券订单处理服务启动成功，consumer={}", consumerName);
     }
 
     @PreDestroy
     public void destroy() {
         running = false;
+        shutdownExecutor(closeOrderExecutor, "优惠券订单关闭服务");
+        shutdownExecutor(executor, "优惠券订单处理服务");
+    }
+
+    @Scheduled(fixedDelay = 60000, initialDelay = 60000)
+    public void compensateExpiredUnpaidVoucherOrders() {
         try {
-            executor.shutdown();
-            if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
-                executor.shutdownNow();
+            IVoucherOrderService orderService = voucherOrderService == null ? this : voucherOrderService;
+            int closed = orderService.closeExpiredUnpaidVoucherOrders(EXPIRED_ORDER_SCAN_LIMIT);
+            if (closed > 0) {
+                log.info("补偿关闭{}笔超时未支付订单", closed);
             }
-            log.info("优惠券订单处理服务已停止，consumer={}", consumerName);
-        } catch (InterruptedException e) {
-            executor.shutdownNow();
-            Thread.currentThread().interrupt();
+        } catch (Exception e) {
+            log.error("补偿扫描超时未支付订单失败", e);
         }
     }
 
@@ -278,6 +366,106 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         IVoucherOrderService orderService = voucherOrderService == null ? this : voucherOrderService;
         orderService.createVoucherOrder(voucherOrder);
         log.info("订单落库成功，orderId={}, userId={}, voucherId={}", id, userId, voucherId);
+    }
+
+    protected void initializeCloseOrderQueue() {
+        if (redissonClient == null) {
+            log.warn("RedissonClient未初始化，超时未支付订单关闭队列不可用");
+            return;
+        }
+        try {
+            orderCloseBlockingDeque = redissonClient.getBlockingDeque(ORDER_CLOSE_QUEUE);
+            orderCloseDelayedQueue = redissonClient.getDelayedQueue(orderCloseBlockingDeque);
+            log.info("超时未支付订单关闭队列初始化成功，queue={}", ORDER_CLOSE_QUEUE);
+        } catch (Exception e) {
+            orderCloseBlockingDeque = null;
+            orderCloseDelayedQueue = null;
+            log.error("超时未支付订单关闭队列初始化失败", e);
+        }
+    }
+
+    protected void enqueueOrderCloseTask(Long orderId) {
+        if (orderId == null || orderId <= 0) {
+            return;
+        }
+        if (orderCloseDelayedQueue == null) {
+            initializeCloseOrderQueue();
+        }
+        if (orderCloseDelayedQueue == null) {
+            log.warn("超时未支付订单关闭队列不可用，跳过延迟任务投递，orderId={}", orderId);
+            return;
+        }
+        try {
+            orderCloseDelayedQueue.offer(orderId, ORDER_PAY_TIMEOUT_MINUTES, TimeUnit.MINUTES);
+            log.info("已投递订单超时关闭任务，orderId={}, delay={}min", orderId, ORDER_PAY_TIMEOUT_MINUTES);
+        } catch (Exception e) {
+            log.error("投递订单超时关闭任务失败，orderId={}", orderId, e);
+        }
+    }
+
+    protected Long pollOrderCloseTask(Duration timeout) throws InterruptedException {
+        if (orderCloseBlockingDeque == null) {
+            initializeCloseOrderQueue();
+        }
+        if (orderCloseBlockingDeque == null) {
+            sleep(Duration.ofSeconds(5));
+            return null;
+        }
+        return orderCloseBlockingDeque.poll(timeout.toMillis(), TimeUnit.MILLISECONDS);
+    }
+
+    protected VoucherOrder getOrderById(Long orderId) {
+        return getById(orderId);
+    }
+
+    protected boolean markUnpaidOrderCanceled(Long orderId) {
+        return update()
+                .set("status", ORDER_STATUS_CANCELED)
+                .eq("id", orderId)
+                .eq("status", ORDER_STATUS_UNPAID)
+                .update();
+    }
+
+    protected List<VoucherOrder> queryExpiredUnpaidOrders(int limit) {
+        return query()
+                .select("id")
+                .eq("status", ORDER_STATUS_UNPAID)
+                .le("create_time", LocalDateTime.now().minusMinutes(ORDER_PAY_TIMEOUT_MINUTES))
+                .orderByAsc("create_time")
+                .last("LIMIT " + limit)
+                .list();
+    }
+
+    protected void restoreRedisSeckillState(VoucherOrder voucherOrder) {
+        if (voucherOrder == null || voucherOrder.getVoucherId() == null || voucherOrder.getUserId() == null) {
+            return;
+        }
+        try {
+            stringRedisTemplate.opsForValue().increment(SECKILL_STOCK_KEY + voucherOrder.getVoucherId());
+            stringRedisTemplate.opsForSet()
+                    .remove(SECKILL_ORDER_KEY_PREFIX + voucherOrder.getVoucherId(), voucherOrder.getUserId().toString());
+            log.info("已回补Redis秒杀状态，orderId={}, voucherId={}, userId={}",
+                    voucherOrder.getId(), voucherOrder.getVoucherId(), voucherOrder.getUserId());
+        } catch (Exception e) {
+            log.error("回补Redis秒杀状态失败，orderId={}, voucherId={}, userId={}",
+                    voucherOrder.getId(), voucherOrder.getVoucherId(), voucherOrder.getUserId(), e);
+        }
+    }
+
+    protected void registerAfterCommit(Runnable action) {
+        if (action == null) {
+            return;
+        }
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    action.run();
+                }
+            });
+            return;
+        }
+        action.run();
     }
 
     protected void writeDeadLetter(MapRecord<String, Object, Object> record, String reason) {
@@ -451,6 +639,19 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         }
     }
 
+    private void shutdownExecutor(ExecutorService targetExecutor, String name) {
+        try {
+            targetExecutor.shutdown();
+            if (!targetExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+                targetExecutor.shutdownNow();
+            }
+            log.info("{}已停止，consumer={}", name, consumerName);
+        } catch (InterruptedException e) {
+            targetExecutor.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
+    }
+
     private class VoucherOrderHandler implements Runnable {
         @Override
         public void run() {
@@ -470,6 +671,35 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
                 }
             }
             log.info("订单处理线程已停止，consumer={}", consumerName);
+        }
+    }
+
+    private class VoucherOrderCloseHandler implements Runnable {
+        @Override
+        public void run() {
+            log.info("订单超时关闭线程启动，consumer={}", consumerName);
+            while (running) {
+                try {
+                    Long orderId = pollOrderCloseTask(ORDER_CLOSE_POLL_TIMEOUT);
+                    if (orderId == null) {
+                        continue;
+                    }
+                    IVoucherOrderService orderService = voucherOrderService == null
+                            ? VoucherOrderServiceImpl.this
+                            : voucherOrderService;
+                    orderService.closeUnpaidVoucherOrder(orderId);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    if (running) {
+                        log.warn("订单超时关闭线程被中断", e);
+                    }
+                    break;
+                } catch (Exception e) {
+                    log.error("处理订单超时关闭任务失败", e);
+                    sleep(Duration.ofSeconds(2));
+                }
+            }
+            log.info("订单超时关闭线程已停止，consumer={}", consumerName);
         }
     }
 }

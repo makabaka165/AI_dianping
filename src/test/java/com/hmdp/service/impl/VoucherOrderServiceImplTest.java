@@ -123,6 +123,7 @@ class VoucherOrderServiceImplTest {
         service.createVoucherOrder(order(1001L, 7L, 12L));
 
         assertThat(service.savedOrders).extracting(VoucherOrder::getId).containsExactly(1001L);
+        assertThat(service.closeTasks).containsExactly(1001L);
         verify(seckillVoucherMapper).deductStock(12L);
     }
 
@@ -132,6 +133,7 @@ class VoucherOrderServiceImplTest {
 
         service.createVoucherOrder(order(1001L, 7L, 12L));
 
+        assertThat(service.closeTasks).isEmpty();
         verify(seckillVoucherMapper, never()).deductStock(any());
     }
 
@@ -143,6 +145,68 @@ class VoucherOrderServiceImplTest {
         assertThatThrownBy(() -> service.createVoucherOrder(order(1001L, 7L, 12L)))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("秒杀券库存不足，订单落库回滚");
+    }
+
+    @Test
+    void closeUnpaidVoucherOrderShouldCancelAndRestoreStockAndRedis() {
+        VoucherOrder unpaidOrder = order(1001L, 7L, 12L);
+        unpaidOrder.setStatus(1);
+        service.ordersById.put(1001L, unpaidOrder);
+        when(seckillVoucherMapper.restoreStock(12L)).thenReturn(1);
+
+        boolean closed = service.closeUnpaidVoucherOrder(1001L);
+
+        assertThat(closed).isTrue();
+        assertThat(service.canceledOrders).containsExactly(1001L);
+        assertThat(service.redisRestoredOrders).containsExactly(1001L);
+        verify(seckillVoucherMapper).restoreStock(12L);
+    }
+
+    @Test
+    void closeUnpaidVoucherOrderShouldIgnorePaidOrder() {
+        VoucherOrder paidOrder = order(1001L, 7L, 12L);
+        paidOrder.setStatus(2);
+        service.ordersById.put(1001L, paidOrder);
+
+        boolean closed = service.closeUnpaidVoucherOrder(1001L);
+
+        assertThat(closed).isFalse();
+        assertThat(service.canceledOrders).isEmpty();
+        assertThat(service.redisRestoredOrders).isEmpty();
+        verify(seckillVoucherMapper, never()).restoreStock(any());
+    }
+
+    @Test
+    void closeUnpaidVoucherOrderShouldThrowWhenStockRestoreFails() {
+        VoucherOrder unpaidOrder = order(1001L, 7L, 12L);
+        unpaidOrder.setStatus(1);
+        service.ordersById.put(1001L, unpaidOrder);
+        when(seckillVoucherMapper.restoreStock(12L)).thenReturn(0);
+
+        assertThatThrownBy(() -> service.closeUnpaidVoucherOrder(1001L))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("秒杀券库存回补失败");
+    }
+
+    @Test
+    void closeExpiredUnpaidVoucherOrdersShouldCloseOnlyStillUnpaidOrders() {
+        VoucherOrder unpaidOrder = order(1001L, 7L, 12L);
+        unpaidOrder.setStatus(1);
+        VoucherOrder paidOrder = order(1002L, 8L, 13L);
+        paidOrder.setStatus(2);
+        service.ordersById.put(1001L, unpaidOrder);
+        service.ordersById.put(1002L, paidOrder);
+        service.expiredOrders.add(unpaidOrder);
+        service.expiredOrders.add(paidOrder);
+        when(seckillVoucherMapper.restoreStock(12L)).thenReturn(1);
+
+        int closed = service.closeExpiredUnpaidVoucherOrders(50);
+
+        assertThat(closed).isEqualTo(1);
+        assertThat(service.canceledOrders).containsExactly(1001L);
+        assertThat(service.redisRestoredOrders).containsExactly(1001L);
+        verify(seckillVoucherMapper).restoreStock(12L);
+        verify(seckillVoucherMapper, never()).restoreStock(13L);
     }
 
     @Test
@@ -224,6 +288,11 @@ class VoucherOrderServiceImplTest {
         private final List<MapRecord<String, Object, Object>> ackedRecords = new ArrayList<>();
         private final List<MapRecord<String, Object, Object>> deadLetters = new ArrayList<>();
         private final List<String> deadLetterReasons = new ArrayList<>();
+        private final List<Long> closeTasks = new ArrayList<>();
+        private final List<Long> canceledOrders = new ArrayList<>();
+        private final List<Long> redisRestoredOrders = new ArrayList<>();
+        private final List<VoucherOrder> expiredOrders = new ArrayList<>();
+        private final Map<Long, VoucherOrder> ordersById = new LinkedHashMap<>();
         private boolean saveResult = true;
         private boolean duplicateOnSave = false;
         private boolean failProcessing = false;
@@ -260,6 +329,37 @@ class VoucherOrderServiceImplTest {
         protected void writeDeadLetter(MapRecord<String, Object, Object> record, String reason) {
             deadLetters.add(record);
             deadLetterReasons.add(reason);
+        }
+
+        @Override
+        protected void enqueueOrderCloseTask(Long orderId) {
+            closeTasks.add(orderId);
+        }
+
+        @Override
+        protected VoucherOrder getOrderById(Long orderId) {
+            return ordersById.get(orderId);
+        }
+
+        @Override
+        protected boolean markUnpaidOrderCanceled(Long orderId) {
+            VoucherOrder order = ordersById.get(orderId);
+            if (order == null || !Integer.valueOf(1).equals(order.getStatus())) {
+                return false;
+            }
+            canceledOrders.add(orderId);
+            order.setStatus(4);
+            return true;
+        }
+
+        @Override
+        protected List<VoucherOrder> queryExpiredUnpaidOrders(int limit) {
+            return expiredOrders;
+        }
+
+        @Override
+        protected void restoreRedisSeckillState(VoucherOrder voucherOrder) {
+            redisRestoredOrders.add(voucherOrder.getId());
         }
     }
 }

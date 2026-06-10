@@ -17,4 +17,7 @@ public interface SeckillVoucherMapper extends BaseMapper<SeckillVoucher> {
 
     @Update("UPDATE tb_seckill_voucher SET stock = stock - 1 WHERE voucher_id = #{voucherId} AND stock > 0")
     int deductStock(@Param("voucherId") Long voucherId);
+
+    @Update("UPDATE tb_seckill_voucher SET stock = stock + 1 WHERE voucher_id = #{voucherId}")
+    int restoreStock(@Param("voucherId") Long voucherId);
 }
