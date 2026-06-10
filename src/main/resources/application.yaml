@@ -12,9 +12,20 @@ hmdp:
       queue-capacity: 100
       keep-alive-seconds: 60
       await-termination-seconds: 10
+  blog:
+    hot-cache-size: 100
+    like-top-limit: 5
+    feed-page-size: 10
+    feed-fetch-multiplier: 2
+    feed-inbox-max-size: 1000
+    large-author-fans-threshold: 10000
+  ai:
+    redis-health-check: true
+    redisson-fallback: false
 
 server:
-  port: 8081  # 更改端口以避免冲突
+  port: 8081
+
 spring:
   application:
     name: hmdp
@@ -33,12 +44,15 @@ spring:
         min-idle: 1
         time-between-eviction-runs: 10s
   jackson:
-    default-property-inclusion: non_null # JSON处理时忽略非空字段
-
-
+    default-property-inclusion: non_null
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    locations: classpath:db/migration
 
 mybatis-plus:
-  type-aliases-package: com.hmdp.entity # 别名扫描包
+  type-aliases-package: com.hmdp.entity
+
 sa-token:
   token-name: authorization
   token-prefix: Bearer
@@ -52,15 +66,12 @@ sa-token:
 logging:
   level:
     com.hmdp: debug
-    # 添加以下配置，打开LangChain4j和Apache HttpClient的DEBUG日志
     dev.langchain4j: debug
     dev.langchain4j.model.openai: debug
     org.apache.http.wire: debug
   pattern:
     dateformat: mm:ss.SSS
 
-
-# application.yml
 langchain4j:
   open-ai:
     chat-model:
@@ -71,10 +82,7 @@ langchain4j:
       max-tokens: 1000
       log-requests: true
       log-responses: true
-
-#      top-p: 0.9       # 控制生成多样性
-#      frequency-penalty: 0.1  # 减少重复内容
-    streaming-chat-model:  # 添加流式模型配置
+    streaming-chat-model:
       api-key: ${DASHSCOPE_API_KEY}
       base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
       model-name: qwen-plus
@@ -82,27 +90,21 @@ langchain4j:
       max-tokens: 1000
       log-requests: true
       log-responses: true
-
     embedding-model:
       base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
-      api-key: ${DASHSCOPE_API_KEY}  # 修复这里，原来是API-KEY
-      model-name: text-embedding-v3        # 使用阿里云的嵌入模型
+      api-key: ${DASHSCOPE_API_KEY}
+      model-name: text-embedding-v3
       log-requests: true
       log-responses: true
       max-segments-per-batch: 10
 
-
-
-# 自定义配置
 chat:
   memory:
-    max-messages: 20  # 单个会话最大消息数
+    max-messages: 20
     redis:
-      key-prefix: "chat:memory:"  # Redis key 前缀
-      ttl: 7200  # 过期时间（秒），2小时
+      key-prefix: "chat:memory:"
+      ttl: 7200
 
-
-# → 添加RAG配置
 rag:
   enabled: true
   data:
@@ -111,4 +113,4 @@ rag:
     host: 127.0.0.1
     port: 6379
     index-name: shop_knowledge_base
-    dimension: 1024  # text-embedding-v3的维度
+    dimension: 1024

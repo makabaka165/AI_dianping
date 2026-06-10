@@ -17,6 +17,7 @@
         <java.version>11</java.version>
         <langchain4j.version>0.30.0</langchain4j.version>
         <sa-token.version>1.39.0</sa-token.version>
+        <surefire.excludedGroups>integration,external</surefire.excludedGroups>
     </properties>
     <dependencies>
         <!-- 保持你原有的依赖不变 -->
@@ -71,6 +72,10 @@
             <artifactId>mysql-connector-java</artifactId>
             <scope>runtime</scope>
             <version>5.1.47</version>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-core</artifactId>
         </dependency>
         <dependency>
             <groupId>org.projectlombok</groupId>
@@ -247,6 +252,13 @@
                 <configuration>
                     <source>11</source>
                     <target>11</target>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <excludedGroups>${surefire.excludedGroups}</excludedGroups>
                 </configuration>
             </plugin>
         </plugins>

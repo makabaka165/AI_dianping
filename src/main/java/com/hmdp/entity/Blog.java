@@ -81,6 +81,12 @@ public class Blog implements Serializable {
      */
     private Integer comments;
 
+    private Integer status;
+
+    private Integer deleted;
+
+    private LocalDateTime publishTime;
+
     /**
      * 创建时间
      */

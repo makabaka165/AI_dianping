@@ -27,6 +27,9 @@ public class RedisConstants {
 
     public static final String SECKILL_STOCK_KEY = "seckill:stock:";
     public static final String BLOG_LIKED_KEY = "blog:liked:";
+    public static final String BLOG_HOT_KEY = "blog:hot";
+    public static final String USER_BRIEF_KEY = "user:brief:";
+    public static final Long USER_BRIEF_TTL = 30L;
     public static final String FEED_KEY = "feed:";
     public static final String SHOP_GEO_KEY = "shop:geo:";
     public static final String USER_SIGN_KEY = "sign:";

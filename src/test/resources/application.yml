@@ -1,0 +1,7 @@
+hmdp:
+  ai:
+    redis-health-check: false
+    redisson-fallback: true
+
+rag:
+  enabled: false

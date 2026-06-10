@@ -45,10 +45,13 @@ import org.springframework.web.client.RestTemplate;
 
 import javax.annotation.PostConstruct;
 import java.io.IOException;
+import java.lang.reflect.InvocationHandler;
+import java.lang.reflect.Proxy;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
 
@@ -93,6 +96,12 @@ public class CommonAIConfig {
     @Value("${rag.data.auto-import:false}")
     private boolean autoImportData;
 
+    @Value("${hmdp.ai.redis-health-check:true}")
+    private boolean redisHealthCheckEnabled;
+
+    @Value("${hmdp.ai.redisson-fallback:false}")
+    private boolean redissonFallbackEnabled;
+
     // 注入ApplicationContext
     @Autowired
     private ApplicationContext applicationContext;
@@ -104,7 +113,63 @@ public class CommonAIConfig {
         log.info("初始化 RedissonClient - 聊天记忆专用（6379端口）");
         Config config = new Config();
         config.useSingleServer().setAddress("redis://127.0.0.1:6379");
-        return Redisson.create(config);
+        try {
+            return Redisson.create(config);
+        } catch (RuntimeException e) {
+            if (!redissonFallbackEnabled) {
+                throw e;
+            }
+            log.warn("RedissonClient create failed, using no-op fallback because hmdp.ai.redisson-fallback=true", e);
+            return noOpProxy(RedissonClient.class);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private <T> T noOpProxy(Class<T> type) {
+        InvocationHandler handler = (proxy, method, args) -> {
+            String methodName = method.getName();
+            if ("toString".equals(methodName)) {
+                return "NoOp" + type.getSimpleName();
+            }
+            if ("tryLock".equals(methodName)) {
+                return true;
+            }
+            if ("isHeldByCurrentThread".equals(methodName)) {
+                return true;
+            }
+            if ("isShutdown".equals(methodName) || "isShuttingDown".equals(methodName)) {
+                return false;
+            }
+            if ("delete".equals(methodName)) {
+                return true;
+            }
+            if ("getKeysByPattern".equals(methodName)) {
+                return Collections.emptyList();
+            }
+
+            Class<?> returnType = method.getReturnType();
+            if (Void.TYPE.equals(returnType)) {
+                return null;
+            }
+            if (Boolean.TYPE.equals(returnType)) {
+                return false;
+            }
+            if (Integer.TYPE.equals(returnType) || Long.TYPE.equals(returnType)
+                    || Short.TYPE.equals(returnType) || Byte.TYPE.equals(returnType)) {
+                return 0;
+            }
+            if (Double.TYPE.equals(returnType) || Float.TYPE.equals(returnType)) {
+                return 0D;
+            }
+            if (Iterable.class.isAssignableFrom(returnType)) {
+                return Collections.emptyList();
+            }
+            if (returnType.isInterface()) {
+                return noOpProxy((Class<Object>) returnType);
+            }
+            return null;
+        };
+        return (T) Proxy.newProxyInstance(type.getClassLoader(), new Class<?>[]{type}, handler);
     }
 
 
@@ -274,6 +339,10 @@ public class CommonAIConfig {
     //redis stack验证配置
     @PostConstruct
     public void validateRedisConnections() {
+        if (!redisHealthCheckEnabled) {
+            log.info("skip Redis connection validation because hmdp.ai.redis-health-check=false");
+            return;
+        }
         log.info("🔍 验证Redis连接配置...");
 
         // 验证聊天记忆Redis（6379）
