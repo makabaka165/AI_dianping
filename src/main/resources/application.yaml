@@ -22,6 +22,12 @@ hmdp:
   ai:
     redis-health-check: true
     redisson-fallback: false
+  voucher:
+    order:
+      pay-timeout-minutes: 15
+      close-scan-limit: 100
+      close-scan-fixed-delay-millis: 60000
+      close-scan-initial-delay-millis: 60000
 
 server:
   port: 8081

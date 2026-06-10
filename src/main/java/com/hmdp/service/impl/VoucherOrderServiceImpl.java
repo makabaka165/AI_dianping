@@ -12,6 +12,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.redisson.api.RBlockingDeque;
 import org.redisson.api.RDelayedQueue;
 import org.redisson.api.RedissonClient;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.dao.DuplicateKeyException;
@@ -53,6 +54,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
+import static com.hmdp.utils.RedisConstants.SECKILL_ORDER_KEY;
 import static com.hmdp.utils.RedisConstants.SECKILL_STOCK_KEY;
 
 @Service
@@ -67,13 +69,13 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     static final Duration STREAM_BLOCK_TIMEOUT = Duration.ofSeconds(2);
     static final Duration PENDING_IDLE_TIMEOUT = Duration.ofSeconds(30);
     static final String ORDER_CLOSE_QUEUE = "queue:voucher-order:close";
-    static final long ORDER_PAY_TIMEOUT_MINUTES = 15L;
+    static final long DEFAULT_ORDER_PAY_TIMEOUT_MINUTES = 15L;
     static final Duration ORDER_CLOSE_POLL_TIMEOUT = Duration.ofSeconds(2);
-    static final int EXPIRED_ORDER_SCAN_LIMIT = 100;
+    static final int DEFAULT_EXPIRED_ORDER_SCAN_LIMIT = 100;
 
     private static final String ORDER_ID_PREFIX = "voucher_order";
-    private static final String SECKILL_ORDER_KEY_PREFIX = "seckill:order:";
     private static final int ORDER_STATUS_UNPAID = 1;
+    private static final int ORDER_STATUS_PAID = 2;
     private static final int ORDER_STATUS_CANCELED = 4;
     private static final DefaultRedisScript<Long> SECKILL_SCRIPT;
 
@@ -117,6 +119,12 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     private RBlockingDeque<Long> orderCloseBlockingDeque;
     private RDelayedQueue<Long> orderCloseDelayedQueue;
 
+    @Value("${hmdp.voucher.order.pay-timeout-minutes:15}")
+    private long orderPayTimeoutMinutes = DEFAULT_ORDER_PAY_TIMEOUT_MINUTES;
+
+    @Value("${hmdp.voucher.order.close-scan-limit:100}")
+    private int expiredOrderScanLimit = DEFAULT_EXPIRED_ORDER_SCAN_LIMIT;
+
     private volatile boolean running = false;
 
     @Override
@@ -151,11 +159,55 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
             if (resultCode == 3) {
                 return Result.fail("秒杀活动未准备好");
             }
+            if (resultCode == 4) {
+                return Result.fail("秒杀活动尚未开始");
+            }
+            if (resultCode == 5) {
+                return Result.fail("秒杀活动已结束");
+            }
             log.warn("秒杀Lua脚本返回未知结果，result={}, voucherId={}, userId={}", result, voucherId, userId);
             return Result.fail("秒杀失败，请稍后重试");
         } catch (Exception e) {
             log.error("秒杀处理失败，voucherId={}", voucherId, e);
             return Result.fail("秒杀失败，请稍后重试");
+        }
+    }
+
+    @Override
+    @Transactional
+    public Result payVoucherOrder(Long orderId) {
+        if (orderId == null || orderId <= 0) {
+            return Result.fail("订单ID无效");
+        }
+        try {
+            Long userId = currentUserService.requireCurrentUserId();
+            VoucherOrder voucherOrder = getOrderById(orderId);
+            if (voucherOrder == null) {
+                return Result.fail("订单不存在");
+            }
+            if (!userId.equals(voucherOrder.getUserId())) {
+                return Result.fail("无权支付该订单");
+            }
+            Integer status = voucherOrder.getStatus();
+            if (Integer.valueOf(ORDER_STATUS_PAID).equals(status)) {
+                return Result.ok(orderId);
+            }
+            if (Integer.valueOf(ORDER_STATUS_CANCELED).equals(status)) {
+                return Result.fail("订单已取消");
+            }
+            if (!Integer.valueOf(ORDER_STATUS_UNPAID).equals(status)) {
+                return Result.fail("订单状态不可支付");
+            }
+            boolean paid = markUnpaidOrderPaid(orderId, userId);
+            if (!paid) {
+                return Result.fail("订单状态已变化，请刷新后重试");
+            }
+            log.info("优惠券订单支付成功，orderId={}, userId={}, voucherId={}",
+                    orderId, userId, voucherOrder.getVoucherId());
+            return Result.ok(orderId);
+        } catch (Exception e) {
+            log.error("优惠券订单支付失败，orderId={}", orderId, e);
+            return Result.fail("支付失败，请稍后重试");
         }
     }
 
@@ -216,7 +268,8 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
 
     @Override
     public int closeExpiredUnpaidVoucherOrders(int limit) {
-        int safeLimit = limit <= 0 ? EXPIRED_ORDER_SCAN_LIMIT : Math.min(limit, EXPIRED_ORDER_SCAN_LIMIT);
+        int configuredLimit = effectiveExpiredOrderScanLimit();
+        int safeLimit = limit <= 0 ? configuredLimit : Math.min(limit, configuredLimit);
         List<VoucherOrder> expiredOrders = queryExpiredUnpaidOrders(safeLimit);
         if (expiredOrders == null || expiredOrders.isEmpty()) {
             return 0;
@@ -255,11 +308,14 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         shutdownExecutor(executor, "优惠券订单处理服务");
     }
 
-    @Scheduled(fixedDelay = 60000, initialDelay = 60000)
+    @Scheduled(
+            fixedDelayString = "${hmdp.voucher.order.close-scan-fixed-delay-millis:60000}",
+            initialDelayString = "${hmdp.voucher.order.close-scan-initial-delay-millis:60000}"
+    )
     public void compensateExpiredUnpaidVoucherOrders() {
         try {
             IVoucherOrderService orderService = voucherOrderService == null ? this : voucherOrderService;
-            int closed = orderService.closeExpiredUnpaidVoucherOrders(EXPIRED_ORDER_SCAN_LIMIT);
+            int closed = orderService.closeExpiredUnpaidVoucherOrders(effectiveExpiredOrderScanLimit());
             if (closed > 0) {
                 log.info("补偿关闭{}笔超时未支付订单", closed);
             }
@@ -396,8 +452,9 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
             return;
         }
         try {
-            orderCloseDelayedQueue.offer(orderId, ORDER_PAY_TIMEOUT_MINUTES, TimeUnit.MINUTES);
-            log.info("已投递订单超时关闭任务，orderId={}, delay={}min", orderId, ORDER_PAY_TIMEOUT_MINUTES);
+            long timeoutMinutes = effectiveOrderPayTimeoutMinutes();
+            orderCloseDelayedQueue.offer(orderId, timeoutMinutes, TimeUnit.MINUTES);
+            log.info("已投递订单超时关闭任务，orderId={}, delay={}min", orderId, timeoutMinutes);
         } catch (Exception e) {
             log.error("投递订单超时关闭任务失败，orderId={}", orderId, e);
         }
@@ -426,11 +483,21 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
                 .update();
     }
 
+    protected boolean markUnpaidOrderPaid(Long orderId, Long userId) {
+        return update()
+                .set("status", ORDER_STATUS_PAID)
+                .set("pay_time", LocalDateTime.now())
+                .eq("id", orderId)
+                .eq("user_id", userId)
+                .eq("status", ORDER_STATUS_UNPAID)
+                .update();
+    }
+
     protected List<VoucherOrder> queryExpiredUnpaidOrders(int limit) {
         return query()
                 .select("id")
                 .eq("status", ORDER_STATUS_UNPAID)
-                .le("create_time", LocalDateTime.now().minusMinutes(ORDER_PAY_TIMEOUT_MINUTES))
+                .le("create_time", LocalDateTime.now().minusMinutes(effectiveOrderPayTimeoutMinutes()))
                 .orderByAsc("create_time")
                 .last("LIMIT " + limit)
                 .list();
@@ -443,7 +510,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         try {
             stringRedisTemplate.opsForValue().increment(SECKILL_STOCK_KEY + voucherOrder.getVoucherId());
             stringRedisTemplate.opsForSet()
-                    .remove(SECKILL_ORDER_KEY_PREFIX + voucherOrder.getVoucherId(), voucherOrder.getUserId().toString());
+                    .remove(SECKILL_ORDER_KEY + voucherOrder.getVoucherId(), voucherOrder.getUserId().toString());
             log.info("已回补Redis秒杀状态，orderId={}, voucherId={}, userId={}",
                     voucherOrder.getId(), voucherOrder.getVoucherId(), voucherOrder.getUserId());
         } catch (Exception e) {
@@ -466,6 +533,14 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
             return;
         }
         action.run();
+    }
+
+    private long effectiveOrderPayTimeoutMinutes() {
+        return orderPayTimeoutMinutes <= 0 ? DEFAULT_ORDER_PAY_TIMEOUT_MINUTES : orderPayTimeoutMinutes;
+    }
+
+    private int effectiveExpiredOrderScanLimit() {
+        return expiredOrderScanLimit <= 0 ? DEFAULT_EXPIRED_ORDER_SCAN_LIMIT : expiredOrderScanLimit;
     }
 
     protected void writeDeadLetter(MapRecord<String, Object, Object> record, String reason) {

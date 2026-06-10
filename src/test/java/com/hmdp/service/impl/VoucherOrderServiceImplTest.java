@@ -84,13 +84,15 @@ class VoucherOrderServiceImplTest {
     @SuppressWarnings({"unchecked", "rawtypes"})
     void seckillVoucherShouldMapLuaFailureCodes() {
         when(currentUserService.requireCurrentUserId()).thenReturn(7L);
-        when(redisIdWorker.nextId("voucher_order")).thenReturn(1001L, 1002L, 1003L);
-        doReturn(1L, 2L, 3L).when(stringRedisTemplate).execute(
+        when(redisIdWorker.nextId("voucher_order")).thenReturn(1001L, 1002L, 1003L, 1004L, 1005L);
+        doReturn(1L, 2L, 3L, 4L, 5L).when(stringRedisTemplate).execute(
                 any(DefaultRedisScript.class), anyList(), anyString(), anyString(), anyString());
 
         Result stockResult = service.seckillVoucher(12L);
         Result duplicateResult = service.seckillVoucher(12L);
         Result notReadyResult = service.seckillVoucher(12L);
+        Result notStartedResult = service.seckillVoucher(12L);
+        Result endedResult = service.seckillVoucher(12L);
 
         assertThat(stockResult.getSuccess()).isFalse();
         assertThat(stockResult.getErrorMsg()).isEqualTo("库存不足");
@@ -98,6 +100,10 @@ class VoucherOrderServiceImplTest {
         assertThat(duplicateResult.getErrorMsg()).isEqualTo("不能重复下单");
         assertThat(notReadyResult.getSuccess()).isFalse();
         assertThat(notReadyResult.getErrorMsg()).isEqualTo("秒杀活动未准备好");
+        assertThat(notStartedResult.getSuccess()).isFalse();
+        assertThat(notStartedResult.getErrorMsg()).isEqualTo("秒杀活动尚未开始");
+        assertThat(endedResult.getSuccess()).isFalse();
+        assertThat(endedResult.getErrorMsg()).isEqualTo("秒杀活动已结束");
     }
 
     @Test
@@ -145,6 +151,49 @@ class VoucherOrderServiceImplTest {
         assertThatThrownBy(() -> service.createVoucherOrder(order(1001L, 7L, 12L)))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("秒杀券库存不足，订单落库回滚");
+    }
+
+    @Test
+    void payVoucherOrderShouldMarkUnpaidOrderPaid() {
+        VoucherOrder unpaidOrder = order(1001L, 7L, 12L);
+        unpaidOrder.setStatus(1);
+        service.ordersById.put(1001L, unpaidOrder);
+        when(currentUserService.requireCurrentUserId()).thenReturn(7L);
+
+        Result result = service.payVoucherOrder(1001L);
+
+        assertThat(result.getSuccess()).isTrue();
+        assertThat(result.getData()).isEqualTo(1001L);
+        assertThat(service.paidOrders).containsExactly(1001L);
+        assertThat(unpaidOrder.getStatus()).isEqualTo(2);
+    }
+
+    @Test
+    void payVoucherOrderShouldRejectCanceledOrder() {
+        VoucherOrder canceledOrder = order(1001L, 7L, 12L);
+        canceledOrder.setStatus(4);
+        service.ordersById.put(1001L, canceledOrder);
+        when(currentUserService.requireCurrentUserId()).thenReturn(7L);
+
+        Result result = service.payVoucherOrder(1001L);
+
+        assertThat(result.getSuccess()).isFalse();
+        assertThat(result.getErrorMsg()).isEqualTo("订单已取消");
+        assertThat(service.paidOrders).isEmpty();
+    }
+
+    @Test
+    void payVoucherOrderShouldRejectOtherUserOrder() {
+        VoucherOrder order = order(1001L, 8L, 12L);
+        order.setStatus(1);
+        service.ordersById.put(1001L, order);
+        when(currentUserService.requireCurrentUserId()).thenReturn(7L);
+
+        Result result = service.payVoucherOrder(1001L);
+
+        assertThat(result.getSuccess()).isFalse();
+        assertThat(result.getErrorMsg()).isEqualTo("无权支付该订单");
+        assertThat(service.paidOrders).isEmpty();
     }
 
     @Test
@@ -290,6 +339,7 @@ class VoucherOrderServiceImplTest {
         private final List<String> deadLetterReasons = new ArrayList<>();
         private final List<Long> closeTasks = new ArrayList<>();
         private final List<Long> canceledOrders = new ArrayList<>();
+        private final List<Long> paidOrders = new ArrayList<>();
         private final List<Long> redisRestoredOrders = new ArrayList<>();
         private final List<VoucherOrder> expiredOrders = new ArrayList<>();
         private final Map<Long, VoucherOrder> ordersById = new LinkedHashMap<>();
@@ -349,6 +399,17 @@ class VoucherOrderServiceImplTest {
             }
             canceledOrders.add(orderId);
             order.setStatus(4);
+            return true;
+        }
+
+        @Override
+        protected boolean markUnpaidOrderPaid(Long orderId, Long userId) {
+            VoucherOrder order = ordersById.get(orderId);
+            if (order == null || !userId.equals(order.getUserId()) || !Integer.valueOf(1).equals(order.getStatus())) {
+                return false;
+            }
+            paidOrders.add(orderId);
+            order.setStatus(2);
             return true;
         }
 
