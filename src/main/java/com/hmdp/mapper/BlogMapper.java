@@ -22,20 +22,29 @@ public interface BlogMapper extends BaseMapper<Blog> {
     /**
      * 根据店铺ID获取所有博主评价
      */
-    @Select("SELECT * FROM tb_blog WHERE shop_id = #{shopId} ORDER BY create_time DESC")
+    @Select("SELECT * FROM tb_blog " +
+            "WHERE shop_id = #{shopId} " +
+            "AND status = 1 " +
+            "AND deleted = 0 " +
+            "ORDER BY create_time DESC")
     List<Blog> selectBlogsByShopId(@Param("shopId") Long shopId);
 
     /**
      * 获取店铺的博客统计信息
      */
     @Select("SELECT COUNT(*) as total_count, AVG(liked) as avg_liked, SUM(liked) as total_liked " +
-            "FROM tb_blog WHERE shop_id = #{shopId}")
+            "FROM tb_blog " +
+            "WHERE shop_id = #{shopId} " +
+            "AND status = 1 " +
+            "AND deleted = 0")
     Map<String, Object> selectBlogStatsByShopId(@Param("shopId") Long shopId);
 
     /**
      * 获取高质量博客(点赞数高、内容丰富)
      */
     @Select("SELECT * FROM tb_blog WHERE shop_id = #{shopId} " +
+            "AND status = 1 " +
+            "AND deleted = 0 " +
             "AND LENGTH(content) > 50 " +
             "AND liked > #{minLiked} " +
             "ORDER BY liked DESC, create_time DESC " +

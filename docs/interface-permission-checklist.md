@@ -39,7 +39,7 @@
 | `FollowController` | `GET /follow/or/not/{id}` | `@SaCheckLogin` |
 | `FollowController` | `GET /follow/common/{id}` | `@SaCheckLogin` |
 | `UploadController` | `POST /upload/blog` | `@SaCheckLogin` |
-| `UploadController` | `GET /upload/blog/delete` | `@SaCheckLogin` |
+| `UploadController` | `DELETE /upload/blog` | `@SaCheckLogin` |
 | `ShopSummaryController` | 带 memory 的用户会话接口 | `@SaCheckLogin` |
 
 ## 权限接口

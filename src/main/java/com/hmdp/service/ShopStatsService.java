@@ -67,7 +67,10 @@ public class ShopStatsService {
         }
 
         try {
-            Integer count = blogMapper.selectCount(new QueryWrapper<Blog>().eq("shop_id", shopId));
+            Integer count = blogMapper.selectCount(new QueryWrapper<Blog>()
+                    .eq("shop_id", shopId)
+                    .eq("status", 1)
+                    .eq("deleted", 0));
             int reviewCount = count == null ? 0 : count;
             updateShopReviewCountCache(shopId, reviewCount);
             return reviewCount;

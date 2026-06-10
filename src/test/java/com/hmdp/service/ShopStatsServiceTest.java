@@ -1,12 +1,15 @@
 package com.hmdp.service;
 
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.hmdp.dto.ShopStatusVO;
+import com.hmdp.entity.Blog;
 import com.hmdp.mapper.BlogMapper;
 import com.hmdp.mapper.ShopMapper;
 import com.hmdp.utils.LocalCacheManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -90,6 +93,20 @@ class ShopStatsServiceTest {
 
         assertThat(count).isEqualTo(9);
         verify(blogMapper, never()).selectCount(any());
+    }
+
+    @Test
+    void getShopReviewCountShouldOnlyCountPublishedActiveBlogs() {
+        when(localCacheManager.get(shopReviewCountKey(6L), Integer.class, SHOP_STATS)).thenReturn(null);
+        when(blogMapper.selectCount(any())).thenReturn(7);
+
+        int count = shopStatsService.getShopReviewCount(6L);
+
+        assertThat(count).isEqualTo(7);
+        ArgumentCaptor<QueryWrapper<Blog>> captor = ArgumentCaptor.forClass(QueryWrapper.class);
+        verify(blogMapper).selectCount(captor.capture());
+        String sqlSegment = captor.getValue().getSqlSegment();
+        assertThat(sqlSegment).contains("shop_id", "status", "deleted");
     }
 
     @Test

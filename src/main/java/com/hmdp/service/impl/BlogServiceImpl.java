@@ -133,6 +133,9 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
 
     @Override
     public Result queryBlogById(Long id) {
+        if (isInvalidId(id)) {
+            return Result.fail("blogId is invalid");
+        }
         Blog blog = activeBlogQuery().eq("id", id).one();
         if (blog == null) {
             return Result.fail("笔记不存在！");
@@ -143,6 +146,9 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
     @Override
     @Transactional
     public Result likeBlog(Long id) {
+        if (isInvalidId(id)) {
+            return Result.fail("blogId is invalid");
+        }
         Long userId = currentUserService.requireCurrentUserId();
         Blog blog = activeBlogQuery().select("id", "liked").eq("id", id).one();
         if (blog == null) {
@@ -178,6 +184,12 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
 
     @Override
     public Result queryBlogLikes(Long id) {
+        if (isInvalidId(id)) {
+            return Result.fail("blogId is invalid");
+        }
+        if (!activeBlogExists(id)) {
+            return Result.fail("blog not found");
+        }
         List<Long> ids = queryLikeUserIdsFromRedis(id);
         if (ids.isEmpty()) {
             ids = queryLikeUserIdsFromMysql(id);
@@ -235,7 +247,7 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
         candidates.addAll(queryInboxFeedCandidates(userId, maxTime));
         candidates.addAll(queryLargeAuthorFeedCandidates(userId, maxTime));
         if (candidates.isEmpty()) {
-            return Result.ok();
+            return Result.ok(emptyScrollResult(maxTime));
         }
 
         List<FeedCandidate> sortedCandidates = candidates.stream()
@@ -247,7 +259,7 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
                 .collect(Collectors.toList());
         List<FeedCandidate> page = pageFeedCandidates(sortedCandidates, maxTime, sameTimeOffset);
         if (page.isEmpty()) {
-            return Result.ok();
+            return Result.ok(emptyScrollResult(maxTime));
         }
 
         List<Long> ids = page.stream().map(FeedCandidate::getBlogId).collect(Collectors.toList());
@@ -286,6 +298,17 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
 
     private int normalizePage(Integer current) {
         return current == null || current < 1 ? 1 : current;
+    }
+
+    private boolean isInvalidId(Long id) {
+        return id == null || id <= 0;
+    }
+
+    private boolean activeBlogExists(Long id) {
+        return activeBlogQuery()
+                .select("id")
+                .eq("id", id)
+                .one() != null;
     }
 
     private List<Long> queryHotIdsFromRedis(long start, long end) {
@@ -413,7 +436,8 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
         }
         return tuples.stream()
                 .filter(tuple -> tuple.getValue() != null && tuple.getScore() != null)
-                .map(tuple -> new FeedCandidate(Long.valueOf(tuple.getValue()), tuple.getScore().longValue()))
+                .map(this::toFeedCandidate)
+                .filter(Objects::nonNull)
                 .collect(Collectors.toList());
     }
 
@@ -489,9 +513,31 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
             return ((Number) value).longValue();
         }
         if (value instanceof String) {
-            return Long.valueOf((String) value);
+            try {
+                return Long.valueOf((String) value);
+            } catch (NumberFormatException e) {
+                log.warn("ignore invalid long value: {}", value);
+                return null;
+            }
         }
         return null;
+    }
+
+    private FeedCandidate toFeedCandidate(ZSetOperations.TypedTuple<String> tuple) {
+        try {
+            return new FeedCandidate(Long.valueOf(tuple.getValue()), tuple.getScore().longValue());
+        } catch (NumberFormatException e) {
+            log.warn("ignore invalid feed member: {}", tuple.getValue());
+            return null;
+        }
+    }
+
+    private ScrollResult emptyScrollResult(long maxTime) {
+        ScrollResult result = new ScrollResult();
+        result.setList(Collections.emptyList());
+        result.setOffset(0);
+        result.setMinTime(maxTime == Long.MAX_VALUE ? 0L : maxTime);
+        return result;
     }
 
     private List<BlogListItemVO> toListItemVOs(List<Blog> blogs) {
