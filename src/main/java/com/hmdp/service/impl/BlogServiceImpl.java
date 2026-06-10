@@ -242,6 +242,10 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
         Long userId = currentUserService.requireCurrentUserId();
         long maxTime = max == null || max <= 0 ? Long.MAX_VALUE : max;
         int sameTimeOffset = Math.max(offset == null ? 0 : offset, 0);
+        Set<Long> currentFolloweeIds = queryCurrentFolloweeIdSet(userId);
+        if (currentFolloweeIds.isEmpty()) {
+            return Result.ok(emptyScrollResult(maxTime));
+        }
 
         List<FeedCandidate> candidates = new ArrayList<>();
         candidates.addAll(queryInboxFeedCandidates(userId, maxTime));
@@ -257,6 +261,7 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
                 .sorted(Comparator.comparingLong(FeedCandidate::getTime).reversed()
                         .thenComparing(FeedCandidate::getBlogId, Comparator.reverseOrder()))
                 .collect(Collectors.toList());
+        sortedCandidates = filterCandidatesByCurrentFollows(sortedCandidates, currentFolloweeIds);
         List<FeedCandidate> page = pageFeedCandidates(sortedCandidates, maxTime, sameTimeOffset);
         if (page.isEmpty()) {
             return Result.ok(emptyScrollResult(maxTime));
@@ -272,6 +277,21 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
         result.setOffset(nextOffset(minTime, maxTime, sameTimeOffset, page));
         result.setMinTime(minTime);
         return Result.ok(result);
+    }
+
+    private List<FeedCandidate> filterCandidatesByCurrentFollows(List<FeedCandidate> candidates, Set<Long> followeeIds) {
+        if (candidates.isEmpty() || followeeIds.isEmpty()) {
+            return Collections.emptyList();
+        }
+        List<Long> blogIds = candidates.stream()
+                .map(FeedCandidate::getBlogId)
+                .collect(Collectors.toList());
+        Map<Long, Long> blogAuthorMap = queryActiveBlogsByIds(blogIds)
+                .stream()
+                .collect(Collectors.toMap(Blog::getId, Blog::getUserId, (left, right) -> left));
+        return candidates.stream()
+                .filter(candidate -> followeeIds.contains(blogAuthorMap.get(candidate.getBlogId())))
+                .collect(Collectors.toList());
     }
 
     private com.baomidou.mybatisplus.extension.conditions.query.QueryChainWrapper<Blog> activeBlogQuery() {
@@ -488,6 +508,17 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
                 .map(this::toLong)
                 .filter(Objects::nonNull)
                 .collect(Collectors.toList());
+    }
+
+    private Set<Long> queryCurrentFolloweeIdSet(Long userId) {
+        return followService.query()
+                .select("follow_user_id")
+                .eq("user_id", userId)
+                .list()
+                .stream()
+                .map(Follow::getFollowUserId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
     }
 
     private int feedFetchSize() {

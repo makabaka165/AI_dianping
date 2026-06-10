@@ -74,7 +74,9 @@ CREATE TABLE `tb_follow`  (
   `user_id` bigint(20) UNSIGNED NOT NULL COMMENT '用户id',
   `follow_user_id` bigint(20) UNSIGNED NOT NULL COMMENT '关联的用户id',
   `create_time` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-  PRIMARY KEY (`id`) USING BTREE
+  PRIMARY KEY (`id`) USING BTREE,
+  UNIQUE KEY `uk_follow_user` (`user_id`, `follow_user_id`) USING BTREE,
+  KEY `idx_followed_user` (`follow_user_id`) USING BTREE
 ) ENGINE = InnoDB AUTO_INCREMENT = 1 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci ROW_FORMAT = Compact;
 
 -- ----------------------------
@@ -1398,6 +1400,7 @@ INSERT INTO `sys_permission` (`permission_code`, `permission_name`, `status`, `r
 ('shop:delete', '删除店铺', 1, '后台店铺权限'),
 ('shop:type:manage', 'Manage shop types', 1, 'Admin shop type permission'),
 ('shop:geo:rebuild', 'Rebuild shop GEO index', 1, 'Admin shop GEO permission'),
+('follow:repair', 'Repair follow consistency', 1, 'Admin follow cache and feed repair permission'),
 ('voucher:manage', '管理优惠券', 1, '后台优惠券权限'),
 ('blog:delete', '删除笔记', 1, '后台内容权限'),
 ('document:manage', '管理文档', 1, '后台文档权限'),
@@ -1433,7 +1436,7 @@ FROM `sys_role` r
 JOIN `sys_permission` p ON p.permission_code IN (
   'user:read', 'user:disable', 'shop:create', 'shop:create:own', 'shop:update', 'shop:delete',
   'shop:type:manage', 'shop:geo:rebuild',
-  'voucher:manage', 'blog:delete', 'document:manage', 'ai:memory:manage',
+  'voucher:manage', 'blog:delete', 'follow:repair', 'document:manage', 'ai:memory:manage',
   'system:log:read', 'role:assign'
 )
 WHERE r.role_key = 'admin';

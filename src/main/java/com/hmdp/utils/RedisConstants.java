@@ -31,6 +31,9 @@ public class RedisConstants {
     public static final String USER_BRIEF_KEY = "user:brief:";
     public static final Long USER_BRIEF_TTL = 30L;
     public static final String FEED_KEY = "feed:";
+    public static final String FOLLOW_KEY = "follows:";
+    public static final String FOLLOW_LOADED_KEY = "follows:loaded:";
+    public static final Long FOLLOW_CACHE_TTL = 30L;
     public static final String SHOP_GEO_KEY = "shop:geo:";
     public static final String USER_SIGN_KEY = "sign:";
 }

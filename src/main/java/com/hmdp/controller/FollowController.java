@@ -23,21 +23,29 @@ public class FollowController {
     @Resource
     private IFollowService followService;
 
-    @PutMapping("/{id}/{isFollow}")
+    @PutMapping("/{id}")
     @SaCheckPermission("follow:write")
-    public Result follow(@PathVariable("id") Long followUserId, @PathVariable("isFollow") Boolean isFollow) {
-        return followService.follow(followUserId, isFollow);
+    public Result follow(@PathVariable("id") Long followUserId) {
+        return followService.follow(followUserId);
     }
 
-    @GetMapping("/or/not/{id}")
+    @DeleteMapping("/{id}")
+    @SaCheckPermission("follow:write")
+    public Result unfollow(@PathVariable("id") Long followUserId) {
+        return followService.unfollow(followUserId);
+    }
+
+    @GetMapping("/{id}/status")
     @SaCheckLogin
     public Result isFollow(@PathVariable("id") Long followUserId) {
         return followService.isFollow(followUserId);
     }
 
-    @GetMapping("/common/{id}")
+    @GetMapping("/{id}/common")
     @SaCheckLogin
-    public Result followCommons(@PathVariable("id") Long id){
-        return followService.followCommons(id);
+    public Result followCommons(@PathVariable("id") Long id,
+                                @RequestParam(value = "current", defaultValue = "1") Integer current,
+                                @RequestParam(value = "size", defaultValue = "20") Integer size) {
+        return followService.followCommons(id, current, size);
     }
 }

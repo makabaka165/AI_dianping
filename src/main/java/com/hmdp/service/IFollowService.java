@@ -14,9 +14,11 @@ import com.baomidou.mybatisplus.extension.service.IService;
  */
 public interface IFollowService extends IService<Follow> {
 
-    Result follow(Long followUserId, Boolean isFollow);
+    Result follow(Long followUserId);
+
+    Result unfollow(Long followUserId);
 
     Result isFollow(Long followUserId);
 
-    Result followCommons(Long id);
+    Result followCommons(Long id, Integer current, Integer size);
 }
