@@ -2,16 +2,25 @@ package com.hmdp.controller;
 
 import cn.dev33.satoken.annotation.SaCheckLogin;
 import cn.dev33.satoken.annotation.SaCheckPermission;
+import com.hmdp.ai.application.ShopAIApplicationService;
 import com.hmdp.config.ChatMemoryKeyManager;
 import com.hmdp.dto.Result;
+import com.hmdp.dto.ai.ShopAIResponse;
+import com.hmdp.dto.ai.ShopAskRequest;
+import com.hmdp.dto.ai.ShopChatRequest;
+import com.hmdp.dto.ai.ShopCompareRequest;
+import com.hmdp.dto.ai.ShopRecommendRequest;
 import com.hmdp.entity.ShopSummaryResult;
-import com.hmdp.service.ai.ShopAIService;
 import com.hmdp.service.ShopSummaryService;
+import com.hmdp.utils.AiLogSanitizer;
 import com.hmdp.utils.UserHolder;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
+import reactor.core.publisher.Flux;
 
+import javax.validation.Valid;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -24,7 +33,7 @@ public class ShopSummaryController {
     private ShopSummaryService shopSummaryService;
 
     @Autowired
-    private ShopAIService shopAIService;
+    private ShopAIApplicationService shopAIApplicationService;
 
     @Autowired
     private ChatMemoryKeyManager keyManager;
@@ -37,30 +46,35 @@ public class ShopSummaryController {
      */
     @PostMapping("/ai/chat")
     @SaCheckPermission("ai:chat")
-    public Result smartChat(
-            @RequestParam(defaultValue = "default") String sessionId,
-            @RequestParam String message
-    ) {
+    public Result smartChat(@Valid @RequestBody ShopChatRequest request) {
+        if (request == null || request.getMessage() == null || request.getMessage().trim().isEmpty()) {
+            return Result.fail("消息不能为空");
+        }
+        String sessionId = normalizeSessionId(request.getSessionId());
+        String message = request.getMessage();
         try {
-            log.info("智能对话请求 - 会话: {}, 消息: {}", sessionId, message);
+            log.info("智能对话请求 - 会话: {}, 消息: {}", sessionId, AiLogSanitizer.safe(message));
 
             String userId = getCurrentUserId();
-            String fullSessionId = userId + "_" + sessionId;
-
-            // AI会自动识别用户意图并调用相应的Tool
-            String response = shopAIService.chat(fullSessionId, message);
-
-            Map<String, Object> resultData = new HashMap<>();
-            resultData.put("response", response);
-            resultData.put("sessionId", fullSessionId);
-            resultData.put("timestamp", System.currentTimeMillis());
-
+            ShopAIResponse resultData = shopAIApplicationService.chat(
+                    userId, sessionId, message, request.getShopId(), "/api/shop-summary/ai/chat");
             return Result.ok(resultData);
 
         } catch (Exception e) {
             log.error("智能对话失败 - 会话: {}, 消息: {}", sessionId, message, e);
             return Result.fail("对话失败，请稍后重试");
         }
+    }
+
+    @PostMapping(value = "/ai/chat/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    @SaCheckPermission("ai:chat")
+    public Flux<String> smartChatStream(@Valid @RequestBody ShopChatRequest request) {
+        if (request == null || request.getMessage() == null || request.getMessage().trim().isEmpty()) {
+            return Flux.just("消息不能为空");
+        }
+        String sessionId = normalizeSessionId(request.getSessionId());
+        String userId = getCurrentUserId();
+        return shopAIApplicationService.chatStream(userId, sessionId, request.getMessage(), "/api/shop-summary/ai/chat/stream");
     }
 
 
@@ -72,7 +86,8 @@ public class ShopSummaryController {
     @GetMapping("/{shopId}")
     public Result getShopSummary(@PathVariable Long shopId) {
         try {
-            ShopSummaryResult summary = shopSummaryService.generateShopSummary(shopId);
+            ShopSummaryResult summary = shopAIApplicationService.summary(
+                    "anonymous_user", shopId, false, "/api/shop-summary/{shopId}");
 
             Map<String, Object> resultData = new HashMap<>();
             resultData.put("summary", summary);
@@ -94,7 +109,8 @@ public class ShopSummaryController {
     public Result getShopSummaryWithMemory(@PathVariable Long shopId) {
         try {
             String userId = getCurrentUserId();
-            ShopSummaryResult summary = shopSummaryService.generateShopSummary(shopId, userId);
+            ShopSummaryResult summary = shopAIApplicationService.summary(
+                    userId, shopId, true, "/api/shop-summary/{shopId}/with-memory");
             String memoryKey = keyManager.buildShopSummaryKey(shopId, userId);
 
             Map<String, Object> resultData = new HashMap<>();
@@ -120,15 +136,9 @@ public class ShopSummaryController {
             String userId = getCurrentUserId();
             String sessionId = "quick_" + System.currentTimeMillis();
             String message = "请详细分析一下店铺" + shopId + "的情况";
-
-            String response = shopAIService.chat(userId + "_" + sessionId, message);
-
-            Map<String, Object> resultData = new HashMap<>();
-            resultData.put("response", response);
-            resultData.put("shopId", shopId);
-            resultData.put("type", "smart_analysis");
-            resultData.put("timestamp", System.currentTimeMillis());
-
+            ShopAIResponse resultData = shopAIApplicationService.chat(
+                    userId, sessionId, message, shopId, "/api/shop-summary/ai/analyze");
+            resultData.setShopId(shopId);
             return Result.ok(resultData);
 
         } catch (Exception e) {
@@ -149,16 +159,9 @@ public class ShopSummaryController {
             String userId = getCurrentUserId();
             String sessionId = "qa_" + shopId + "_" + System.currentTimeMillis();
             String message = "关于店铺" + shopId + "：" + question;
-
-            String response = shopAIService.chat(userId + "_" + sessionId, message);
-
-            Map<String, Object> resultData = new HashMap<>();
-            resultData.put("response", response);
-            resultData.put("shopId", shopId);
-            resultData.put("question", question);
-            resultData.put("type", "smart_qa");
-            resultData.put("timestamp", System.currentTimeMillis());
-
+            ShopAIResponse resultData = shopAIApplicationService.chat(
+                    userId, sessionId, message, shopId, "/api/shop-summary/ai/ask");
+            resultData.setShopId(shopId);
             return Result.ok(resultData);
 
         } catch (Exception e) {
@@ -185,17 +188,8 @@ public class ShopSummaryController {
                 message += "在" + aspect + "方面";
             }
             message += "的表现";
-
-            String response = shopAIService.chat(userId + "_" + sessionId, message);
-
-            Map<String, Object> resultData = new HashMap<>();
-            resultData.put("response", response);
-            resultData.put("shopId1", shopId1);
-            resultData.put("shopId2", shopId2);
-            resultData.put("aspect", aspect);
-            resultData.put("type", "smart_compare");
-            resultData.put("timestamp", System.currentTimeMillis());
-
+            ShopAIResponse resultData = shopAIApplicationService.chat(
+                    userId, sessionId, message, null, "/api/shop-summary/ai/compare");
             return Result.ok(resultData);
 
         } catch (Exception e) {
@@ -222,17 +216,8 @@ public class ShopSummaryController {
                 message += "，类型：" + category;
             }
             message += "，推荐" + limit + "家";
-
-            String response = shopAIService.chat(userId + "_" + sessionId, message);
-
-            Map<String, Object> resultData = new HashMap<>();
-            resultData.put("response", response);
-            resultData.put("userPreference", userPreference);
-            resultData.put("category", category);
-            resultData.put("limit", limit);
-            resultData.put("type", "smart_recommend");
-            resultData.put("timestamp", System.currentTimeMillis());
-
+            ShopAIResponse resultData = shopAIApplicationService.chat(
+                    userId, sessionId, message, null, "/api/shop-summary/ai/recommend");
             return Result.ok(resultData);
 
         } catch (Exception e) {
@@ -277,22 +262,22 @@ public class ShopSummaryController {
     @SaCheckLogin
     public Result askAboutShop(
             @PathVariable Long shopId,
-            @RequestParam String question) {
+            @Valid @RequestBody ShopAskRequest request) {
+        if (request == null || request.getQuestion() == null || request.getQuestion().trim().isEmpty()) {
+            return Result.fail("问题不能为空");
+        }
         try {
             String userId = getCurrentUserId();
-            String response = shopSummaryService.askAboutShop(userId, shopId, question);
-            String memoryKey = keyManager.buildShopQAKey(shopId, userId);
-
-            Map<String, Object> resultData = new HashMap<>();
-            resultData.put("response", response);
-            resultData.put("shopId", shopId);
-            resultData.put("memoryKey", memoryKey);
-            resultData.put("question", question);
-            resultData.put("timestamp", System.currentTimeMillis());
+            ShopAIResponse resultData = shopAIApplicationService.ask(
+                    userId,
+                    normalizeSessionId(request.getSessionId()),
+                    shopId,
+                    request.getQuestion(),
+                    "/api/shop-summary/{shopId}/ask");
 
             return Result.ok(resultData);
         } catch (Exception e) {
-            log.error("店铺问答失败, shopId: {}, question: {}", shopId, question, e);
+            log.error("店铺问答失败, shopId: {}", shopId, e);
             return Result.fail("问答失败，请稍后重试");
         }
     }
@@ -302,28 +287,23 @@ public class ShopSummaryController {
      */
     @PostMapping("/compare")
     @SaCheckLogin
-    public Result compareShops(
-            @RequestParam Long shopId1,
-            @RequestParam Long shopId2,
-            @RequestParam(required = false) String aspect,
-            @RequestParam(defaultValue = "default") String sessionId) {
+    public Result compareShops(@RequestBody ShopCompareRequest request) {
+        if (request == null || request.getShopId1() == null || request.getShopId2() == null) {
+            return Result.fail("店铺ID不能为空");
+        }
         try {
             String userId = getCurrentUserId();
-            String comparison = shopSummaryService.compareShops(userId, sessionId, shopId1, shopId2, aspect);
-            String memoryKey = keyManager.buildShopCompareKey(userId, sessionId);
-
-            Map<String, Object> resultData = new HashMap<>();
-            resultData.put("comparison", comparison);
-            resultData.put("shopId1", shopId1);
-            resultData.put("shopId2", shopId2);
-            resultData.put("aspect", aspect);
-            resultData.put("memoryKey", memoryKey);
-            resultData.put("sessionId", sessionId);
-            resultData.put("timestamp", System.currentTimeMillis());
+            ShopAIResponse resultData = shopAIApplicationService.compare(
+                    userId,
+                    normalizeSessionId(request.getSessionId()),
+                    request.getShopId1(),
+                    request.getShopId2(),
+                    request.getAspect(),
+                    "/api/shop-summary/compare");
 
             return Result.ok(resultData);
         } catch (Exception e) {
-            log.error("店铺对比失败, shopId1: {}, shopId2: {}", shopId1, shopId2, e);
+            log.error("店铺对比失败", e);
             return Result.fail("对比分析失败，请稍后重试");
         }
     }
@@ -333,26 +313,23 @@ public class ShopSummaryController {
      */
     @PostMapping("/recommend")
     @SaCheckLogin
-    public Result recommendShops(
-            @RequestParam String userPreference,
-            @RequestParam(required = false) String category,
-            @RequestParam(defaultValue = "5") Integer limit) {
+    public Result recommendShops(@Valid @RequestBody ShopRecommendRequest request) {
+        if (request == null || request.getUserPreference() == null || request.getUserPreference().trim().isEmpty()) {
+            return Result.fail("用户偏好不能为空");
+        }
         try {
             String userId = getCurrentUserId();
-            String recommendations = shopSummaryService.recommendShops(userId, userPreference, category, limit);
-            String memoryKey = keyManager.buildShopRecommendKey(userId);
-
-            Map<String, Object> resultData = new HashMap<>();
-            resultData.put("recommendations", recommendations);
-            resultData.put("userPreference", userPreference);
-            resultData.put("category", category);
-            resultData.put("memoryKey", memoryKey);
-            resultData.put("limit", limit);
-            resultData.put("timestamp", System.currentTimeMillis());
+            ShopAIResponse resultData = shopAIApplicationService.recommend(
+                    userId,
+                    normalizeSessionId(request.getSessionId()),
+                    request.getUserPreference(),
+                    request.getCategory(),
+                    request.getLimit(),
+                    "/api/shop-summary/recommend");
 
             return Result.ok(resultData);
         } catch (Exception e) {
-            log.error("推荐失败, preference: {}", userPreference, e);
+            log.error("推荐失败, preference: {}", AiLogSanitizer.safe(request == null ? null : request.getUserPreference()), e);
             return Result.fail("推荐失败，请稍后重试");
         }
     }
@@ -367,7 +344,7 @@ public class ShopSummaryController {
     public Result clearShopQAMemory(@PathVariable Long shopId) {
         try {
             String userId = getCurrentUserId();
-            shopSummaryService.clearShopQAMemory(userId, shopId);
+            shopAIApplicationService.clearShopQAMemory(userId, shopId);
 
             Map<String, Object> resultData = new HashMap<>();
             resultData.put("message", "店铺问答记忆已清除");
@@ -389,7 +366,7 @@ public class ShopSummaryController {
     public Result clearShopSummaryMemory(@PathVariable Long shopId) {
         try {
             String userId = getCurrentUserId();
-            shopSummaryService.clearShopSummaryMemory(userId, shopId);
+            shopAIApplicationService.clearShopSummaryMemory(userId, shopId);
 
             Map<String, Object> resultData = new HashMap<>();
             resultData.put("message", "店铺总结记忆已清除");
@@ -411,7 +388,7 @@ public class ShopSummaryController {
     public Result clearRecommendMemory() {
         try {
             String userId = getCurrentUserId();
-            shopSummaryService.clearRecommendMemory(userId);
+            shopAIApplicationService.clearRecommendMemory(userId);
 
             Map<String, Object> resultData = new HashMap<>();
             resultData.put("message", "推荐记忆已清除");
@@ -432,7 +409,7 @@ public class ShopSummaryController {
     public Result clearAllMemory() {
         try {
             String userId = getCurrentUserId();
-            Map<String, Integer> result = shopSummaryService.clearAllUserMemory(userId);
+            Map<String, Integer> result = shopAIApplicationService.clearAllUserMemory(userId);
 
             Map<String, Object> resultData = new HashMap<>();
             resultData.put("message", "所有记忆已清除");
@@ -453,7 +430,7 @@ public class ShopSummaryController {
     @SaCheckPermission("ai:memory:manage")
     public Result getMemoryStats() {
         try {
-            Map<String, Map<String, Integer>> stats = shopSummaryService.getMemoryStats();
+            Map<String, Map<String, Integer>> stats = shopAIApplicationService.getMemoryStats();
 
             Map<String, Object> resultData = new HashMap<>();
             resultData.put("stats", stats);
@@ -492,9 +469,9 @@ public class ShopSummaryController {
                     return Result.fail("不支持的记忆类型: " + type);
             }
 
-            boolean exists = shopSummaryService.hasMemory(memoryKey);
-            int messageCount = shopSummaryService.getMemoryMessageCount(memoryKey);
-            long ttl = shopSummaryService.getMemoryTtl(memoryKey);
+            boolean exists = shopAIApplicationService.hasMemory(memoryKey);
+            int messageCount = shopAIApplicationService.getMemoryMessageCount(memoryKey);
+            long ttl = shopAIApplicationService.getMemoryTtl(memoryKey);
 
             Map<String, Object> resultData = new HashMap<>();
             resultData.put("memoryKey", memoryKey);
@@ -538,7 +515,7 @@ public class ShopSummaryController {
                     return Result.fail("不支持的记忆类型: " + type);
             }
 
-            shopSummaryService.refreshMemoryTtl(memoryKey);
+            shopAIApplicationService.refreshMemoryTtl(memoryKey);
 
             Map<String, Object> resultData = new HashMap<>();
             resultData.put("message", "记忆过期时间已刷新");
@@ -562,7 +539,7 @@ public class ShopSummaryController {
     @SaCheckPermission("ai:memory:manage")
     public Result adminCleanupMemory(@PathVariable String functionType) {
         try {
-            int count = shopSummaryService.cleanupMemoryByFunction(functionType);
+            int count = shopAIApplicationService.cleanupMemoryByFunction(functionType);
 
             Map<String, Object> resultData = new HashMap<>();
             resultData.put("message", "批量清理完成");
@@ -594,17 +571,11 @@ public class ShopSummaryController {
         }
     }
 
-    /**
-     * 检查是否为管理员
-     */
-    private boolean isAdmin() {
-        try {
-            // 实现管理员权限检查逻辑
-            // 这里需要根据你的权限系统来实现
-            return false; // 临时返回false
-        } catch (Exception e) {
-            log.error("检查管理员权限失败", e);
-            return false;
+    private String normalizeSessionId(String sessionId) {
+        if (sessionId == null || sessionId.trim().isEmpty()) {
+            return "default";
         }
+        return sessionId.trim();
     }
+
 }

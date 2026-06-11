@@ -71,6 +71,12 @@ public class CommonAIConfig {
     @Value("${langchain4j.open-ai.chat-model.temperature:0.3}")
     private double temperature;
 
+    @Value("${langchain4j.open-ai.chat-model.log-requests:false}")
+    private boolean logRequests;
+
+    @Value("${langchain4j.open-ai.chat-model.log-responses:false}")
+    private boolean logResponses;
+
     @Value("${langchain4j.open-ai.embedding-model.model-name:text-embedding-v3}")
     private String embeddingModelName;
 
@@ -206,8 +212,8 @@ public class CommonAIConfig {
                 .baseUrl(baseUrl)
                 .temperature(temperature)
                 .maxTokens(1500)
-                .logRequests(true)
-                .logResponses(true)
+                .logRequests(logRequests)
+                .logResponses(logResponses)
                 .build();
     }
 
@@ -220,8 +226,8 @@ public class CommonAIConfig {
                 .baseUrl(baseUrl)
                 .temperature(temperature)
                 .maxTokens(1500)
-                .logRequests(true)
-                .logResponses(true)
+                .logRequests(logRequests)
+                .logResponses(logResponses)
                 .build();
     }
 
@@ -326,6 +332,13 @@ public class CommonAIConfig {
                 .minScore(0.5)
                 .maxResults(5)
                 .build();
+    }
+
+    @Bean("contentRetriever")
+    @ConditionalOnProperty(value = "rag.enabled", havingValue = "false", matchIfMissing = true)
+    public ContentRetriever noopContentRetriever() {
+        log.info("rag.enabled=false, 初始化空 ContentRetriever");
+        return query -> Collections.emptyList();
     }
 
 

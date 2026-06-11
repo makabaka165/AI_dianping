@@ -68,10 +68,16 @@ public class ChatMemoryKeyManager {
      */
     public String getFunctionType(String key) {
         String[] parts = key.split(":");
-        if (parts.length >= 3) {
-            return parts[2];
+        if (parts.length < 4 || !"memory".equals(parts[1])) {
+            return "unknown";
         }
-        return "unknown";
+        if ("shop".equals(parts[2]) && parts.length >= 4) {
+            return parts[2] + ":" + parts[3];
+        }
+        if ("ai".equals(parts[2]) && parts.length >= 4) {
+            return parts[2] + ":" + parts[3];
+        }
+        return parts[2];
     }
 
     /**

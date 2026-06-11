@@ -30,6 +30,18 @@ public interface BlogMapper extends BaseMapper<Blog> {
     List<Blog> selectBlogsByShopId(@Param("shopId") Long shopId);
 
     /**
+     * 获取店铺近期评价。
+     */
+    @Select("SELECT * FROM tb_blog " +
+            "WHERE shop_id = #{shopId} " +
+            "AND status = 1 " +
+            "AND deleted = 0 " +
+            "ORDER BY create_time DESC " +
+            "LIMIT #{limit}")
+    List<Blog> selectRecentBlogsByShopId(@Param("shopId") Long shopId,
+                                         @Param("limit") Integer limit);
+
+    /**
      * 获取店铺的博客统计信息
      */
     @Select("SELECT COUNT(*) as total_count, AVG(liked) as avg_liked, SUM(liked) as total_liked " +
@@ -52,4 +64,27 @@ public interface BlogMapper extends BaseMapper<Blog> {
     List<Blog> selectQualityBlogsByShopId(@Param("shopId") Long shopId,
                                           @Param("minLiked") Integer minLiked,
                                           @Param("limit") Integer limit);
+
+    /**
+     * 获取店铺负向候选评价。
+     */
+    @Select("SELECT * FROM tb_blog WHERE shop_id = #{shopId} " +
+            "AND status = 1 " +
+            "AND deleted = 0 " +
+            "AND (content LIKE '%差%' OR content LIKE '%失望%' OR content LIKE '%不好%' " +
+            "OR content LIKE '%一般%' OR content LIKE '%贵%' OR content LIKE '%慢%' OR content LIKE '%坑%') " +
+            "ORDER BY create_time DESC " +
+            "LIMIT #{limit}")
+    List<Blog> selectNegativeCandidateBlogsByShopId(@Param("shopId") Long shopId,
+                                                    @Param("limit") Integer limit);
+
+    /**
+     * 获取店铺评价上下文版本信息。
+     */
+    @Select("SELECT COUNT(*) as total_count, MAX(create_time) as latest_time " +
+            "FROM tb_blog " +
+            "WHERE shop_id = #{shopId} " +
+            "AND status = 1 " +
+            "AND deleted = 0")
+    Map<String, Object> selectReviewVersionByShopId(@Param("shopId") Long shopId);
 }

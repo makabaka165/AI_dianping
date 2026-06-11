@@ -6,7 +6,6 @@ import com.hmdp.dto.BlogCreateRequest;
 import com.hmdp.dto.Result;
 import com.hmdp.service.IBlogService;
 import com.hmdp.service.ShopSummaryService;
-import com.hmdp.utils.LocalCacheManager;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -34,10 +33,7 @@ public class BlogController {
     public Result saveBlog(@RequestBody @Validated BlogCreateRequest request) {
         Result result = blogService.saveBlog(request);
         if (result.getSuccess() && request.getShopId() != null) {
-            String cacheKey = "shop_review_count_" + request.getShopId();
-            shopSummaryService.getLocalCacheManager().remove(cacheKey, LocalCacheManager.CacheType.SHOP_STATS);
-            String existsCacheKey = "shop_exists_" + request.getShopId();
-            shopSummaryService.getLocalCacheManager().remove(existsCacheKey, LocalCacheManager.CacheType.SHOP_INFO);
+            shopSummaryService.clearShopRelatedCaches(request.getShopId());
         }
         return result;
     }
