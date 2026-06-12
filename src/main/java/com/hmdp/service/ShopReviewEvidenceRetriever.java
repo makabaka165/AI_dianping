@@ -1,10 +1,12 @@
 package com.hmdp.service;
 
-import com.hmdp.dto.ai.ReviewEvidence;
+import com.hmdp.dto.ai.EvidenceItem;
+import com.hmdp.dto.ai.EvidenceType;
 import com.hmdp.entity.Blog;
 import com.hmdp.mapper.BlogMapper;
 import com.hmdp.utils.AiLogSanitizer;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import javax.annotation.Resource;
@@ -27,29 +29,70 @@ public class ShopReviewEvidenceRetriever {
     @Resource
     private BlogMapper blogMapper;
 
-    public List<ReviewEvidence> retrieve(Long shopId, String query, String aspect, Integer limit) {
+    @Resource
+    private ShopReviewVectorIndexService vectorIndexService;
+
+    @Resource
+    private EvidenceReranker evidenceReranker;
+
+    @Value("${rag.review.enabled:true}")
+    private boolean reviewRagEnabled;
+
+    public List<EvidenceItem> retrieve(Long shopId, String query, String aspect, Integer limit) {
         if (shopId == null || shopId <= 0) {
             return new ArrayList<>();
         }
         int safeLimit = normalizeLimit(limit, DEFAULT_LIMIT);
-        Map<Long, ReviewEvidence> candidates = new LinkedHashMap<>();
+        Map<String, EvidenceItem> candidates = new LinkedHashMap<>();
 
-        addCandidates(candidates, blogMapper.selectQualityBlogsByShopId(shopId, 0, safeLimit), "高赞评价", query, aspect);
-        addCandidates(candidates, blogMapper.selectRecentBlogsByShopId(shopId, safeLimit), "近期评价", query, aspect);
-        addCandidates(candidates, blogMapper.selectNegativeCandidateBlogsByShopId(shopId, Math.max(3, safeLimit / 2)), "负向候选", query, aspect);
+        addCandidates(candidates, blogMapper.selectQualityBlogsByShopId(shopId, 0, safeLimit), "规则召回:高赞评价", query, aspect);
+        addCandidates(candidates, blogMapper.selectRecentBlogsByShopId(shopId, safeLimit), "规则召回:近期评价", query, aspect);
+        addCandidates(candidates, blogMapper.selectNegativeCandidateBlogsByShopId(shopId, Math.max(3, safeLimit / 2)),
+                "规则召回:负面候选", query, aspect);
+        if (reviewRagEnabled && vectorIndexService != null) {
+            mergeVectorEvidence(candidates, vectorIndexService.search(shopId, query, aspect, safeLimit), query, aspect);
+        }
 
-        List<ReviewEvidence> result = candidates.values().stream()
-                .sorted(Comparator.comparing(ReviewEvidence::getScore, Comparator.nullsLast(Comparator.reverseOrder()))
-                        .thenComparing(ReviewEvidence::getCreatedAt, Comparator.nullsLast(Comparator.reverseOrder())))
+        List<EvidenceItem> result = evidenceReranker == null
+                ? candidates.values().stream()
+                .sorted(Comparator.comparing(EvidenceItem::getScore, Comparator.nullsLast(Comparator.reverseOrder()))
+                        .thenComparing(EvidenceItem::getCreatedAt, Comparator.nullsLast(Comparator.reverseOrder())))
                 .limit(safeLimit)
-                .collect(Collectors.toList());
+                .collect(Collectors.toList())
+                : evidenceReranker.rerank(new ArrayList<>(candidates.values()), query, aspect, safeLimit);
 
-        log.debug("Retrieved {} review evidence items for shopId={}, query={}",
+        log.debug("Retrieved {} evidence items for shopId={}, query={}",
                 result.size(), shopId, AiLogSanitizer.safe(query));
         return result;
     }
 
-    private void addCandidates(Map<Long, ReviewEvidence> target,
+    private void mergeVectorEvidence(Map<String, EvidenceItem> target,
+                                     List<EvidenceItem> vectorEvidence,
+                                     String query,
+                                     String aspect) {
+        if (vectorEvidence == null) {
+            return;
+        }
+        for (EvidenceItem evidence : vectorEvidence) {
+            if (evidence == null || evidence.getId() == null) {
+                continue;
+            }
+            EvidenceItem existing = target.get(evidence.getId());
+            if (existing == null) {
+                target.put(evidence.getId(), evidence);
+                continue;
+            }
+            double mergedScore = Math.max(existing.getScore() == null ? 0 : existing.getScore(),
+                    evidence.getScore() == null ? 0 : evidence.getScore()) + 0.08;
+            existing.setScore(Math.min(1.0, mergedScore));
+            existing.setMatchedReason("规则+向量召回");
+            if (containsAny(existing.getSnippet(), aspect, query)) {
+                existing.setMatchedReason("规则+向量召回+问题相关");
+            }
+        }
+    }
+
+    private void addCandidates(Map<String, EvidenceItem> target,
                                List<Blog> blogs,
                                String reason,
                                String query,
@@ -61,15 +104,15 @@ public class ShopReviewEvidenceRetriever {
             if (blog == null || blog.getId() == null || blog.getContent() == null) {
                 continue;
             }
-            ReviewEvidence evidence = toEvidence(blog, reason, query, aspect);
-            ReviewEvidence existing = target.get(blog.getId());
+            EvidenceItem evidence = toEvidence(blog, reason, query, aspect);
+            EvidenceItem existing = target.get(evidence.getId());
             if (existing == null || evidence.getScore() > existing.getScore()) {
-                target.put(blog.getId(), evidence);
+                target.put(evidence.getId(), evidence);
             }
         }
     }
 
-    private ReviewEvidence toEvidence(Blog blog, String reason, String query, String aspect) {
+    private EvidenceItem toEvidence(Blog blog, String reason, String query, String aspect) {
         double score = 0.3;
         int liked = blog.getLiked() == null ? 0 : blog.getLiked();
         score += Math.min(0.35, liked / 100.0);
@@ -86,9 +129,12 @@ public class ShopReviewEvidenceRetriever {
             score += 0.05;
         }
 
-        return ReviewEvidence.builder()
-                .blogId(blog.getId())
+        return EvidenceItem.builder()
+                .id(EvidenceItem.reviewId(blog.getId()))
+                .type(EvidenceType.REVIEW)
+                .sourceId(blog.getId())
                 .shopId(blog.getShopId())
+                .title("用户评价#" + blog.getId())
                 .snippet(AiLogSanitizer.safe(content, SNIPPET_LIMIT))
                 .liked(liked)
                 .createdAt(blog.getCreateTime())
@@ -98,6 +144,9 @@ public class ShopReviewEvidenceRetriever {
     }
 
     private boolean containsAny(String content, String aspect, String query) {
+        if (content == null) {
+            return false;
+        }
         String lower = content.toLowerCase(Locale.ROOT);
         List<String> terms = new ArrayList<>();
         addTerms(terms, aspect);
@@ -114,7 +163,7 @@ public class ShopReviewEvidenceRetriever {
         if (text == null) {
             return;
         }
-        String normalized = text.replaceAll("[，。！？、,.;；:：\\s]+", " ");
+        String normalized = text.replaceAll("[，。！？、,.;:：\\s]+", " ");
         for (String part : normalized.split(" ")) {
             String term = part.trim();
             if (term.length() >= 2 && term.length() <= 12) {

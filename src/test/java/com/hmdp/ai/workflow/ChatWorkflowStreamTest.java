@@ -7,8 +7,8 @@ import com.hmdp.ai.intent.ShopAIIntent;
 import com.hmdp.ai.memory.MemoryService;
 import com.hmdp.ai.orchestration.ShopAIRequestContext;
 import com.hmdp.ai.workflow.request.ChatWorkflowRequest;
-import com.hmdp.dto.ai.ShopAIStreamEvent;
 import com.hmdp.dto.ai.ShopAIResponse;
+import com.hmdp.dto.ai.ShopAIStreamEvent;
 import com.hmdp.entity.ShopSummaryResult;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -130,7 +130,7 @@ class ChatWorkflowStreamTest {
                 .message("summary shop 1")
                 .build());
 
-        assertThat(response.getResponse()).isEqualTo("summary");
+        assertThat(response.getSummary().getCoreSummary()).isEqualTo("summary");
         assertThat(response.getMemoryId()).isEqualTo("chat-memory");
         assertThat(response.getIntent()).isEqualTo(ShopAIIntent.SUMMARY);
         verify(summaryWorkflow).execute(eq(context), any());

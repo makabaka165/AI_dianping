@@ -2,7 +2,7 @@ package com.hmdp.tools;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hmdp.config.AiRequestContext;
-import com.hmdp.dto.ai.ReviewEvidence;
+import com.hmdp.dto.ai.EvidenceItem;
 import com.hmdp.dto.ai.ShopAnalysisContext;
 import com.hmdp.entity.Shop;
 import com.hmdp.mapper.ShopMapper;
@@ -110,7 +110,7 @@ public class ShopTool {
         if (!allowCall(userId, "getShopReviewEvidence", 15, 5)) {
             return error("RATE_LIMITED", "调用过于频繁，请稍后再试");
         }
-        List<ReviewEvidence> evidence = evidenceRetriever.retrieve(shopId, query, null, normalizeLimit(limit, 5));
+        List<EvidenceItem> evidence = evidenceRetriever.retrieve(shopId, query, null, normalizeLimit(limit, 5));
         Map<String, Object> data = new HashMap<>();
         data.put("success", true);
         data.put("shopId", shopId);

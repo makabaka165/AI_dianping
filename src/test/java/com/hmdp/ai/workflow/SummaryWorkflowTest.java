@@ -1,7 +1,9 @@
 package com.hmdp.ai.workflow;
 
 import com.hmdp.ai.memory.MemoryService;
+import com.hmdp.ai.model.ModelGateway;
 import com.hmdp.ai.orchestration.ShopAIRequestContext;
+import com.hmdp.ai.prompt.PromptTemplateRender;
 import com.hmdp.ai.prompt.PromptTemplateRegistry;
 import com.hmdp.ai.workflow.request.SummaryWorkflowRequest;
 import com.hmdp.dto.ai.ShopAnalysisContext;
@@ -26,6 +28,7 @@ import static org.mockito.ArgumentMatchers.same;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.lenient;
 
 @ExtendWith(MockitoExtension.class)
 class SummaryWorkflowTest {
@@ -42,6 +45,12 @@ class SummaryWorkflowTest {
     @Mock
     private MemoryService memoryService;
 
+    @Mock
+    private ModelGateway modelGateway;
+
+    @Mock
+    private PromptTemplateRegistry promptTemplateRegistry;
+
     private SummaryWorkflow workflow;
 
     @BeforeEach
@@ -51,6 +60,15 @@ class SummaryWorkflowTest {
         ReflectionTestUtils.setField(workflow, "shopContextAssembler", shopContextAssembler);
         ReflectionTestUtils.setField(workflow, "aiMetricsService", aiMetricsService);
         ReflectionTestUtils.setField(workflow, "memoryService", memoryService);
+        ReflectionTestUtils.setField(workflow, "modelGateway", modelGateway);
+        ReflectionTestUtils.setField(workflow, "promptTemplateRegistry", promptTemplateRegistry);
+        lenient().when(modelGateway.modelName()).thenReturn("qwen-plus");
+        lenient().when(promptTemplateRegistry.renderSummary(any(), any(), any()))
+                .thenReturn(PromptTemplateRender.builder()
+                        .content("summary prompt")
+                        .version(PromptTemplateRegistry.SUMMARY_VERSION)
+                        .variant("stable")
+                        .build());
     }
 
     @Test
@@ -195,6 +213,6 @@ class SummaryWorkflowTest {
         return LocalCacheManager.CacheKeys.shopSummaryKey(1L)
                 + ":ctx:" + context.getContextVersion()
                 + ":prompt:" + PromptTemplateRegistry.SUMMARY_VERSION
-                + ":model:configured-chat-model";
+                + ":model:qwen-plus";
     }
 }

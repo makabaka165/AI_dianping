@@ -91,15 +91,9 @@ public class ShopSummaryController {
     @SaCheckLogin
     public Result getShopSummary(@PathVariable Long shopId) {
         try {
-            String userId = getCurrentUserId();
             ShopSummaryResult summary = shopAIApplicationService.summary(
-                    userId, shopId, false, "/api/shop-summary/{shopId}");
-            Map<String, Object> resultData = new HashMap<>();
-            resultData.put("summary", summary);
-            appendSummaryMetadata(resultData, summary);
-            resultData.put("message", "店铺总结已生成");
-            resultData.put("timestamp", System.currentTimeMillis());
-            return Result.ok(resultData);
+                    getCurrentUserId(), shopId, false, "/api/shop-summary/{shopId}");
+            return Result.ok(summary);
         } catch (Exception e) {
             log.error("生成店铺总结失败, shopId={}", shopId, e);
             return Result.fail("生成总结失败，请稍后重试");
@@ -110,16 +104,9 @@ public class ShopSummaryController {
     @SaCheckLogin
     public Result getShopSummaryWithMemory(@PathVariable Long shopId) {
         try {
-            String userId = getCurrentUserId();
             ShopSummaryResult summary = shopAIApplicationService.summary(
-                    userId, shopId, true, "/api/shop-summary/{shopId}/with-memory");
-            Map<String, Object> resultData = new HashMap<>();
-            resultData.put("summary", summary);
-            appendSummaryMetadata(resultData, summary);
-            resultData.put("memoryKey", summaryMemoryKey(summary, shopId, userId));
-            resultData.put("message", "店铺总结已生成并保存到记忆中");
-            resultData.put("timestamp", System.currentTimeMillis());
-            return Result.ok(resultData);
+                    getCurrentUserId(), shopId, true, "/api/shop-summary/{shopId}/with-memory");
+            return Result.ok(summary);
         } catch (Exception e) {
             log.error("生成带记忆的店铺总结失败, shopId={}", shopId, e);
             return Result.fail("生成总结失败，请稍后重试");
@@ -133,20 +120,11 @@ public class ShopSummaryController {
             @RequestParam(defaultValue = "5") Integer minLiked,
             @RequestParam(defaultValue = "10") Integer limit) {
         try {
-            String userId = getCurrentUserId();
             ShopSummaryResult summary = shopAIApplicationService.qualitySummary(
-                    userId, shopId, minLiked, limit, true, "/api/shop-summary/{shopId}/quality");
-            Map<String, Object> resultData = new HashMap<>();
-            resultData.put("summary", summary);
-            appendSummaryMetadata(resultData, summary);
-            resultData.put("memoryKey", summaryMemoryKey(summary, shopId, userId));
-            resultData.put("minLiked", minLiked);
-            resultData.put("limit", limit);
-            resultData.put("message", "高质量评价总结已生成");
-            resultData.put("timestamp", System.currentTimeMillis());
-            return Result.ok(resultData);
+                    getCurrentUserId(), shopId, minLiked, limit, true, "/api/shop-summary/{shopId}/quality");
+            return Result.ok(summary);
         } catch (Exception e) {
-            log.error("生成高质量总结失败, shopId={}", shopId, e);
+            log.error("生成高质量评价总结失败, shopId={}", shopId, e);
             return Result.fail("生成总结失败，请稍后重试");
         }
     }
@@ -366,28 +344,6 @@ public class ShopSummaryController {
         }
         resultData.put("timestamp", System.currentTimeMillis());
         return resultData;
-    }
-
-    private void appendSummaryMetadata(Map<String, Object> resultData, ShopSummaryResult summary) {
-        if (summary == null) {
-            return;
-        }
-        resultData.put("traceId", summary.getTraceId());
-        resultData.put("memoryId", summary.getMemoryId());
-        resultData.put("promptVersion", summary.getPromptVersion());
-        resultData.put("modelName", summary.getModelName());
-        resultData.put("evidence", summary.getEvidence());
-        resultData.put("degraded", Boolean.TRUE.equals(summary.getDegraded()));
-        resultData.put("cacheHit", Boolean.TRUE.equals(summary.getCacheHit()));
-        resultData.put("fallbackReason", summary.getFallbackReason());
-        resultData.put("confidence", summary.getConfidence());
-    }
-
-    private String summaryMemoryKey(ShopSummaryResult summary, Long shopId, String userId) {
-        if (summary != null && summary.getMemoryId() != null && !summary.getMemoryId().trim().isEmpty()) {
-            return summary.getMemoryId();
-        }
-        return keyManager.buildShopSummaryKey(shopId, userId);
     }
 
     private ServerSentEvent<ShopAIStreamEvent> streamError(String message) {

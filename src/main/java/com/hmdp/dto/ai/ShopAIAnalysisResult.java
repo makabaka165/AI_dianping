@@ -19,14 +19,14 @@ public class ShopAIAnalysisResult {
     private List<String> pros;
     private List<String> cons;
     private Double confidence;
-    private List<Long> evidenceIds;
+    private List<String> evidenceIds;
     private Boolean degraded;
 
     public List<String> safeKeywords() {
         return keywords == null ? new ArrayList<>() : keywords;
     }
 
-    public List<Long> safeEvidenceIds() {
+    public List<String> safeEvidenceIds() {
         return evidenceIds == null ? new ArrayList<>() : evidenceIds;
     }
 }

@@ -1,6 +1,12 @@
 package com.hmdp.ai.fallback;
 
 import com.hmdp.dto.ai.ShopAIAnalysisResult;
+import com.hmdp.dto.ai.ShopChatResult;
+import com.hmdp.dto.ai.ShopCompareResult;
+import com.hmdp.dto.ai.ShopQAResult;
+import com.hmdp.dto.ai.ShopRecommendResult;
+import com.hmdp.dto.ai.ShopRecommendationItem;
+import com.hmdp.entity.Shop;
 import com.hmdp.service.AiMetricsService;
 import com.hmdp.service.impl.AIFallbackService;
 import lombok.extern.slf4j.Slf4j;
@@ -73,6 +79,71 @@ public class FallbackPolicy {
     public String fallbackSummary(Long shopId, String analysisType) {
         aiMetricsService.increment("ai.fallback.count", analysisType, true);
         return aiFallbackService.generateSummaryFallback(shopId);
+    }
+
+    public ShopQAResult fallbackQA(Long shopId, String question, String analysisType) {
+        aiMetricsService.increment("ai.fallback.count", analysisType, true);
+        return ShopQAResult.builder()
+                .shopId(shopId)
+                .question(question)
+                .answer("当前 AI 服务不可用，无法可靠回答该店铺问题。请稍后重试。")
+                .evidenceIds(Collections.emptyList())
+                .insufficientEvidence(true)
+                .build();
+    }
+
+    public ShopCompareResult fallbackCompare(Long shopId1, Long shopId2, String aspect, String analysisType) {
+        aiMetricsService.increment("ai.fallback.count", analysisType, true);
+        return ShopCompareResult.builder()
+                .shopId1(shopId1)
+                .shopId2(shopId2)
+                .aspect(aspect)
+                .conclusion("当前 AI 服务不可用，无法基于证据给出可靠对比结论。")
+                .winnerByAspect(ShopCompareResult.INSUFFICIENT)
+                .shop1Score(0)
+                .shop2Score(0)
+                .shop1Pros(Collections.emptyList())
+                .shop2Pros(Collections.emptyList())
+                .riskNotes(List.of("AI 降级结果，不应作为最终决策依据"))
+                .evidenceIds(Collections.emptyList())
+                .build();
+    }
+
+    public ShopRecommendResult fallbackRecommend(String userPreference,
+                                                 String category,
+                                                 List<Shop> candidates,
+                                                 int limit,
+                                                 String analysisType) {
+        aiMetricsService.increment("ai.fallback.count", analysisType, true);
+        List<ShopRecommendationItem> items = candidates == null ? Collections.emptyList() : candidates.stream()
+                .limit(Math.max(1, Math.min(10, limit)))
+                .map(shop -> ShopRecommendationItem.builder()
+                        .rank(candidates.indexOf(shop) + 1)
+                        .shopId(shop.getId())
+                        .shopName(shop.getName())
+                        .reason("AI 服务不可用，仅按候选店铺公开热度信息保守返回。")
+                        .suitableFor("需要先浏览候选店铺公开信息的用户")
+                        .uncertainty("缺少模型分析，推荐理由可信度较低。")
+                        .evidenceIds(Collections.emptyList())
+                        .confidence(0.3)
+                        .build())
+                .collect(Collectors.toList());
+        return ShopRecommendResult.builder()
+                .userPreference(userPreference)
+                .category(category)
+                .message(items.isEmpty() ? "当前候选店铺数据不足，无法给出可靠推荐。" : "AI 降级推荐，仅供参考。")
+                .items(items)
+                .build();
+    }
+
+    public ShopChatResult fallbackChat(String message, String analysisType) {
+        aiMetricsService.increment("ai.fallback.count", analysisType, true);
+        return ShopChatResult.builder()
+                .message(message == null || message.trim().isEmpty()
+                        ? "当前 AI 服务不可用，请稍后重试。"
+                        : "当前 AI 服务不可用。我可以在恢复后帮你做店铺总结、评价问答、店铺对比和推荐。")
+                .clarification(false)
+                .build();
     }
 
     private List<String> parseKeywords(String keywordsStr) {

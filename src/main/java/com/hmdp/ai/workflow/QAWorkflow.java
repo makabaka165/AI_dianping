@@ -7,19 +7,26 @@ import com.hmdp.ai.intent.ShopAIIntent;
 import com.hmdp.ai.memory.MemoryService;
 import com.hmdp.ai.model.ModelGateway;
 import com.hmdp.ai.orchestration.ShopAIRequestContext;
+import com.hmdp.ai.prompt.PromptTemplateRender;
 import com.hmdp.ai.prompt.PromptTemplateRegistry;
 import com.hmdp.ai.workflow.request.QAWorkflowRequest;
+import com.hmdp.dto.ai.EvidenceItem;
 import com.hmdp.dto.ai.ShopAIResponse;
 import com.hmdp.dto.ai.ShopAnalysisContext;
+import com.hmdp.dto.ai.ShopQAResult;
 import com.hmdp.service.AiMetricsService;
 import com.hmdp.service.ShopContextAssembler;
 import org.springframework.stereotype.Component;
 
 import javax.annotation.Resource;
 import java.util.Collections;
+import java.util.List;
 
 @Component
 public class QAWorkflow implements ShopAIWorkflow<QAWorkflowRequest, ShopAIResponse> {
+
+    private static final String ANALYSIS_TYPE = "ask";
+    private static final String MODEL_OPERATION = "ask:analyzeShopData";
 
     @Resource
     private ShopContextAssembler shopContextAssembler;
@@ -56,72 +63,65 @@ public class QAWorkflow implements ShopAIWorkflow<QAWorkflowRequest, ShopAIRespo
         if (isBlank(request.getQuestion())) {
             throw new IllegalArgumentException("问题不能为空");
         }
-
         String memoryId = memoryService.shopQAKey(request.getShopId(), context.getUserId());
         context.setMemoryId(memoryId);
         ShopAnalysisContext shopContext = shopContextAssembler.buildForShop(request.getShopId(), request.getQuestion());
         if (shopContext.safeEvidence().isEmpty()) {
-            return insufficientEvidence(request.getShopId(), context, "当前评价证据不足以判断店铺" + request.getShopId() + "的情况。");
+            return insufficientEvidence(request.getShopId(), request.getQuestion(), context,
+                    "当前评价证据不足以判断店铺" + request.getShopId() + "的情况。");
         }
-
-        String summaryMemory = memoryService.readSummaryMemory(
-                memoryService.shopSummaryKey(request.getShopId(), context.getUserId()));
-        String prompt = promptTemplateRegistry.qaPrompt(
+        String summaryMemory = memoryService.readSummaryMemory(memoryService.shopSummaryKey(request.getShopId(), context.getUserId()));
+        PromptTemplateRender prompt = promptTemplateRegistry.renderQA(
+                context,
+                request.getShopId(),
                 request.getQuestion(),
                 summaryMemory,
                 shopContextAssembler.toPromptBlock(shopContext));
         boolean degraded = false;
-        String answer;
-        if (fallbackPolicy.shouldUseFallback("analyzeShopData")) {
-            answer = fallbackPolicy.fallbackText(memoryId, prompt, "ask");
+        ShopQAResult qa;
+        if (fallbackPolicy.shouldUseFallback(MODEL_OPERATION)) {
+            qa = fallbackPolicy.fallbackQA(request.getShopId(), request.getQuestion(), ANALYSIS_TYPE);
             degraded = true;
         } else {
             try {
-                answer = modelGateway.generateAnswer(memoryId, prompt);
-                QualityCheck quality = qualityGuard.validateText(answer, "ask");
+                qa = modelGateway.generateStructuredAnswer(memoryId, prompt.getContent(), request.getShopId(),
+                        request.getQuestion(), shopContext.safeEvidence());
+                QualityCheck quality = qualityGuard.validateQA(qa, shopContext.safeEvidence(), ANALYSIS_TYPE);
                 if (!quality.pass()) {
-                    answer = fallbackPolicy.fallbackText(memoryId, prompt, "ask");
-                    degraded = true;
+                    qa = modelGateway.repairStructuredAnswer(memoryId, prompt.getContent(), request.getShopId(),
+                            request.getQuestion(), quality.getReason());
+                    quality = qualityGuard.validateQA(qa, shopContext.safeEvidence(), ANALYSIS_TYPE);
+                    if (!quality.pass()) {
+                        qa = fallbackPolicy.fallbackQA(request.getShopId(), request.getQuestion(), ANALYSIS_TYPE);
+                        degraded = true;
+                    } else {
+                        qa.setAnswer(qualityGuard.postProcess(qa.getAnswer()));
+                    }
                 } else {
-                    answer = qualityGuard.postProcess(answer);
+                    qa.setAnswer(qualityGuard.postProcess(qa.getAnswer()));
                 }
             } catch (Exception e) {
-                fallbackPolicy.recordFailure("analyzeShopData");
-                answer = fallbackPolicy.fallbackText(memoryId, prompt, "ask");
+                fallbackPolicy.recordFailure(MODEL_OPERATION);
+                qa = fallbackPolicy.fallbackQA(request.getShopId(), request.getQuestion(), ANALYSIS_TYPE);
                 degraded = true;
             }
         }
-        aiMetricsService.recordDuration("ask", System.currentTimeMillis() - start, degraded);
-        aiMetricsService.increment("ai.evidence.count", "ask", degraded);
-        return ShopAIResponse.builder()
-                .answer(answer)
-                .response(answer)
-                .shopId(request.getShopId())
-                .sessionId(context.getSessionId())
-                .memoryId(memoryId)
-                .traceId(context.getTraceId())
-                .evidence(shopContext.safeEvidence())
-                .confidence(degraded ? 0.35 : 0.75)
-                .degraded(degraded)
-                .cacheHit(false)
-                .usedTools(Collections.emptyList())
-                .build();
+        aiMetricsService.recordDuration(ANALYSIS_TYPE, System.currentTimeMillis() - start, degraded);
+        aiMetricsService.recordEvidenceCount(ANALYSIS_TYPE, shopContext.safeEvidence().size(), "hybrid");
+        return response(context, shopContext.safeEvidence(), qa, degraded, degraded ? 0.35 : 0.7, null,
+                prompt.getVersion());
     }
 
     public StreamWorkflowPlan prepareStreamPlan(ShopAIRequestContext context, QAWorkflowRequest request) {
         if (request.getShopId() == null || request.getShopId() <= 0) {
             throw new IllegalArgumentException("shopId must be positive");
         }
-        if (isBlank(request.getQuestion())) {
-            throw new IllegalArgumentException("question must not be blank");
-        }
-
         String memoryId = memoryService.shopQAKey(request.getShopId(), context.getUserId());
         context.setMemoryId(memoryId);
         ShopAnalysisContext shopContext = shopContextAssembler.buildForShop(request.getShopId(), request.getQuestion());
         if (shopContext.safeEvidence().isEmpty()) {
             return StreamWorkflowPlan.builder()
-                    .analysisType("ask")
+                    .analysisType(ANALYSIS_TYPE)
                     .memoryId(memoryId)
                     .directText("当前评价证据不足以判断店铺" + request.getShopId() + "的情况。")
                     .evidence(Collections.emptyList())
@@ -130,38 +130,57 @@ public class QAWorkflow implements ShopAIWorkflow<QAWorkflowRequest, ShopAIRespo
                     .cacheHit(false)
                     .build();
         }
-
-        String summaryMemory = memoryService.readSummaryMemory(
-                memoryService.shopSummaryKey(request.getShopId(), context.getUserId()));
-        String prompt = promptTemplateRegistry.qaPrompt(
+        String summaryMemory = memoryService.readSummaryMemory(memoryService.shopSummaryKey(request.getShopId(), context.getUserId()));
+        PromptTemplateRender prompt = promptTemplateRegistry.renderQA(
+                context,
+                request.getShopId(),
                 request.getQuestion(),
                 summaryMemory,
                 shopContextAssembler.toPromptBlock(shopContext));
-
         return StreamWorkflowPlan.builder()
-                .analysisType("ask")
+                .analysisType(ANALYSIS_TYPE)
                 .memoryId(memoryId)
-                .prompt(prompt)
+                .prompt(prompt.getContent())
+                .promptVersion(prompt.getVersion())
                 .evidence(shopContext.safeEvidence())
-                .confidence(0.75)
+                .confidence(0.7)
                 .degraded(false)
                 .cacheHit(false)
                 .build();
     }
 
-    private ShopAIResponse insufficientEvidence(Long shopId, ShopAIRequestContext context, String answer) {
-        return ShopAIResponse.builder()
-                .answer(answer)
-                .response(answer)
+    private ShopAIResponse insufficientEvidence(Long shopId,
+                                                String question,
+                                                ShopAIRequestContext context,
+                                                String answer) {
+        ShopQAResult qa = ShopQAResult.builder()
                 .shopId(shopId)
+                .question(question)
+                .answer(answer)
+                .evidenceIds(Collections.emptyList())
+                .insufficientEvidence(true)
+                .build();
+        return response(context, Collections.emptyList(), qa, false, 0.2, null, PromptTemplateRegistry.QA_VERSION);
+    }
+
+    private ShopAIResponse response(ShopAIRequestContext context,
+                                    List<EvidenceItem> evidence,
+                                    ShopQAResult qa,
+                                    boolean degraded,
+                                    double confidence,
+                                    String fallbackReason,
+                                    String promptVersion) {
+        return ShopAIResponse.builder()
+                .qa(qa)
                 .sessionId(context.getSessionId())
                 .memoryId(context.getMemoryId())
                 .traceId(context.getTraceId())
-                .evidence(Collections.emptyList())
-                .confidence(0.2)
-                .degraded(false)
+                .promptVersion(promptVersion)
+                .evidence(evidence)
+                .confidence(confidence)
+                .degraded(degraded)
                 .cacheHit(false)
-                .usedTools(Collections.emptyList())
+                .fallbackReason(fallbackReason)
                 .build();
     }
 

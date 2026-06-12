@@ -7,10 +7,14 @@ import com.hmdp.ai.intent.ShopAIIntent;
 import com.hmdp.ai.memory.MemoryService;
 import com.hmdp.ai.model.ModelGateway;
 import com.hmdp.ai.orchestration.ShopAIRequestContext;
+import com.hmdp.ai.prompt.PromptTemplateRender;
 import com.hmdp.ai.prompt.PromptTemplateRegistry;
 import com.hmdp.ai.workflow.request.RecommendWorkflowRequest;
-import com.hmdp.dto.ai.ReviewEvidence;
+import com.hmdp.dto.ai.EvidenceItem;
+import com.hmdp.dto.ai.EvidenceType;
 import com.hmdp.dto.ai.ShopAIResponse;
+import com.hmdp.dto.ai.ShopProfileSnapshot;
+import com.hmdp.dto.ai.ShopRecommendResult;
 import com.hmdp.entity.Shop;
 import com.hmdp.mapper.ShopMapper;
 import com.hmdp.service.AiMetricsService;
@@ -21,10 +25,14 @@ import javax.annotation.Resource;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 @Component
 public class RecommendWorkflow implements ShopAIWorkflow<RecommendWorkflowRequest, ShopAIResponse> {
 
+    private static final String ANALYSIS_TYPE = "recommend";
+    private static final String MODEL_OPERATION = "recommend:analyzeShopData";
     private static final int EVIDENCE_SNIPPET_LIMIT = 300;
     private static final int SHOP_FIELD_LIMIT = 120;
 
@@ -68,61 +76,60 @@ public class RecommendWorkflow implements ShopAIWorkflow<RecommendWorkflowReques
         context.setMemoryId(memoryId);
         List<Shop> candidates = shopMapper.selectRecommendCandidates(request.getCategory(), safeLimit);
         if (candidates == null || candidates.isEmpty()) {
-            String response = "当前候选店铺数据不足，无法基于该偏好给出可靠推荐。";
-            return ShopAIResponse.builder()
-                    .recommendations(response)
-                    .response(response)
-                    .sessionId(context.getSessionId())
-                    .memoryId(memoryId)
-                    .traceId(context.getTraceId())
-                    .evidence(Collections.emptyList())
-                    .confidence(0.2)
-                    .degraded(false)
-                    .cacheHit(false)
-                    .usedTools(Collections.emptyList())
+            ShopRecommendResult recommend = ShopRecommendResult.builder()
+                    .userPreference(request.getUserPreference())
+                    .category(request.getCategory())
+                    .message("当前候选店铺数据不足，无法基于该偏好给出可靠推荐。")
+                    .items(Collections.emptyList())
                     .build();
+            return response(context, Collections.emptyList(), recommend, false, 0.2, null,
+                    PromptTemplateRegistry.RECOMMEND_VERSION);
         }
 
-        List<ReviewEvidence> evidence = recommendationEvidence(candidates, request.getUserPreference(), request.getCategory());
-        String prompt = promptTemplateRegistry.recommendPrompt(
+        List<EvidenceItem> evidence = recommendationEvidence(candidates, request.getUserPreference(), request.getCategory());
+        PromptTemplateRender prompt = promptTemplateRegistry.renderRecommend(
+                context,
                 request.getUserPreference(),
                 request.getCategory(),
                 safeLimit,
                 candidateBlock(candidates) + evidenceBlock(evidence));
+        Set<Long> candidateShopIds = candidates.stream()
+                .filter(shop -> shop != null && shop.getId() != null)
+                .map(Shop::getId)
+                .collect(Collectors.toSet());
         boolean degraded = false;
-        String recommendations;
-        if (fallbackPolicy.shouldUseFallback("analyzeShopData")) {
-            recommendations = fallbackPolicy.fallbackText(memoryId, prompt, "recommend");
+        ShopRecommendResult recommend;
+        if (fallbackPolicy.shouldUseFallback(MODEL_OPERATION)) {
+            recommend = fallbackPolicy.fallbackRecommend(request.getUserPreference(), request.getCategory(),
+                    candidates, safeLimit, ANALYSIS_TYPE);
             degraded = true;
         } else {
             try {
-                recommendations = modelGateway.generateRecommendation(memoryId, prompt);
-                QualityCheck quality = qualityGuard.validateText(recommendations, "recommend");
+                recommend = modelGateway.generateStructuredRecommendation(memoryId, prompt.getContent(), request.getUserPreference(),
+                        request.getCategory(), candidates, evidence);
+                QualityCheck quality = qualityGuard.validateRecommend(recommend, candidateShopIds, evidence, ANALYSIS_TYPE);
                 if (!quality.pass()) {
-                    recommendations = fallbackPolicy.fallbackText(memoryId, prompt, "recommend");
-                    degraded = true;
-                } else {
-                    recommendations = qualityGuard.postProcess(recommendations);
+                    recommend = modelGateway.repairStructuredRecommendation(memoryId, prompt.getContent(), request.getUserPreference(),
+                            request.getCategory(), candidates, quality.getReason());
+                    quality = qualityGuard.validateRecommend(recommend, candidateShopIds, evidence, ANALYSIS_TYPE);
+                    if (!quality.pass()) {
+                        recommend = fallbackPolicy.fallbackRecommend(request.getUserPreference(), request.getCategory(),
+                                candidates, safeLimit, ANALYSIS_TYPE);
+                        degraded = true;
+                    }
                 }
             } catch (Exception e) {
-                fallbackPolicy.recordFailure("analyzeShopData");
-                recommendations = fallbackPolicy.fallbackText(memoryId, prompt, "recommend");
+                fallbackPolicy.recordFailure(MODEL_OPERATION);
+                recommend = fallbackPolicy.fallbackRecommend(request.getUserPreference(), request.getCategory(),
+                        candidates, safeLimit, ANALYSIS_TYPE);
                 degraded = true;
             }
         }
-        aiMetricsService.recordDuration("recommend", System.currentTimeMillis() - start, degraded);
-        return ShopAIResponse.builder()
-                .recommendations(recommendations)
-                .response(recommendations)
-                .sessionId(context.getSessionId())
-                .memoryId(memoryId)
-                .traceId(context.getTraceId())
-                .evidence(evidence)
-                .confidence(degraded ? 0.35 : 0.7)
-                .degraded(degraded)
-                .cacheHit(false)
-                .usedTools(Collections.emptyList())
-                .build();
+        aiMetricsService.recordDuration(ANALYSIS_TYPE, System.currentTimeMillis() - start, degraded);
+        aiMetricsService.recordEvidenceCount(ANALYSIS_TYPE, evidence.size(), "hybrid");
+        return response(context, evidence, recommend, degraded, degraded ? 0.35 : 0.7,
+                degraded ? "AI_MODEL_OR_QUALITY_FALLBACK" : null,
+                prompt.getVersion());
     }
 
     public StreamWorkflowPlan prepareStreamPlan(ShopAIRequestContext context, RecommendWorkflowRequest request) {
@@ -135,7 +142,7 @@ public class RecommendWorkflow implements ShopAIWorkflow<RecommendWorkflowReques
         List<Shop> candidates = shopMapper.selectRecommendCandidates(request.getCategory(), safeLimit);
         if (candidates == null || candidates.isEmpty()) {
             return StreamWorkflowPlan.builder()
-                    .analysisType("recommend")
+                    .analysisType(ANALYSIS_TYPE)
                     .memoryId(memoryId)
                     .directText("当前候选店铺数据不足，无法基于该偏好给出可靠推荐。")
                     .evidence(Collections.emptyList())
@@ -145,16 +152,18 @@ public class RecommendWorkflow implements ShopAIWorkflow<RecommendWorkflowReques
                     .build();
         }
 
-        List<ReviewEvidence> evidence = recommendationEvidence(candidates, request.getUserPreference(), request.getCategory());
-        String prompt = promptTemplateRegistry.recommendPrompt(
+        List<EvidenceItem> evidence = recommendationEvidence(candidates, request.getUserPreference(), request.getCategory());
+        PromptTemplateRender prompt = promptTemplateRegistry.renderRecommend(
+                context,
                 request.getUserPreference(),
                 request.getCategory(),
                 safeLimit,
                 candidateBlock(candidates) + evidenceBlock(evidence));
         return StreamWorkflowPlan.builder()
-                .analysisType("recommend")
+                .analysisType(ANALYSIS_TYPE)
                 .memoryId(memoryId)
-                .prompt(prompt)
+                .prompt(prompt.getContent())
+                .promptVersion(prompt.getVersion())
                 .evidence(evidence)
                 .confidence(0.7)
                 .degraded(false)
@@ -162,8 +171,8 @@ public class RecommendWorkflow implements ShopAIWorkflow<RecommendWorkflowReques
                 .build();
     }
 
-    private List<ReviewEvidence> recommendationEvidence(List<Shop> candidates, String preference, String category) {
-        List<ReviewEvidence> evidence = new ArrayList<>();
+    private List<EvidenceItem> recommendationEvidence(List<Shop> candidates, String preference, String category) {
+        List<EvidenceItem> evidence = new ArrayList<>();
         if (candidates == null) {
             return evidence;
         }
@@ -171,10 +180,9 @@ public class RecommendWorkflow implements ShopAIWorkflow<RecommendWorkflowReques
             if (shop == null || shop.getId() == null) {
                 continue;
             }
-            List<ReviewEvidence> reviews = evidenceRetriever.retrieve(shop.getId(), preference, category, 2);
-            if (reviews == null || reviews.isEmpty()) {
-                evidence.add(profileEvidence(shop));
-            } else {
+            evidence.add(profileEvidence(shop));
+            List<EvidenceItem> reviews = evidenceRetriever.retrieve(shop.getId(), preference, category, 2);
+            if (reviews != null) {
                 evidence.addAll(reviews);
             }
             if (evidence.size() >= 10) {
@@ -184,36 +192,41 @@ public class RecommendWorkflow implements ShopAIWorkflow<RecommendWorkflowReques
         return evidence;
     }
 
-    private ReviewEvidence profileEvidence(Shop shop) {
+    private EvidenceItem profileEvidence(Shop shop) {
+        ShopProfileSnapshot profile = ShopProfileSnapshot.from(shop);
         String snippet = "shopId=" + shop.getId()
                 + ", name=" + truncate(shop.getName(), SHOP_FIELD_LIMIT)
                 + ", area=" + truncate(shop.getArea(), SHOP_FIELD_LIMIT)
                 + ", avgPrice=" + shop.getAvgPrice()
                 + ", sold=" + shop.getSold()
                 + ", comments=" + shop.getComments()
-                + ", score=" + shop.getScore();
-        return ReviewEvidence.builder()
-                .blogId(null)
+                + ", score=" + shop.getScore()
+                + ", openHours=" + truncate(shop.getOpenHours(), SHOP_FIELD_LIMIT);
+        return EvidenceItem.builder()
+                .id(EvidenceItem.shopProfileId(shop.getId()))
+                .type(EvidenceType.SHOP_PROFILE)
                 .shopId(shop.getId())
+                .sourceId(shop.getId())
+                .title("店铺公开资料#" + shop.getId())
                 .snippet(snippet)
                 .liked(0)
                 .matchedReason("recommend candidate profile")
                 .score(0.45)
+                .shopProfile(profile)
                 .build();
     }
 
-    private String evidenceBlock(List<ReviewEvidence> evidence) {
+    private String evidenceBlock(List<EvidenceItem> evidence) {
         if (evidence == null || evidence.isEmpty()) {
-            return "\n候选证据: 暂无评价证据，仅可基于候选店铺公开字段做低置信推荐。\n";
+            return "\n候选证据：暂无评价证据，仅可基于候选店铺公开字段做低置信推荐。\n";
         }
         StringBuilder builder = new StringBuilder("\n候选证据:\n");
         int index = 1;
-        for (ReviewEvidence item : evidence) {
-            builder.append("[证据").append(index++).append(" shopId=").append(item.getShopId());
-            if (item.getBlogId() != null) {
-                builder.append(", blogId=").append(item.getBlogId());
-            }
-            builder.append("] ")
+        for (EvidenceItem item : evidence) {
+            builder.append("[证据").append(index++).append(" evidenceId=").append(item.getId())
+                    .append(", type=").append(item.getType())
+                    .append(", shopId=").append(item.getShopId())
+                    .append("] ")
                     .append(item.getMatchedReason())
                     .append(": ")
                     .append(truncate(item.getSnippet(), EVIDENCE_SNIPPET_LIMIT))
@@ -223,7 +236,7 @@ public class RecommendWorkflow implements ShopAIWorkflow<RecommendWorkflowReques
     }
 
     private String candidateBlock(List<Shop> candidates) {
-        StringBuilder builder = new StringBuilder("候选店铺：\n");
+        StringBuilder builder = new StringBuilder("候选店铺:\n");
         for (Shop shop : candidates) {
             builder.append("- 店铺ID=").append(shop.getId())
                     .append(", 名称=").append(truncate(shop.getName(), SHOP_FIELD_LIMIT))
@@ -232,9 +245,31 @@ public class RecommendWorkflow implements ShopAIWorkflow<RecommendWorkflowReques
                     .append(", 销量=").append(shop.getSold())
                     .append(", 评论数=").append(shop.getComments())
                     .append(", 评分=").append(shop.getScore())
+                    .append(", 公开资料证据ID=").append(EvidenceItem.shopProfileId(shop.getId()))
                     .append("\n");
         }
         return builder.toString();
+    }
+
+    private ShopAIResponse response(ShopAIRequestContext context,
+                                    List<EvidenceItem> evidence,
+                                    ShopRecommendResult recommend,
+                                    boolean degraded,
+                                    double confidence,
+                                    String fallbackReason,
+                                    String promptVersion) {
+        return ShopAIResponse.builder()
+                .recommend(recommend)
+                .sessionId(context.getSessionId())
+                .memoryId(context.getMemoryId())
+                .traceId(context.getTraceId())
+                .promptVersion(promptVersion)
+                .evidence(evidence)
+                .confidence(confidence)
+                .degraded(degraded)
+                .cacheHit(false)
+                .fallbackReason(fallbackReason)
+                .build();
     }
 
     private int normalizeLimit(Integer limit, int defaultLimit) {
@@ -246,10 +281,6 @@ public class RecommendWorkflow implements ShopAIWorkflow<RecommendWorkflowReques
 
     private boolean isBlank(String value) {
         return value == null || value.trim().isEmpty();
-    }
-
-    private String nullSafe(String value) {
-        return value == null ? "" : value;
     }
 
     private String truncate(String value, int maxLength) {

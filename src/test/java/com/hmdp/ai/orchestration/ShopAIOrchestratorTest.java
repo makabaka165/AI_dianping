@@ -11,6 +11,7 @@ import com.hmdp.ai.workflow.request.QAWorkflowRequest;
 import com.hmdp.ai.workflow.request.QualitySummaryWorkflowRequest;
 import com.hmdp.ai.workflow.request.SummaryWorkflowRequest;
 import com.hmdp.dto.ai.ShopAIResponse;
+import com.hmdp.dto.ai.ShopQAResult;
 import com.hmdp.entity.ShopSummaryResult;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -75,7 +76,9 @@ class ShopAIOrchestratorTest {
     void askShouldRouteToQAWorkflow() {
         ShopAIRequestContext context = ShopAIRequestContext.builder().build();
         QAWorkflowRequest request = QAWorkflowRequest.builder().shopId(1L).question("服务怎么样").build();
-        ShopAIResponse expected = ShopAIResponse.builder().answer("ok").build();
+        ShopAIResponse expected = ShopAIResponse.builder()
+                .qa(ShopQAResult.builder().shopId(1L).question("服务怎么样").answer("ok").build())
+                .build();
         when(qaWorkflow.execute(context, request)).thenReturn(expected);
 
         ShopAIResponse result = orchestrator.ask(context, request);

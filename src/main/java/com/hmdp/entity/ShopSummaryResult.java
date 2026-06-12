@@ -1,6 +1,6 @@
 package com.hmdp.entity;
 
-import com.hmdp.dto.ai.ReviewEvidence;
+import com.hmdp.dto.ai.EvidenceItem;
 import lombok.Builder;
 import lombok.Data;
 
@@ -26,7 +26,7 @@ public class ShopSummaryResult {
 
     private LocalDateTime summaryTime; // 总结时间
 
-    private List<ReviewEvidence> evidence;
+    private List<EvidenceItem> evidence;
 
     private Double confidence;
 

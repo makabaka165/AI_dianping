@@ -16,12 +16,13 @@ import java.util.List;
 public class ShopAnalysisContext {
     private Long shopId;
     private String shopName;
+    private ShopProfileSnapshot shopProfile;
     private Integer totalReviews;
     private LocalDateTime latestReviewTime;
     private String contextVersion;
-    private List<ReviewEvidence> evidence;
+    private List<EvidenceItem> evidence;
 
-    public List<ReviewEvidence> safeEvidence() {
+    public List<EvidenceItem> safeEvidence() {
         return evidence == null ? new ArrayList<>() : evidence;
     }
 }

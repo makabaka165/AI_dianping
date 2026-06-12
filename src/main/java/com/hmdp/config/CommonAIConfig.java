@@ -72,6 +72,9 @@ public class CommonAIConfig {
     @Value("${langchain4j.open-ai.chat-model.temperature:0.3}")
     private double temperature;
 
+    @Value("${langchain4j.open-ai.chat-model.repair-temperature:0.1}")
+    private double repairTemperature;
+
     @Value("${langchain4j.open-ai.chat-model.log-requests:false}")
     private boolean logRequests;
 
@@ -218,6 +221,21 @@ public class CommonAIConfig {
                 .modelName(modelName)
                 .baseUrl(baseUrl)
                 .temperature(temperature)
+                .maxTokens(1500)
+                .timeout(modelTimeout())
+                .logRequests(logRequests)
+                .logResponses(logResponses)
+                .build();
+    }
+
+    @Bean("repairChatLanguageModel")
+    public ChatLanguageModel repairChatLanguageModel() {
+        log.info("初始化 Repair ChatLanguageModel: {}, temperature={}", modelName, repairTemperature);
+        return OpenAiChatModel.builder()
+                .apiKey(apiKey)
+                .modelName(modelName)
+                .baseUrl(baseUrl)
+                .temperature(repairTemperature)
                 .maxTokens(1500)
                 .timeout(modelTimeout())
                 .logRequests(logRequests)

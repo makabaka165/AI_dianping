@@ -16,6 +16,7 @@ import com.hmdp.ai.workflow.request.SummaryWorkflowRequest;
 import com.hmdp.dto.ai.ShopAIResponse;
 import com.hmdp.dto.ai.ShopAIStreamEvent;
 import com.hmdp.entity.ShopSummaryResult;
+import com.hmdp.service.AiMetricsService;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
@@ -43,38 +44,129 @@ public class ShopAIOrchestrator {
     @Resource
     private RecommendWorkflow recommendWorkflow;
 
+    @Resource
+    private AiMetricsService aiMetricsService;
+
     public ShopAIResponse chat(ShopAIRequestContext context, ChatWorkflowRequest request) {
+        long start = System.currentTimeMillis();
         context.setIntent(ShopAIIntent.FREE_CHAT);
-        return chatWorkflow.execute(context, request);
+        try {
+            ShopAIResponse response = chatWorkflow.execute(context, request);
+            recordResponse(context, response, start, "success");
+            return response;
+        } catch (RuntimeException e) {
+            recordFailure(context, start);
+            throw e;
+        }
     }
 
     public Flux<ServerSentEvent<ShopAIStreamEvent>> chatStream(ShopAIRequestContext context, ChatWorkflowRequest request) {
-        context.setIntent(ShopAIIntent.FREE_CHAT);
-        return chatWorkflow.stream(context, request);
+        return Flux.defer(() -> {
+            long start = System.currentTimeMillis();
+            context.setIntent(ShopAIIntent.FREE_CHAT);
+            return chatWorkflow.stream(context, request)
+                    .doOnComplete(() -> recordRequest(context, start, false, false, "success"))
+                    .doOnError(e -> recordRequest(context, start, true, false, "failure"));
+        });
     }
 
     public ShopSummaryResult summary(ShopAIRequestContext context, SummaryWorkflowRequest request) {
+        long start = System.currentTimeMillis();
         context.setIntent(ShopAIIntent.SUMMARY);
-        return summaryWorkflow.execute(context, request);
+        try {
+            ShopSummaryResult response = summaryWorkflow.execute(context, request);
+            recordSummary(context, response, start, "success");
+            return response;
+        } catch (RuntimeException e) {
+            recordFailure(context, start);
+            throw e;
+        }
     }
 
     public ShopSummaryResult qualitySummary(ShopAIRequestContext context, QualitySummaryWorkflowRequest request) {
+        long start = System.currentTimeMillis();
         context.setIntent(ShopAIIntent.SUMMARY);
-        return qualitySummaryWorkflow.execute(context, request);
+        try {
+            ShopSummaryResult response = qualitySummaryWorkflow.execute(context, request);
+            recordSummary(context, response, start, "success");
+            return response;
+        } catch (RuntimeException e) {
+            recordFailure(context, start);
+            throw e;
+        }
     }
 
     public ShopAIResponse ask(ShopAIRequestContext context, QAWorkflowRequest request) {
+        long start = System.currentTimeMillis();
         context.setIntent(ShopAIIntent.QA);
-        return qaWorkflow.execute(context, request);
+        try {
+            ShopAIResponse response = qaWorkflow.execute(context, request);
+            recordResponse(context, response, start, "success");
+            return response;
+        } catch (RuntimeException e) {
+            recordFailure(context, start);
+            throw e;
+        }
     }
 
     public ShopAIResponse compare(ShopAIRequestContext context, CompareWorkflowRequest request) {
+        long start = System.currentTimeMillis();
         context.setIntent(ShopAIIntent.COMPARE);
-        return compareWorkflow.execute(context, request);
+        try {
+            ShopAIResponse response = compareWorkflow.execute(context, request);
+            recordResponse(context, response, start, "success");
+            return response;
+        } catch (RuntimeException e) {
+            recordFailure(context, start);
+            throw e;
+        }
     }
 
     public ShopAIResponse recommend(ShopAIRequestContext context, RecommendWorkflowRequest request) {
+        long start = System.currentTimeMillis();
         context.setIntent(ShopAIIntent.RECOMMEND);
-        return recommendWorkflow.execute(context, request);
+        try {
+            ShopAIResponse response = recommendWorkflow.execute(context, request);
+            recordResponse(context, response, start, "success");
+            return response;
+        } catch (RuntimeException e) {
+            recordFailure(context, start);
+            throw e;
+        }
+    }
+
+    private void recordResponse(ShopAIRequestContext context, ShopAIResponse response, long start, String result) {
+        boolean degraded = response != null && Boolean.TRUE.equals(response.getDegraded());
+        boolean cacheHit = response != null && Boolean.TRUE.equals(response.getCacheHit());
+        recordRequest(context, start, degraded, cacheHit, result);
+    }
+
+    private void recordSummary(ShopAIRequestContext context, ShopSummaryResult response, long start, String result) {
+        boolean degraded = response != null && Boolean.TRUE.equals(response.getDegraded());
+        boolean cacheHit = response != null && Boolean.TRUE.equals(response.getCacheHit());
+        recordRequest(context, start, degraded, cacheHit, result);
+    }
+
+    private void recordFailure(ShopAIRequestContext context, long start) {
+        recordRequest(context, start, true, false, "failure");
+    }
+
+    private void recordRequest(ShopAIRequestContext context,
+                               long start,
+                               boolean degraded,
+                               boolean cacheHit,
+                               String result) {
+        if (aiMetricsService == null) {
+            return;
+        }
+        ShopAIIntent intent = context == null ? null : context.getIntent();
+        String analysisType = intent == null ? "unknown" : intent.name().toLowerCase();
+        aiMetricsService.recordRequestDuration(analysisType,
+                intent == null ? null : intent.name(),
+                null,
+                System.currentTimeMillis() - start,
+                degraded,
+                cacheHit,
+                result);
     }
 }

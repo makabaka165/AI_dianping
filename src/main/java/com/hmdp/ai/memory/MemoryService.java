@@ -1,7 +1,7 @@
 package com.hmdp.ai.memory;
 
 import com.hmdp.config.ChatMemoryKeyManager;
-import com.hmdp.dto.ai.ReviewEvidence;
+import com.hmdp.dto.ai.EvidenceItem;
 import com.hmdp.dto.ai.ShopAnalysisContext;
 import com.hmdp.entity.ShopSummaryResult;
 import com.hmdp.repository.RedissonChatMemoryStore;
@@ -63,8 +63,7 @@ public class MemoryService {
 
     public void writeSummaryMemory(String memoryKey, ShopSummaryResult result, ShopAnalysisContext context) {
         try {
-            List<ChatMessage> messages = chatMemoryStore.getMessages(memoryKey);
-            List<ChatMessage> updated = new ArrayList<>(messages == null ? Collections.emptyList() : messages);
+            List<ChatMessage> updated = new ArrayList<>();
             updated.add(UserMessage.from("生成店铺总结，店铺ID=" + result.getShopId()));
             updated.add(AiMessage.from("店铺总结：" + result.getCoreSummary()
                     + "\n关键点：" + String.join("、", result.getKeyPoints() == null ? Collections.emptyList() : result.getKeyPoints())
@@ -116,7 +115,7 @@ public class MemoryService {
             }
             return deleted;
         } catch (Exception e) {
-            log.warn("娓呴櫎搴楅摵鎬荤粨璁板繂澶辫触, shopId={}", shopId, e);
+            log.warn("清理店铺所有总结记忆失败, shopId={}", shopId, e);
             return deleted;
         }
     }
@@ -159,7 +158,7 @@ public class MemoryService {
         try {
             return chatMemoryStore.exists(memoryKey);
         } catch (Exception e) {
-            log.warn("检查记忆存在性失败, memoryKey={}", AiLogSanitizer.safeKey(memoryKey), e);
+            log.warn("检查记忆是否存在失败, memoryKey={}", AiLogSanitizer.safeKey(memoryKey), e);
             return false;
         }
     }
@@ -178,7 +177,7 @@ public class MemoryService {
         try {
             return chatMemoryStore.getTimeToLive(memoryKey);
         } catch (Exception e) {
-            log.warn("获取记忆TTL失败, memoryKey={}", AiLogSanitizer.safeKey(memoryKey), e);
+            log.warn("获取记忆 TTL 失败, memoryKey={}", AiLogSanitizer.safeKey(memoryKey), e);
             return -1;
         }
     }
@@ -201,9 +200,9 @@ public class MemoryService {
         for (Map.Entry<String, RedissonChatMemoryStore.MemoryStats> entry : allStats.entrySet()) {
             totalMessages += entry.getValue().getTotalMessages();
         }
-        statsSummary.put("总记忆数量", allStats.size());
-        statsSummary.put("总消息数量", totalMessages);
-        result.put("统计概览", statsSummary);
+        statsSummary.put("totalMemories", allStats.size());
+        statsSummary.put("totalMessages", totalMessages);
+        result.put("overview", statsSummary);
         localCacheManager.put(cacheKey, result, LocalCacheManager.CacheType.MEMORY_STATS);
         return result;
     }
@@ -218,10 +217,10 @@ public class MemoryService {
         chatMemoryStore.deleteMessages(memoryKey);
     }
 
-    private String summarizeEvidence(List<ReviewEvidence> evidence) {
+    private String summarizeEvidence(List<EvidenceItem> evidence) {
         return evidence.stream()
                 .limit(3)
-                .map(item -> "#" + item.getBlogId() + ":" + truncate(item.getSnippet(), EVIDENCE_SNIPPET_LIMIT))
+                .map(item -> "#" + item.getId() + ":" + truncate(item.getSnippet(), EVIDENCE_SNIPPET_LIMIT))
                 .collect(Collectors.joining(" | "));
     }
 

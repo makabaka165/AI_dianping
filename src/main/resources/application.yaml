@@ -28,6 +28,22 @@ hmdp:
       max-concurrent-calls: ${HMDP_AI_MAX_CONCURRENT_CALLS:8}
       rate-limit-period-seconds: ${HMDP_AI_RATE_LIMIT_PERIOD_SECONDS:1}
       rate-limit-permits: ${HMDP_AI_RATE_LIMIT_PERMITS:2}
+    prompt:
+      canary:
+        enabled: ${HMDP_AI_PROMPT_CANARY_ENABLED:false}
+        ratio: ${HMDP_AI_PROMPT_CANARY_RATIO:0}
+      stable:
+        summary: shop-summary-v3
+        quality-summary: shop-quality-summary-v2
+        qa: shop-qa-v3
+        compare: shop-compare-v3
+        recommend: shop-recommend-v3
+      canary-version:
+        summary: shop-summary-v3
+        quality-summary: shop-quality-summary-v2
+        qa: shop-qa-v3
+        compare: shop-compare-v3
+        recommend: shop-recommend-v3
   cors:
     allowed-origin-patterns: ${HMDP_CORS_ALLOWED_ORIGIN_PATTERNS:http://localhost:*,http://127.0.0.1:*}
   voucher:
@@ -86,6 +102,15 @@ logging:
   pattern:
     dateformat: mm:ss.SSS
 
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      show-details: never
+
 langchain4j:
   open-ai:
     chat-model:
@@ -123,6 +148,11 @@ rag:
   enabled: true
   data:
     auto-import: true
+  review:
+    enabled: true
+    min-score: 0.55
+    max-vector-candidates: 20
+    backfill-page-size: 200
   redis:
     host: 127.0.0.1
     port: 6380

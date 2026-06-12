@@ -1,6 +1,6 @@
 package com.hmdp.ai.workflow;
 
-import com.hmdp.dto.ai.ReviewEvidence;
+import com.hmdp.dto.ai.EvidenceItem;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -17,13 +17,14 @@ public class StreamWorkflowPlan {
     private String analysisType;
     private String memoryId;
     private String prompt;
+    private String promptVersion;
     private String directText;
-    private List<ReviewEvidence> evidence;
+    private List<EvidenceItem> evidence;
     private Double confidence;
     private Boolean degraded;
     private Boolean cacheHit;
 
-    public List<ReviewEvidence> safeEvidence() {
+    public List<EvidenceItem> safeEvidence() {
         return evidence == null ? Collections.emptyList() : evidence;
     }
 

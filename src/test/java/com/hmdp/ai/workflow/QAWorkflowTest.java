@@ -1,0 +1,137 @@
+package com.hmdp.ai.workflow;
+
+import com.hmdp.ai.fallback.FallbackPolicy;
+import com.hmdp.ai.guard.QualityCheck;
+import com.hmdp.ai.guard.QualityDecision;
+import com.hmdp.ai.guard.QualityGuard;
+import com.hmdp.ai.memory.MemoryService;
+import com.hmdp.ai.model.ModelGateway;
+import com.hmdp.ai.orchestration.ShopAIRequestContext;
+import com.hmdp.ai.prompt.PromptTemplateRender;
+import com.hmdp.ai.prompt.PromptTemplateRegistry;
+import com.hmdp.ai.workflow.request.QAWorkflowRequest;
+import com.hmdp.dto.ai.EvidenceItem;
+import com.hmdp.dto.ai.EvidenceType;
+import com.hmdp.dto.ai.ShopAIResponse;
+import com.hmdp.dto.ai.ShopAnalysisContext;
+import com.hmdp.dto.ai.ShopQAResult;
+import com.hmdp.service.AiMetricsService;
+import com.hmdp.service.ShopContextAssembler;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
+import org.springframework.test.util.ReflectionTestUtils;
+
+import java.util.List;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+@ExtendWith(MockitoExtension.class)
+@MockitoSettings(strictness = Strictness.LENIENT)
+class QAWorkflowTest {
+
+    @Mock
+    private ShopContextAssembler shopContextAssembler;
+    @Mock
+    private PromptTemplateRegistry promptTemplateRegistry;
+    @Mock
+    private MemoryService memoryService;
+    @Mock
+    private ModelGateway modelGateway;
+    @Mock
+    private QualityGuard qualityGuard;
+    @Mock
+    private FallbackPolicy fallbackPolicy;
+    @Mock
+    private AiMetricsService aiMetricsService;
+
+    private QAWorkflow workflow;
+
+    @BeforeEach
+    void setUp() {
+        workflow = new QAWorkflow();
+        ReflectionTestUtils.setField(workflow, "shopContextAssembler", shopContextAssembler);
+        ReflectionTestUtils.setField(workflow, "promptTemplateRegistry", promptTemplateRegistry);
+        ReflectionTestUtils.setField(workflow, "memoryService", memoryService);
+        ReflectionTestUtils.setField(workflow, "modelGateway", modelGateway);
+        ReflectionTestUtils.setField(workflow, "qualityGuard", qualityGuard);
+        ReflectionTestUtils.setField(workflow, "fallbackPolicy", fallbackPolicy);
+        ReflectionTestUtils.setField(workflow, "aiMetricsService", aiMetricsService);
+    }
+
+    @Test
+    void qualityFailureShouldRepairOnceBeforeFallback() {
+        ShopAIRequestContext context = ShopAIRequestContext.builder()
+                .userId("u1")
+                .sessionId("s1")
+                .traceId("t1")
+                .build();
+        EvidenceItem evidence = EvidenceItem.builder()
+                .id("review:10")
+                .type(EvidenceType.REVIEW)
+                .sourceId(10L)
+                .shopId(1L)
+                .snippet("服务不错")
+                .build();
+        ShopAnalysisContext analysisContext = ShopAnalysisContext.builder()
+                .shopId(1L)
+                .evidence(List.of(evidence))
+                .build();
+        ShopQAResult bad = ShopQAResult.builder().shopId(1L).question("服务怎么样").answer("泛泛而谈").build();
+        ShopQAResult repaired = ShopQAResult.builder()
+                .shopId(1L)
+                .question("服务怎么样")
+                .answer("repaired answer")
+                .evidenceIds(List.of("review:10"))
+                .insufficientEvidence(false)
+                .build();
+        when(memoryService.shopQAKey(1L, "u1")).thenReturn("qa-memory");
+        when(memoryService.shopSummaryKey(1L, "u1")).thenReturn("summary-memory");
+        when(memoryService.readSummaryMemory("summary-memory")).thenReturn("summary snapshot");
+        when(shopContextAssembler.buildForShop(1L, "服务怎么样")).thenReturn(analysisContext);
+        when(shopContextAssembler.toPromptBlock(analysisContext)).thenReturn("evidence block");
+        when(promptTemplateRegistry.renderQA(any(ShopAIRequestContext.class), eq(1L), anyString(), anyString(), anyString()))
+                .thenReturn(PromptTemplateRender.builder()
+                        .content("qa prompt")
+                        .version(PromptTemplateRegistry.QA_VERSION)
+                        .variant("stable")
+                        .build());
+        when(promptTemplateRegistry.qaPrompt("服务怎么样", "summary snapshot", "evidence block")).thenReturn("qa prompt");
+        when(fallbackPolicy.shouldUseFallback("ask:analyzeShopData")).thenReturn(false);
+        when(modelGateway.generateStructuredAnswer("qa-memory", "qa prompt", 1L, "服务怎么样", analysisContext.safeEvidence()))
+                .thenReturn(bad);
+        when(qualityGuard.validateQA(bad, analysisContext.safeEvidence(), "ask")).thenReturn(QualityCheck.builder()
+                .decision(QualityDecision.FALLBACK)
+                .reason("too generic")
+                .build());
+        when(modelGateway.repairStructuredAnswer("qa-memory", "qa prompt", 1L, "服务怎么样", "too generic"))
+                .thenReturn(repaired);
+        when(qualityGuard.validateQA(repaired, analysisContext.safeEvidence(), "ask")).thenReturn(QualityCheck.builder()
+                .decision(QualityDecision.PASS)
+                .build());
+        when(qualityGuard.postProcess("repaired answer")).thenReturn("repaired answer");
+
+        ShopAIResponse response = workflow.execute(context, QAWorkflowRequest.builder()
+                .shopId(1L)
+                .question("服务怎么样")
+                .build());
+
+        assertThat(response.getQa().getAnswer()).isEqualTo("repaired answer");
+        assertThat(response.getQa().getEvidenceIds()).containsExactly("review:10");
+        assertThat(response.getDegraded()).isFalse();
+        assertThat(response.getMemoryId()).isEqualTo("qa-memory");
+        verify(modelGateway).repairStructuredAnswer("qa-memory", "qa prompt", 1L, "服务怎么样", "too generic");
+        verify(fallbackPolicy, never()).fallbackText(anyString(), anyString(), anyString());
+        verify(fallbackPolicy, never()).recordFailure(anyString());
+    }
+}

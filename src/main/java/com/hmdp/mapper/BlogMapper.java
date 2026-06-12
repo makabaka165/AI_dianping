@@ -30,6 +30,29 @@ public interface BlogMapper extends BaseMapper<Blog> {
     List<Blog> selectBlogsByShopId(@Param("shopId") Long shopId);
 
     /**
+     * 获取店铺有效评价，用于 RAG 回补索引。
+     */
+    @Select("SELECT * FROM tb_blog " +
+            "WHERE shop_id = #{shopId} " +
+            "AND status = 1 " +
+            "AND deleted = 0 " +
+            "ORDER BY create_time DESC " +
+            "LIMIT #{limit}")
+    List<Blog> selectActiveBlogsByShopIdForRag(@Param("shopId") Long shopId,
+                                               @Param("limit") Integer limit);
+
+    /**
+     * 获取有有效评价的店铺 ID，用于 RAG 全量回补。
+     */
+    @Select("SELECT DISTINCT shop_id FROM tb_blog " +
+            "WHERE shop_id IS NOT NULL " +
+            "AND status = 1 " +
+            "AND deleted = 0 " +
+            "ORDER BY shop_id ASC " +
+            "LIMIT #{limit}")
+    List<Long> selectActiveShopIdsForRag(@Param("limit") Integer limit);
+
+    /**
      * 获取店铺近期评价。
      */
     @Select("SELECT * FROM tb_blog " +

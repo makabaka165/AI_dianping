@@ -14,22 +14,21 @@ import java.util.List;
 @NoArgsConstructor
 @AllArgsConstructor
 public class ShopAIResponse {
-    private String response;
-    private String answer;
-    private String comparison;
-    private String recommendations;
-    private Long shopId;
     private String sessionId;
     private String memoryId;
     private String traceId;
     private ShopAIIntent intent;
     private IntentRouteSource routingSource;
     private Double routingConfidence;
-    private List<String> usedTools;
-    private List<ReviewEvidence> evidence;
+    private String promptVersion;
+    private List<EvidenceItem> evidence;
     private Double confidence;
     private Boolean degraded;
     private Boolean cacheHit;
-    private String winnerByAspect;
-    private ShopAIAnalysisResult analysis;
+    private String fallbackReason;
+    private com.hmdp.entity.ShopSummaryResult summary;
+    private ShopQAResult qa;
+    private ShopCompareResult compare;
+    private ShopRecommendResult recommend;
+    private ShopChatResult chat;
 }

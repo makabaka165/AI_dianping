@@ -9,15 +9,17 @@ import com.hmdp.ai.intent.ShopAIIntent;
 import com.hmdp.ai.memory.MemoryService;
 import com.hmdp.ai.model.ModelGateway;
 import com.hmdp.ai.orchestration.ShopAIRequestContext;
+import com.hmdp.ai.prompt.PromptTemplateRender;
 import com.hmdp.ai.prompt.PromptTemplateRegistry;
 import com.hmdp.ai.workflow.request.ChatWorkflowRequest;
 import com.hmdp.ai.workflow.request.CompareWorkflowRequest;
 import com.hmdp.ai.workflow.request.QAWorkflowRequest;
 import com.hmdp.ai.workflow.request.RecommendWorkflowRequest;
 import com.hmdp.ai.workflow.request.SummaryWorkflowRequest;
-import com.hmdp.dto.ai.ReviewEvidence;
+import com.hmdp.dto.ai.EvidenceItem;
 import com.hmdp.dto.ai.ShopAIResponse;
 import com.hmdp.dto.ai.ShopAIStreamEvent;
+import com.hmdp.dto.ai.ShopChatResult;
 import com.hmdp.entity.ShopSummaryResult;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.stereotype.Component;
@@ -26,9 +28,14 @@ import reactor.core.publisher.Flux;
 import javax.annotation.Resource;
 import java.util.Collections;
 import java.util.List;
+import java.util.stream.Collectors;
 
 @Component
 public class ChatWorkflow implements ShopAIWorkflow<ChatWorkflowRequest, ShopAIResponse> {
+
+    private static final String CHAT_ANALYSIS_TYPE = "chat";
+    private static final String CHAT_MODEL_OPERATION = "chat:freeChat";
+    private static final String STREAM_MODEL_OPERATION = "chat:streamChat";
 
     @Resource
     private IntentRouteCoordinator intentRouteCoordinator;
@@ -75,7 +82,7 @@ public class ChatWorkflow implements ShopAIWorkflow<ChatWorkflowRequest, ShopAIR
         IntentRoutingResult routing = intentRouteCoordinator.route(context, request.getMessage(), request.getShopId());
         context.setIntent(routing.getIntent());
         if (!isBlank(routing.getClarification())) {
-            return withRouting(response(context, routing.getClarification(), false), routing);
+            return withRouting(chatResponse(context, routing.getClarification(), false, true), routing);
         }
         switch (routing.getIntent()) {
             case SUMMARY:
@@ -83,27 +90,18 @@ public class ChatWorkflow implements ShopAIWorkflow<ChatWorkflowRequest, ShopAIR
                         .shopId(routing.getShopId())
                         .writeMemory(true)
                         .build());
-                return ShopAIResponse.builder()
-                        .response(summary.getCoreSummary())
-                        .answer(summary.getCoreSummary())
-                        .shopId(summary.getShopId())
+                return withRouting(ShopAIResponse.builder()
+                        .summary(summary)
                         .sessionId(context.getSessionId())
                         .memoryId(context.getMemoryId())
                         .traceId(context.getTraceId())
-                        .intent(routing.getIntent())
-                        .routingSource(routing.getSource())
-                        .routingConfidence(routing.getConfidence())
-                        .analysis(com.hmdp.dto.ai.ShopAIAnalysisResult.builder()
-                                .summary(summary.getCoreSummary())
-                                .sentiment(summary.getOverallSentiment())
-                                .keywords(summary.getKeyPoints())
-                                .build())
+                        .promptVersion(summary.getPromptVersion())
                         .evidence(safeEvidence(summary.getEvidence()))
                         .confidence(summary.getConfidence())
                         .degraded(Boolean.TRUE.equals(summary.getDegraded()))
                         .cacheHit(Boolean.TRUE.equals(summary.getCacheHit()))
-                        .usedTools(Collections.emptyList())
-                        .build();
+                        .fallbackReason(summary.getFallbackReason())
+                        .build(), routing);
             case QA:
                 return withRouting(qaWorkflow.execute(context, QAWorkflowRequest.builder()
                         .shopId(routing.getShopId())
@@ -147,16 +145,16 @@ public class ChatWorkflow implements ShopAIWorkflow<ChatWorkflowRequest, ShopAIR
                             .writeMemory(true)
                             .build());
                     ShopAIResponse summaryResponse = ShopAIResponse.builder()
-                            .response(summary.getCoreSummary())
-                            .answer(summary.getCoreSummary())
-                            .shopId(summary.getShopId())
+                            .summary(summary)
                             .sessionId(context.getSessionId())
                             .memoryId(context.getMemoryId())
                             .traceId(context.getTraceId())
+                            .promptVersion(summary.getPromptVersion())
                             .evidence(safeEvidence(summary.getEvidence()))
                             .confidence(summary.getConfidence())
                             .degraded(Boolean.TRUE.equals(summary.getDegraded()))
                             .cacheHit(Boolean.TRUE.equals(summary.getCacheHit()))
+                            .fallbackReason(summary.getFallbackReason())
                             .build();
                     return streamResponse(context, routing, withRouting(summaryResponse, routing));
                 case QA:
@@ -182,60 +180,76 @@ public class ChatWorkflow implements ShopAIWorkflow<ChatWorkflowRequest, ShopAIR
                     return freeChatStream(context, routing, request.getMessage());
             }
         } catch (Exception e) {
-            fallbackPolicy.recordFailure("streamChat");
+            fallbackPolicy.recordFailure(STREAM_MODEL_OPERATION);
+            PromptTemplateRender prompt = promptTemplateRegistry.renderFreeChat(context, request.getMessage());
             return streamText(context, routing, fallbackPolicy.fallbackText(context.getMemoryId(),
-                    promptTemplateRegistry.freeChatPrompt(request.getMessage()), "chat"), true, 0.35);
+                    prompt.getContent(), CHAT_ANALYSIS_TYPE), true, 0.35);
         }
     }
 
     private ShopAIResponse freeChat(ShopAIRequestContext context, String message) {
-        String prompt = promptTemplateRegistry.freeChatPrompt(message);
+        PromptTemplateRender prompt = promptTemplateRegistry.renderFreeChat(context, message);
         boolean degraded = false;
-        String answer;
-        if (fallbackPolicy.shouldUseFallback("analyzeShopData")) {
-            answer = fallbackPolicy.fallbackText(context.getMemoryId(), prompt, "chat");
+        ShopChatResult chat;
+        if (fallbackPolicy.shouldUseFallback(CHAT_MODEL_OPERATION)) {
+            chat = fallbackPolicy.fallbackChat(message, CHAT_ANALYSIS_TYPE);
             degraded = true;
         } else {
             try {
-                answer = modelGateway.generateFreeChat(context.getMemoryId(), prompt);
-                QualityCheck quality = qualityGuard.validateText(answer, "chat");
+                String answer = modelGateway.generateFreeChat(context.getMemoryId(), prompt.getContent());
+                QualityCheck quality = qualityGuard.validateText(answer, CHAT_ANALYSIS_TYPE);
                 if (!quality.pass()) {
-                    answer = "我可以帮你做店铺总结、评价问答、店铺对比和推荐。请提供店铺ID或你的推荐偏好。";
-                    degraded = true;
+                    answer = modelGateway.repairFreeChat(context.getMemoryId(), prompt.getContent(), quality.getReason());
+                    quality = qualityGuard.validateText(answer, CHAT_ANALYSIS_TYPE);
+                    if (!quality.pass()) {
+                        chat = fallbackPolicy.fallbackChat(message, CHAT_ANALYSIS_TYPE);
+                        degraded = true;
+                    } else {
+                        chat = ShopChatResult.builder()
+                                .message(qualityGuard.postProcess(answer))
+                                .clarification(false)
+                                .build();
+                    }
                 } else {
-                    answer = qualityGuard.postProcess(answer);
+                    chat = ShopChatResult.builder()
+                            .message(qualityGuard.postProcess(answer))
+                            .clarification(false)
+                            .build();
                 }
             } catch (Exception e) {
-                fallbackPolicy.recordFailure("analyzeShopData");
-                answer = fallbackPolicy.fallbackText(context.getMemoryId(), prompt, "chat");
+                fallbackPolicy.recordFailure(CHAT_MODEL_OPERATION);
+                chat = fallbackPolicy.fallbackChat(message, CHAT_ANALYSIS_TYPE);
                 degraded = true;
             }
         }
-        return response(context, answer, degraded);
+        ShopAIResponse response = chatResponse(context, chat.getMessage(), degraded, Boolean.TRUE.equals(chat.getClarification()));
+        response.setPromptVersion(prompt.getVersion());
+        return response;
     }
 
-    private ShopAIResponse response(ShopAIRequestContext context, String answer, boolean degraded) {
+    private ShopAIResponse chatResponse(ShopAIRequestContext context, String message, boolean degraded, boolean clarification) {
         return ShopAIResponse.builder()
-                .response(answer)
-                .answer(answer)
+                .chat(ShopChatResult.builder()
+                        .message(message)
+                        .clarification(clarification)
+                        .build())
                 .sessionId(context.getSessionId())
                 .memoryId(context.getMemoryId())
                 .traceId(context.getTraceId())
                 .evidence(Collections.emptyList())
                 .degraded(degraded)
                 .cacheHit(false)
-                .usedTools(Collections.emptyList())
                 .build();
     }
 
     private Flux<ServerSentEvent<ShopAIStreamEvent>> freeChatStream(ShopAIRequestContext context,
                                                                     IntentRoutingResult routing,
                                                                     String message) {
-        String prompt = promptTemplateRegistry.freeChatPrompt(message);
-        if (fallbackPolicy.shouldUseFallback("analyzeShopData")) {
-            return streamText(context, routing, fallbackPolicy.fallbackText(context.getMemoryId(), prompt, "chat"), true, 0.35);
+        PromptTemplateRender prompt = promptTemplateRegistry.renderFreeChat(context, message);
+        if (fallbackPolicy.shouldUseFallback(CHAT_MODEL_OPERATION)) {
+            return streamText(context, routing, fallbackPolicy.fallbackChat(message, CHAT_ANALYSIS_TYPE).getMessage(), true, 0.35);
         }
-        Flux<ServerSentEvent<ShopAIStreamEvent>> chunks = modelGateway.streamChat(context.getMemoryId(), prompt)
+        Flux<ServerSentEvent<ShopAIStreamEvent>> chunks = modelGateway.streamChat(context.getMemoryId(), prompt.getContent())
                 .map(text -> event("delta", ShopAIStreamEvent.builder()
                         .type("delta")
                         .text(text)
@@ -247,12 +261,12 @@ public class ChatWorkflow implements ShopAIWorkflow<ChatWorkflowRequest, ShopAIR
                         .routingConfidence(routing == null ? null : routing.getConfidence())
                         .build()));
         return Flux.concat(
-                Flux.just(metadataEvent(context, routing, context.getMemoryId())),
+                Flux.just(metadataEvent(context, routing, context.getMemoryId(), prompt.getVersion())),
                 chunks,
                 Flux.just(doneEvent(context, routing, false, false, 0.7))
         ).onErrorResume(e -> {
-            fallbackPolicy.recordFailure("analyzeShopData");
-            String fallback = fallbackPolicy.fallbackText(context.getMemoryId(), prompt, "chat");
+            fallbackPolicy.recordFailure(CHAT_MODEL_OPERATION);
+            String fallback = fallbackPolicy.fallbackChat(message, CHAT_ANALYSIS_TYPE).getMessage();
             return Flux.just(
                     event("delta", ShopAIStreamEvent.builder()
                             .type("delta")
@@ -278,7 +292,7 @@ public class ChatWorkflow implements ShopAIWorkflow<ChatWorkflowRequest, ShopAIR
         context.setMemoryId(memoryId);
         if (plan.hasDirectText()) {
             return Flux.concat(
-                    Flux.just(metadataEvent(context, routing, memoryId),
+                    Flux.just(metadataEvent(context, routing, memoryId, plan.getPromptVersion()),
                             evidenceEvent(context, routing, memoryId, plan.safeEvidence())),
                     Flux.just(event("delta", ShopAIStreamEvent.builder()
                             .type("delta")
@@ -312,7 +326,7 @@ public class ChatWorkflow implements ShopAIWorkflow<ChatWorkflowRequest, ShopAIR
                         .build()));
 
         return Flux.concat(
-                        Flux.just(metadataEvent(context, routing, memoryId),
+                        Flux.just(metadataEvent(context, routing, memoryId, plan.getPromptVersion()),
                                 evidenceEvent(context, routing, memoryId, plan.safeEvidence())),
                         chunks,
                         Flux.just(doneEvent(context, routing, false,
@@ -321,7 +335,7 @@ public class ChatWorkflow implements ShopAIWorkflow<ChatWorkflowRequest, ShopAIR
                 )
                 .filter(item -> item.data() != null)
                 .onErrorResume(e -> {
-                    fallbackPolicy.recordFailure("stream" + plan.getAnalysisType());
+                    fallbackPolicy.recordFailure("stream:" + plan.getAnalysisType());
                     String fallback = fallbackPolicy.fallbackText(memoryId, plan.getPrompt(), plan.getAnalysisType());
                     return Flux.just(
                             event("delta", ShopAIStreamEvent.builder()
@@ -358,7 +372,7 @@ public class ChatWorkflow implements ShopAIWorkflow<ChatWorkflowRequest, ShopAIR
                                                                     ShopAIResponse response) {
         String memoryId = response.getMemoryId() == null ? context.getMemoryId() : response.getMemoryId();
         Flux<ServerSentEvent<ShopAIStreamEvent>> base = Flux.just(
-                metadataEvent(context, routing, memoryId),
+                metadataEvent(context, routing, memoryId, response.getPromptVersion()),
                 evidenceEvent(context, routing, memoryId, safeEvidence(response.getEvidence())),
                 event("delta", ShopAIStreamEvent.builder()
                         .type("delta")
@@ -405,11 +419,19 @@ public class ChatWorkflow implements ShopAIWorkflow<ChatWorkflowRequest, ShopAIR
     private ServerSentEvent<ShopAIStreamEvent> metadataEvent(ShopAIRequestContext context,
                                                             IntentRoutingResult routing,
                                                             String memoryId) {
+        return metadataEvent(context, routing, memoryId, null);
+    }
+
+    private ServerSentEvent<ShopAIStreamEvent> metadataEvent(ShopAIRequestContext context,
+                                                            IntentRoutingResult routing,
+                                                            String memoryId,
+                                                            String promptVersion) {
         return event("metadata", ShopAIStreamEvent.builder()
                 .type("metadata")
                 .traceId(context.getTraceId())
                 .sessionId(context.getSessionId())
                 .memoryId(memoryId)
+                .promptVersion(promptVersion)
                 .intent(routing == null ? context.getIntent() : routing.getIntent())
                 .routingSource(routing == null ? null : routing.getSource())
                 .routingConfidence(routing == null ? null : routing.getConfidence())
@@ -419,7 +441,7 @@ public class ChatWorkflow implements ShopAIWorkflow<ChatWorkflowRequest, ShopAIR
     private ServerSentEvent<ShopAIStreamEvent> evidenceEvent(ShopAIRequestContext context,
                                                             IntentRoutingResult routing,
                                                             String memoryId,
-                                                            List<ReviewEvidence> evidence) {
+                                                            List<EvidenceItem> evidence) {
         if (evidence == null || evidence.isEmpty()) {
             return ServerSentEvent.<ShopAIStreamEvent>builder().event("evidence").build();
         }
@@ -471,24 +493,39 @@ public class ChatWorkflow implements ShopAIWorkflow<ChatWorkflowRequest, ShopAIR
         return response;
     }
 
-    private List<ReviewEvidence> safeEvidence(List<ReviewEvidence> evidence) {
+    private List<EvidenceItem> safeEvidence(List<EvidenceItem> evidence) {
         return evidence == null ? Collections.emptyList() : evidence;
     }
 
     private String responseText(ShopAIResponse response) {
-        if (!isBlank(response.getResponse())) {
-            return response.getResponse();
+        if (response == null) {
+            return "";
         }
-        if (!isBlank(response.getAnswer())) {
-            return response.getAnswer();
+        if (response.getSummary() != null) {
+            return nullSafe(response.getSummary().getCoreSummary());
         }
-        if (!isBlank(response.getComparison())) {
-            return response.getComparison();
+        if (response.getQa() != null) {
+            return nullSafe(response.getQa().getAnswer());
         }
-        if (!isBlank(response.getRecommendations())) {
-            return response.getRecommendations();
+        if (response.getCompare() != null) {
+            return nullSafe(response.getCompare().getConclusion());
+        }
+        if (response.getRecommend() != null) {
+            if (!isBlank(response.getRecommend().getMessage())) {
+                return response.getRecommend().getMessage();
+            }
+            return response.getRecommend().safeItems().stream()
+                    .map(item -> item.getRank() + ". " + item.getShopName() + ": " + item.getReason())
+                    .collect(Collectors.joining("\n"));
+        }
+        if (response.getChat() != null) {
+            return nullSafe(response.getChat().getMessage());
         }
         return "";
+    }
+
+    private String nullSafe(String value) {
+        return value == null ? "" : value;
     }
 
     private boolean isBlank(String value) {

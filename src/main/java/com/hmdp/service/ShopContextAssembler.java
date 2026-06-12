@@ -1,8 +1,11 @@
 package com.hmdp.service;
 
-import com.hmdp.dto.ai.ReviewEvidence;
+import com.hmdp.dto.ai.EvidenceItem;
 import com.hmdp.dto.ai.ShopAnalysisContext;
+import com.hmdp.dto.ai.ShopProfileSnapshot;
+import com.hmdp.entity.Shop;
 import com.hmdp.mapper.BlogMapper;
+import com.hmdp.mapper.ShopMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
@@ -24,6 +27,9 @@ public class ShopContextAssembler {
     private BlogMapper blogMapper;
 
     @Resource
+    private ShopMapper shopMapper;
+
+    @Resource
     private ShopReviewEvidenceRetriever evidenceRetriever;
 
     public ShopAnalysisContext buildForShop(Long shopId, String query) {
@@ -38,11 +44,14 @@ public class ShopContextAssembler {
         Map<String, Object> version = blogMapper.selectReviewVersionByShopId(shopId);
         int totalReviews = numberValue(version == null ? null : version.get("total_count"));
         LocalDateTime latestReviewTime = dateTimeValue(version == null ? null : version.get("latest_time"));
-        List<ReviewEvidence> evidence = evidenceRetriever.retrieve(shopId, query, aspect, limit);
+        Shop shop = shopId == null ? null : shopMapper.selectById(shopId);
+        ShopProfileSnapshot profile = ShopProfileSnapshot.from(shop);
+        List<EvidenceItem> evidence = evidenceRetriever.retrieve(shopId, query, aspect, limit);
 
         return ShopAnalysisContext.builder()
                 .shopId(shopId)
-                .shopName("店铺" + shopId)
+                .shopName(profile == null || isBlank(profile.getName()) ? "店铺" + shopId : profile.getName())
+                .shopProfile(profile)
                 .totalReviews(totalReviews)
                 .latestReviewTime(latestReviewTime)
                 .contextVersion(buildContextVersion(totalReviews, latestReviewTime))
@@ -54,12 +63,16 @@ public class ShopContextAssembler {
         StringBuilder prompt = new StringBuilder();
         prompt.append("店铺ID: ").append(context.getShopId()).append("\n");
         prompt.append("店铺名称: ").append(context.getShopName()).append("\n");
+        prompt.append("公开资料: ").append(profileBlock(context.getShopProfile())).append("\n");
         prompt.append("评价总数: ").append(context.getTotalReviews()).append("\n");
         prompt.append("上下文版本: ").append(context.getContextVersion()).append("\n");
-        prompt.append("评价证据:\n");
+        prompt.append("证据列表:\n");
         int index = 1;
-        for (ReviewEvidence evidence : context.safeEvidence()) {
-            prompt.append("[证据").append(index++).append(" blogId=").append(evidence.getBlogId()).append("] ")
+        for (EvidenceItem evidence : context.safeEvidence()) {
+            prompt.append("[证据").append(index++).append(" evidenceId=").append(evidence.getId()).append("] ")
+                    .append("type=").append(evidence.getType()).append(", ")
+                    .append("shopId=").append(evidence.getShopId()).append(", ")
+                    .append("sourceId=").append(evidence.getSourceId()).append(", ")
                     .append("点赞=").append(evidence.getLiked()).append(", ")
                     .append("原因=").append(evidence.getMatchedReason()).append(", ")
                     .append("内容=").append(truncate(evidence.getSnippet(), EVIDENCE_SNIPPET_LIMIT)).append("\n");
@@ -68,6 +81,20 @@ public class ShopContextAssembler {
             prompt.append("无可用评价证据。\n");
         }
         return prompt.toString();
+    }
+
+    private String profileBlock(ShopProfileSnapshot profile) {
+        if (profile == null) {
+            return "无店铺公开资料";
+        }
+        return "name=" + nullSafe(profile.getName())
+                + ", typeId=" + profile.getTypeId()
+                + ", area=" + nullSafe(profile.getArea())
+                + ", avgPrice=" + profile.getAvgPrice()
+                + ", sold=" + profile.getSold()
+                + ", comments=" + profile.getComments()
+                + ", score=" + profile.getScore()
+                + ", openHours=" + nullSafe(profile.getOpenHours());
     }
 
     private String buildContextVersion(int totalReviews, LocalDateTime latestReviewTime) {
@@ -108,5 +135,13 @@ public class ShopContextAssembler {
             return ((Timestamp) value).toLocalDateTime();
         }
         return null;
+    }
+
+    private boolean isBlank(String value) {
+        return value == null || value.trim().isEmpty();
+    }
+
+    private String nullSafe(String value) {
+        return value == null ? "" : value;
     }
 }

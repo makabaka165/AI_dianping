@@ -8,7 +8,8 @@ Spring Boot + LangChain4j + Redis 构建的本地生活点评系统。项目保�
 - 探店笔记：发布、点赞、热门笔记、关注流、点赞一致性修复。
 - 优惠秒杀：Redis Lua 原子校验、Redis Stream 异步落库、一人一单控制。
 - 登录鉴权：Sa-Token、RBAC、后台管理、登录审计、风险控制。
-- AI 店铺分析：店铺总结、问答、对比、推荐、自然语言入口、证据上下文、记忆隔离、降级治理。
+- AI 店铺分析：店铺总结、问答、对比、推荐、自然语言入口、Typed Evidence、结构化响应、记忆隔离、降级治理。
+- AI 治理观测：Micrometer/Prometheus 指标、模型 token 估算、prompt 版本灰度、评价 RAG 混合召回。
 
 ## 当前 AI 架构
 
@@ -34,7 +35,7 @@ ShopSummaryController
 - `ShopAIApplicationService` 是 Controller 的 AI 统一入口，负责 traceId、sessionId、ThreadLocal 请求上下文。
 - `ShopAIOrchestrator` 只做任务分发，核心业务由显式 Workflow 承担。
 - `ModelGateway` 是唯一模型适配层，包装底层 LangChain4j `ShopAIService`。
-- `ShopAIService` 不再是业务 Agent 门面，只保留模型调用方法：通用分析、结构化总结、意图分类、流式输出。
+- `ShopAIService` 不再是业务 Agent 门面，只保留工作流需要的底层模型调用能力；业务侧统一通过 `ModelGateway` 获得结构化结果。
 - `ShopFreeChatAIService` 不暴露 `ShopTool`，普通自由对话不再自动 Function Calling。
 - `ShopTool` 暂留为确定性工具，不参与核心总结、问答、对比、推荐链路。
 
@@ -60,14 +61,17 @@ ShopSummaryController
 支持的意图：
 
 - `SUMMARY`：店铺总结，结构化 JSON 一次模型调用生成 summary/sentiment/keywords/pros/cons/confidence。
-- `QA`：店铺问答，先读取同用户同店铺 summary memory，再结合评价证据回答。
-- `COMPARE`：店铺对比，按同一 aspect 对两家店铺进行证据对比。
-- `RECOMMEND`：店铺推荐，先找候选，再基于偏好和证据生成理由。
+- `QA`：店铺问答，先读取同用户同店铺 summary memory，再结合评价证据生成 `qa` payload。
+- `COMPARE`：店铺对比，按同一 aspect 对两家店铺进行证据对比，生成 `compare` payload。
+- `RECOMMEND`：店铺推荐，先找候选，再基于偏好和证据生成 `recommend` payload。
 - `FREE_CHAT`：能力说明、参数补充引导和低风险自由回答，不访问业务 Tool。
 
-## 证据与记忆治理
+## 证据、响应与记忆治理
 
-- 所有 AI 响应尽量返回 `traceId`、`memoryId`、`evidence`、`degraded`、`cacheHit`。
+- 同步 AI 接口统一返回 `ShopAIResponse` 元信息和结构化 payload，不再保留旧的顶层 `response/answer/comparison/recommendations/usedTools` 字段。
+- 当前 payload 只会填充一种：`summary`、`qa`、`compare`、`recommend`、`chat`。
+- `evidence` 使用 Typed Evidence：评价证据为 `REVIEW`，ID 形如 `review:{blogId}`；店铺资料证据为 `SHOP_PROFILE`，ID 形如 `shop_profile:{shopId}`。
+- 模型输出中的 `evidenceIds` 必须引用本次返回的 `EvidenceItem.id`，质量校验会拒绝不存在的证据引用。
 - 记忆 Key 按功能隔离：summary、QA、compare、recommend、AI chat 互不串号。
 - `/ai/chat` 路由到总结时，summary 内容写入 `shop:summary:{shopId}:{userId}`，不会写入通用 chat memory。
 - 降级或低置信总结不写入 summary memory，避免后续 QA 使用污染上下文。
@@ -79,8 +83,17 @@ ShopSummaryController
 - L2：Redis AI 结果缓存。
 - 上下文版本由评价数量、最新评价时间、prompt version、model name 等共同决定。
 - RAG 向量库使用 Redis Stack，默认端口 `6380`。
+- 店铺评价证据采用规则 + 向量混合召回：先取高赞、近期、负面候选，再叠加评价向量搜索结果，最后用确定性 rerank 统一排序。
+- 评价向量索引由博客发布事件自动追加；点赞事件只清缓存，不重新 embedding。由于当前 LangChain4j 版本没有删除接口，旧向量通过 DB 状态和 contentHash 在检索时过滤。
 - 生产默认 `rag.redis.fallback-to-memory=false`：`rag.enabled=true` 且 Redis Stack 不可用时启动失败。
 - dev/test 可显式设置 `rag.redis.fallback-to-memory=true`，允许回退 `InMemoryEmbeddingStore`。
+
+## AI 观测与 Prompt 灰度
+
+- `/actuator/prometheus` 暴露 Prometheus 指标；默认只暴露 `health`、`info`、`prometheus`。
+- AI 指标包括请求耗时、模型耗时、估算 token、缓存命中、降级次数、质量拒绝、证据数量、RAG 搜索和索引统计。
+- `ModelGateway` 会按模型调用记录估算输入/输出 token；该估算用于成本趋势，不等同于供应商精确计费。
+- Prompt 默认全部走 stable 版本；开启 canary 后按 `userId + intent + routeKey` 稳定 hash，保证同一用户同任务命中稳定版本。
 
 ## 主要接口
 
@@ -94,18 +107,43 @@ ShopSummaryController
 | `POST` | `/api/shop-summary/compare` | 店铺对比 |
 | `POST` | `/api/shop-summary/recommend` | 店铺推荐 |
 | `POST` | `/api/shop-summary/{shopId}/with-memory` | 生成总结并写入 summary memory |
+| `POST` | `/api/shop-summary/admin/rag/shops/{shopId}/rebuild` | 管理端回补单店评价 RAG 索引 |
+| `POST` | `/api/shop-summary/admin/rag/rebuild` | 管理端回补全部评价 RAG 索引 |
+| `GET` | `/actuator/prometheus` | Prometheus 指标 |
 
-响应元信息示例：
+结构化响应示例：
 
 ```json
 {
+  "sessionId": "default",
   "traceId": "9f7c...",
-  "memoryId": "hmdp:memory:shop:summary:1:10001",
-  "evidence": [],
+  "memoryId": "hmdp:memory:shop:qa:1:10001:default",
+  "intent": "QA",
+  "evidence": [
+    {
+      "id": "review:88",
+      "type": "REVIEW",
+      "shopId": 1,
+      "sourceId": 88,
+      "snippet": "服务响应比较快，排队时会主动提醒。",
+      "matchedReason": "关键词匹配: 服务",
+      "score": 0.83
+    }
+  ],
+  "confidence": 0.78,
   "degraded": false,
-  "cacheHit": true
+  "cacheHit": false,
+  "qa": {
+    "shopId": 1,
+    "question": "这家店服务怎么样？",
+    "answer": "从现有评价看，服务响应较积极，但样本仍有限。",
+    "evidenceIds": ["review:88"],
+    "insufficientEvidence": false
+  }
 }
 ```
+
+SSE 流式接口继续保留 `delta.text` 事件；其中的 `evidence` 事件同样使用 `EvidenceItem` 结构。
 
 ## 环境要求
 
@@ -138,18 +176,32 @@ java -jar target/hm-dianping-0.0.1-SNAPSHOT.jar
 ```yaml
 rag:
   enabled: true
+  review:
+    enabled: true
+    min-score: 0.55
+    max-vector-candidates: 20
+    backfill-page-size: 200
   redis:
     host: 127.0.0.1
     port: 6380
     index-name: shop_knowledge_base
     dimension: 1024
     fallback-to-memory: false
+
+hmdp:
+  ai:
+    prompt:
+      canary:
+        enabled: false
+        ratio: 0
 ```
 
 ## 测试
 
 ```bash
 mvn test
+mvn "-Dtest=AiMetricsServiceTest,AiTokenEstimatorTest,PromptVersionPolicyTest,ModelGatewayTest,ShopReviewVectorIndexServiceTest,ShopReviewEvidenceRetrieverTest,ShopAICacheInvalidationEventListenerTest,ShopAIRagAdminControllerTest,ShopSummaryControllerArchitectureTest" test
+mvn "-Dtest=PromptTemplateRegistryTest,ShopReviewEvidenceRetrieverTest,ShopContextAssemblerTest,QualityGuardTest,ModelGatewayTest,QAWorkflowTest,CompareWorkflowTest,RecommendWorkflowTest,ChatWorkflowStreamTest,ShopSummaryControllerArchitectureTest" test
 mvn "-Dtest=FallbackPolicyTest,ModelGatewayTest,ShopToolContextTest,ShopSummaryControllerArchitectureTest" test
 mvn "-Dtest=ChatWorkflowStreamTest,SummaryWorkflowTest,QualitySummaryWorkflowTest,ShopAICacheInvalidationServiceTest,ShopAIApplicationServiceTest" test
 ```

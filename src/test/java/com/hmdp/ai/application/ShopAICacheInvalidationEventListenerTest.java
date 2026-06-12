@@ -4,6 +4,7 @@ import com.hmdp.entity.Blog;
 import com.hmdp.event.BlogLikeChangedEvent;
 import com.hmdp.event.BlogPublishedEvent;
 import com.hmdp.mapper.BlogMapper;
+import com.hmdp.service.ShopReviewVectorIndexService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -24,6 +25,9 @@ class ShopAICacheInvalidationEventListenerTest {
     @Mock
     private ShopAICacheInvalidationService cacheInvalidationService;
 
+    @Mock
+    private ShopReviewVectorIndexService vectorIndexService;
+
     private ShopAICacheInvalidationEventListener listener;
 
     @BeforeEach
@@ -31,15 +35,18 @@ class ShopAICacheInvalidationEventListenerTest {
         listener = new ShopAICacheInvalidationEventListener();
         ReflectionTestUtils.setField(listener, "blogMapper", blogMapper);
         ReflectionTestUtils.setField(listener, "shopAICacheInvalidationService", cacheInvalidationService);
+        ReflectionTestUtils.setField(listener, "shopReviewVectorIndexService", vectorIndexService);
     }
 
     @Test
     void shouldClearShopAiCacheAfterBlogPublished() {
-        when(blogMapper.selectById(11L)).thenReturn(new Blog().setId(11L).setShopId(7L));
+        Blog blog = new Blog().setId(11L).setShopId(7L);
+        when(blogMapper.selectById(11L)).thenReturn(blog);
 
         listener.onBlogPublished(new BlogPublishedEvent(11L, 3L, 1000L));
 
         verify(cacheInvalidationService).clearShopRelatedCaches(7L);
+        verify(vectorIndexService).indexBlog(blog);
     }
 
     @Test
@@ -49,6 +56,7 @@ class ShopAICacheInvalidationEventListenerTest {
         listener.onBlogLikeChanged(new BlogLikeChangedEvent(12L, 4L, true, 1000L));
 
         verify(cacheInvalidationService).clearShopRelatedCaches(8L);
+        verify(vectorIndexService, never()).indexBlog(org.mockito.ArgumentMatchers.any(Blog.class));
     }
 
     @Test

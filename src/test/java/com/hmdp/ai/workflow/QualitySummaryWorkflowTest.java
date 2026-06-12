@@ -1,13 +1,16 @@
 package com.hmdp.ai.workflow;
 
 import com.hmdp.ai.memory.MemoryService;
+import com.hmdp.ai.model.ModelGateway;
 import com.hmdp.ai.orchestration.ShopAIRequestContext;
+import com.hmdp.ai.prompt.PromptTemplateRender;
 import com.hmdp.ai.prompt.PromptTemplateRegistry;
 import com.hmdp.ai.workflow.request.QualitySummaryWorkflowRequest;
 import com.hmdp.ai.workflow.request.SummaryWorkflowRequest;
 import com.hmdp.entity.Blog;
 import com.hmdp.entity.ShopSummaryResult;
 import com.hmdp.mapper.BlogMapper;
+import com.hmdp.mapper.ShopMapper;
 import com.hmdp.service.AiMetricsService;
 import com.hmdp.utils.LocalCacheManager;
 import org.junit.jupiter.api.BeforeEach;
@@ -28,12 +31,16 @@ import static org.mockito.ArgumentMatchers.same;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.lenient;
 
 @ExtendWith(MockitoExtension.class)
 class QualitySummaryWorkflowTest {
 
     @Mock
     private BlogMapper blogMapper;
+
+    @Mock
+    private ShopMapper shopMapper;
 
     @Mock
     private SummaryWorkflow summaryWorkflow;
@@ -47,16 +54,32 @@ class QualitySummaryWorkflowTest {
     @Mock
     private MemoryService memoryService;
 
+    @Mock
+    private ModelGateway modelGateway;
+
+    @Mock
+    private PromptTemplateRegistry promptTemplateRegistry;
+
     private QualitySummaryWorkflow workflow;
 
     @BeforeEach
     void setUp() {
         workflow = new QualitySummaryWorkflow();
         ReflectionTestUtils.setField(workflow, "blogMapper", blogMapper);
+        ReflectionTestUtils.setField(workflow, "shopMapper", shopMapper);
         ReflectionTestUtils.setField(workflow, "summaryWorkflow", summaryWorkflow);
         ReflectionTestUtils.setField(workflow, "localCacheManager", localCacheManager);
         ReflectionTestUtils.setField(workflow, "aiMetricsService", aiMetricsService);
         ReflectionTestUtils.setField(workflow, "memoryService", memoryService);
+        ReflectionTestUtils.setField(workflow, "modelGateway", modelGateway);
+        ReflectionTestUtils.setField(workflow, "promptTemplateRegistry", promptTemplateRegistry);
+        lenient().when(modelGateway.modelName()).thenReturn("qwen-plus");
+        lenient().when(promptTemplateRegistry.renderQualitySummary(any(), any(), any()))
+                .thenReturn(PromptTemplateRender.builder()
+                        .content("quality summary prompt")
+                        .version(PromptTemplateRegistry.QUALITY_SUMMARY_VERSION)
+                        .variant("stable")
+                        .build());
     }
 
     @Test
@@ -193,6 +216,6 @@ class QualitySummaryWorkflowTest {
         return LocalCacheManager.CacheKeys.shopQualitySummaryKey(1L, 5, 10)
                 + ":ctx:1:" + blog.getCreateTime()
                 + ":prompt:" + PromptTemplateRegistry.QUALITY_SUMMARY_VERSION
-                + ":model:configured-chat-model";
+                + ":model:qwen-plus";
     }
 }

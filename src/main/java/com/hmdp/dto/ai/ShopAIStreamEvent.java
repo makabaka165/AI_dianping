@@ -20,10 +20,11 @@ public class ShopAIStreamEvent {
     private String traceId;
     private String sessionId;
     private String memoryId;
+    private String promptVersion;
     private ShopAIIntent intent;
     private IntentRouteSource routingSource;
     private Double routingConfidence;
-    private List<ReviewEvidence> evidence;
+    private List<EvidenceItem> evidence;
     private Double confidence;
     private Boolean degraded;
     private Boolean cacheHit;

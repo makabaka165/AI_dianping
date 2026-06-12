@@ -7,15 +7,20 @@ import com.hmdp.ai.intent.ShopAIIntent;
 import com.hmdp.ai.memory.MemoryService;
 import com.hmdp.ai.model.ModelGateway;
 import com.hmdp.ai.orchestration.ShopAIRequestContext;
+import com.hmdp.ai.prompt.PromptTemplateRender;
 import com.hmdp.ai.prompt.PromptTemplateRegistry;
 import com.hmdp.ai.workflow.request.QualitySummaryWorkflowRequest;
 import com.hmdp.ai.workflow.request.SummaryWorkflowRequest;
-import com.hmdp.dto.ai.ReviewEvidence;
+import com.hmdp.dto.ai.EvidenceItem;
+import com.hmdp.dto.ai.EvidenceType;
 import com.hmdp.dto.ai.ShopAIAnalysisResult;
 import com.hmdp.dto.ai.ShopAnalysisContext;
+import com.hmdp.dto.ai.ShopProfileSnapshot;
 import com.hmdp.entity.Blog;
+import com.hmdp.entity.Shop;
 import com.hmdp.entity.ShopSummaryResult;
 import com.hmdp.mapper.BlogMapper;
+import com.hmdp.mapper.ShopMapper;
 import com.hmdp.service.AiMetricsService;
 import com.hmdp.service.AiResultCacheService;
 import com.hmdp.utils.LocalCacheManager;
@@ -34,9 +39,14 @@ import java.util.stream.Collectors;
 public class QualitySummaryWorkflow implements ShopAIWorkflow<QualitySummaryWorkflowRequest, ShopSummaryResult> {
 
     private static final double MIN_MEMORY_CONFIDENCE = 0.4;
+    private static final String ANALYSIS_TYPE = "quality_summary";
+    private static final String MODEL_OPERATION = "quality_summary:generateStructuredAnalysis";
 
     @Resource
     private BlogMapper blogMapper;
+
+    @Resource
+    private ShopMapper shopMapper;
 
     @Resource
     private SummaryWorkflow summaryWorkflow;
@@ -88,19 +98,20 @@ public class QualitySummaryWorkflow implements ShopAIWorkflow<QualitySummaryWork
         }
 
         ShopAnalysisContext context = buildContext(shopId, blogs);
-        String localCacheKey = localQualitySummaryCacheKey(shopId, minLiked, limit, context);
+        PromptTemplateRender prompt = promptTemplateRegistry.renderQualitySummary(requestContext, context, toPromptBlock(context));
+        String localCacheKey = localQualitySummaryCacheKey(shopId, minLiked, limit, context, prompt.getVersion());
         ShopSummaryResult cachedResult = localCacheManager.get(
                 localCacheKey, ShopSummaryResult.class, LocalCacheManager.CacheType.AI_RESULT);
         if (cachedResult != null) {
-            aiMetricsService.increment("ai.cache.hit", "quality_summary", false);
+            aiMetricsService.increment("ai.cache.hit", ANALYSIS_TYPE, false);
             ShopSummaryResult response = attachMetadata(
-                    cachedResult, requestContext, true, PromptTemplateRegistry.QUALITY_SUMMARY_VERSION);
+                    cachedResult, requestContext, true, prompt.getVersion());
             writeMemoryIfNeeded(request, requestContext, shopId, response, context);
-            aiMetricsService.recordDuration("quality_summary", System.currentTimeMillis() - start, false);
+            aiMetricsService.recordDuration(ANALYSIS_TYPE, System.currentTimeMillis() - start, false);
             return response;
         }
 
-        ShopAIAnalysisResult analysis = generateAnalysis(shopId, minLiked, limit, context);
+        ShopAIAnalysisResult analysis = generateAnalysis(shopId, minLiked, limit, context, prompt);
         ShopSummaryResult result = ShopSummaryResult.builder()
                 .shopId(shopId)
                 .shopName(context.getShopName())
@@ -120,35 +131,42 @@ public class QualitySummaryWorkflow implements ShopAIWorkflow<QualitySummaryWork
             localCacheManager.put(localCacheKey, result.withoutRequestMetadata(), LocalCacheManager.CacheType.AI_RESULT);
         }
         ShopSummaryResult response = attachMetadata(
-                result, requestContext, false, PromptTemplateRegistry.QUALITY_SUMMARY_VERSION);
+                result, requestContext, false, prompt.getVersion());
         writeMemoryIfNeeded(request, requestContext, shopId, response, context);
-        aiMetricsService.recordDuration("quality_summary", System.currentTimeMillis() - start,
+        aiMetricsService.recordDuration(ANALYSIS_TYPE, System.currentTimeMillis() - start,
                 Boolean.TRUE.equals(analysis.getDegraded()));
         return response;
     }
 
-    private ShopAIAnalysisResult generateAnalysis(Long shopId, int minLiked, int limit, ShopAnalysisContext context) {
+    private ShopAIAnalysisResult generateAnalysis(Long shopId,
+                                                  int minLiked,
+                                                  int limit,
+                                                  ShopAnalysisContext context,
+                                                  PromptTemplateRender prompt) {
         String cacheKey = aiResultCacheService.buildShopAnalysisKey(
                 shopId,
                 context.getContextVersion(),
-                PromptTemplateRegistry.QUALITY_SUMMARY_VERSION,
-                ModelGateway.MODEL_NAME,
-                "quality_summary",
+                prompt.getVersion(),
+                modelName(),
+                ANALYSIS_TYPE,
                 "minLiked=" + minLiked + ":limit=" + limit);
         ShopAIAnalysisResult cached = aiResultCacheService.get(cacheKey, ShopAIAnalysisResult.class);
         if (cached != null && !Boolean.TRUE.equals(cached.getDegraded())) {
-            aiMetricsService.increment("ai.cache.hit", "quality_summary", false);
+            aiMetricsService.increment("ai.cache.hit", ANALYSIS_TYPE, false);
             return cached;
         }
-        if (fallbackPolicy.shouldUseFallback("generateStructuredAnalysis")) {
-            return fallbackPolicy.fallbackAnalysis(shopId, "quality_summary", true);
+        if (fallbackPolicy.shouldUseFallback(MODEL_OPERATION)) {
+            return fallbackPolicy.fallbackAnalysis(shopId, ANALYSIS_TYPE, true);
         }
         try {
-            String prompt = promptTemplateRegistry.qualitySummaryPrompt(context, toPromptBlock(context));
-            ShopAIAnalysisResult result = modelGateway.generateStructuredSummary(prompt, context);
-            QualityCheck quality = qualityGuard.validateAnalysis(result, context.safeEvidence(), "quality_summary");
+            ShopAIAnalysisResult result = modelGateway.generateStructuredSummary(prompt.getContent(), context);
+            QualityCheck quality = qualityGuard.validateAnalysis(result, context.safeEvidence(), ANALYSIS_TYPE);
             if (!quality.pass()) {
-                return fallbackPolicy.fallbackAnalysis(shopId, "quality_summary", true);
+                result = modelGateway.repairStructuredSummary(prompt.getContent(), context, quality.getReason());
+                quality = qualityGuard.validateAnalysis(result, context.safeEvidence(), ANALYSIS_TYPE);
+                if (!quality.pass()) {
+                    return fallbackPolicy.fallbackAnalysis(shopId, ANALYSIS_TYPE, true);
+                }
             }
             result.setSummary(qualityGuard.postProcess(result.getSummary()));
             result.setDegraded(false);
@@ -156,8 +174,8 @@ public class QualitySummaryWorkflow implements ShopAIWorkflow<QualitySummaryWork
             return result;
         } catch (Exception e) {
             log.error("高质量店铺总结生成失败, shopId={}", shopId, e);
-            fallbackPolicy.recordFailure("generateStructuredAnalysis");
-            return fallbackPolicy.fallbackAnalysis(shopId, "quality_summary", true);
+            fallbackPolicy.recordFailure(MODEL_OPERATION);
+            return fallbackPolicy.fallbackAnalysis(shopId, ANALYSIS_TYPE, true);
         }
     }
 
@@ -167,21 +185,27 @@ public class QualitySummaryWorkflow implements ShopAIWorkflow<QualitySummaryWork
                 .filter(time -> time != null)
                 .max(Comparator.naturalOrder())
                 .orElse(null);
-        List<ReviewEvidence> evidence = blogs.stream()
-                .map(blog -> ReviewEvidence.builder()
-                        .blogId(blog.getId())
+        Shop shop = shopMapper.selectById(shopId);
+        ShopProfileSnapshot profile = ShopProfileSnapshot.from(shop);
+        List<EvidenceItem> evidence = blogs.stream()
+                .map(blog -> EvidenceItem.builder()
+                        .id(EvidenceItem.reviewId(blog.getId()))
+                        .type(EvidenceType.REVIEW)
+                        .sourceId(blog.getId())
                         .shopId(shopId)
+                        .title("高质量评价#" + blog.getId())
                         .snippet(truncate(blog.getContent(), 300))
                         .liked(blog.getLiked())
                         .createdAt(blog.getCreateTime())
                         .matchedReason("high_liked")
-                        .score((blog.getLiked() == null ? 0 : blog.getLiked()) / 100.0)
+                        .score(Math.min(1.0, (blog.getLiked() == null ? 0 : blog.getLiked()) / 100.0))
                         .build())
                 .collect(Collectors.toList());
         String contextVersion = blogs.size() + ":" + (latest == null ? "none" : latest.toString());
         return ShopAnalysisContext.builder()
                 .shopId(shopId)
-                .shopName("店铺" + shopId)
+                .shopName(profile == null || isBlank(profile.getName()) ? "店铺" + shopId : profile.getName())
+                .shopProfile(profile)
                 .totalReviews(blogs.size())
                 .latestReviewTime(latest)
                 .contextVersion(contextVersion)
@@ -197,8 +221,8 @@ public class QualitySummaryWorkflow implements ShopAIWorkflow<QualitySummaryWork
         prompt.append("上下文版本: ").append(context.getContextVersion()).append("\n");
         prompt.append("高质量评价证据:\n");
         int index = 1;
-        for (ReviewEvidence evidence : context.safeEvidence()) {
-            prompt.append("[证据").append(index++).append(" blogId=").append(evidence.getBlogId()).append("] ")
+        for (EvidenceItem evidence : context.safeEvidence()) {
+            prompt.append("[证据").append(index++).append(" evidenceId=").append(evidence.getId()).append("] ")
                     .append("点赞=").append(evidence.getLiked()).append(", ")
                     .append("内容=").append(evidence.getSnippet()).append("\n");
         }
@@ -229,11 +253,12 @@ public class QualitySummaryWorkflow implements ShopAIWorkflow<QualitySummaryWork
     private String localQualitySummaryCacheKey(Long shopId,
                                                int minLiked,
                                                int limit,
-                                               ShopAnalysisContext context) {
+                                               ShopAnalysisContext context,
+                                               String promptVersion) {
         return LocalCacheManager.CacheKeys.shopQualitySummaryKey(shopId, minLiked, limit)
                 + ":ctx:" + safe(context == null ? null : context.getContextVersion())
-                + ":prompt:" + PromptTemplateRegistry.QUALITY_SUMMARY_VERSION
-                + ":model:" + ModelGateway.MODEL_NAME;
+                + ":prompt:" + safe(promptVersion)
+                + ":model:" + modelName();
     }
 
     private String safe(String value) {
@@ -248,7 +273,7 @@ public class QualitySummaryWorkflow implements ShopAIWorkflow<QualitySummaryWork
         result.setTraceId(requestContext.getTraceId());
         result.setMemoryId(requestContext.getMemoryId());
         result.setPromptVersion(promptVersion);
-        result.setModelName(ModelGateway.MODEL_NAME);
+        result.setModelName(modelName());
         result.setCacheHit(cacheHit);
         return result;
     }
@@ -275,5 +300,13 @@ public class QualitySummaryWorkflow implements ShopAIWorkflow<QualitySummaryWork
 
     private String fallbackReason(ShopAIAnalysisResult analysis) {
         return Boolean.TRUE.equals(analysis.getDegraded()) ? "AI_MODEL_OR_QUALITY_FALLBACK" : null;
+    }
+
+    private String modelName() {
+        return modelGateway == null ? ModelGateway.DEFAULT_MODEL_NAME : modelGateway.modelName();
+    }
+
+    private boolean isBlank(String value) {
+        return value == null || value.trim().isEmpty();
     }
 }
