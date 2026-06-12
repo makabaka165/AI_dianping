@@ -10,7 +10,6 @@ import com.hmdp.service.ShopContextAssembler;
 import com.hmdp.service.ShopReviewEvidenceRetriever;
 import com.hmdp.service.ShopStatsService;
 import com.hmdp.utils.LocalCacheManager;
-import com.hmdp.utils.UserHolder;
 import dev.langchain4j.agent.tool.P;
 import dev.langchain4j.agent.tool.Tool;
 import lombok.extern.slf4j.Slf4j;
@@ -20,6 +19,7 @@ import javax.annotation.Resource;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 @Component
 @Slf4j
@@ -50,6 +50,9 @@ public class ShopTool {
             return error("INVALID_SHOP_ID", "店铺ID必须是正整数");
         }
         String userId = getCurrentUserId();
+        if (userId == null) {
+            return error("AUTH_CONTEXT_MISSING", "缺少用户上下文，无法调用工具");
+        }
         if (!allowCall(userId, "checkShopExists", 20, 5)) {
             return error("RATE_LIMITED", "调用过于频繁，请稍后再试");
         }
@@ -68,6 +71,9 @@ public class ShopTool {
             return error("INVALID_SHOP_ID", "店铺ID必须是正整数");
         }
         String userId = getCurrentUserId();
+        if (userId == null) {
+            return error("AUTH_CONTEXT_MISSING", "缺少用户上下文，无法调用工具");
+        }
         if (!allowCall(userId, "getShopProfile", 10, 3)) {
             return error("RATE_LIMITED", "调用过于频繁，请稍后再试");
         }
@@ -98,6 +104,9 @@ public class ShopTool {
             return error("INVALID_SHOP_ID", "店铺ID必须是正整数");
         }
         String userId = getCurrentUserId();
+        if (userId == null) {
+            return error("AUTH_CONTEXT_MISSING", "缺少用户上下文，无法调用工具");
+        }
         if (!allowCall(userId, "getShopReviewEvidence", 15, 5)) {
             return error("RATE_LIMITED", "调用过于频繁，请稍后再试");
         }
@@ -119,6 +128,9 @@ public class ShopTool {
             return error("INVALID_SHOP_ID", "店铺ID必须是正整数");
         }
         String userId = getCurrentUserId();
+        if (userId == null) {
+            return error("AUTH_CONTEXT_MISSING", "缺少用户上下文，无法调用工具");
+        }
         if (!allowCall(userId, "getShopComparisonEvidence", 5, 2)) {
             return error("RATE_LIMITED", "调用过于频繁，请稍后再试");
         }
@@ -138,6 +150,9 @@ public class ShopTool {
             @P("店铺类型，可为空") String category,
             @P("推荐数量，1到10") Integer limit) {
         String userId = getCurrentUserId();
+        if (userId == null) {
+            return error("AUTH_CONTEXT_MISSING", "缺少用户上下文，无法调用工具");
+        }
         if (!allowCall(userId, "findRecommendCandidates", 5, 2)) {
             return error("RATE_LIMITED", "调用过于频繁，请稍后再试");
         }
@@ -148,10 +163,36 @@ public class ShopTool {
         data.put("preference", userPreference);
         data.put("category", category);
         data.put("limit", safeLimit);
-        data.put("candidates", candidates);
+        data.put("candidates", toPublicCandidateViews(candidates));
         data.put("candidateCount", candidates == null ? 0 : candidates.size());
         data.put("note", "候选店铺按评分、评论数和销量排序；最终推荐理由需结合用户偏好与店铺证据生成。");
         return json(data);
+    }
+
+    private List<Map<String, Object>> toPublicCandidateViews(List<Shop> candidates) {
+        if (candidates == null) {
+            return List.of();
+        }
+        return candidates.stream()
+                .map(this::toPublicCandidateView)
+                .collect(Collectors.toList());
+    }
+
+    private Map<String, Object> toPublicCandidateView(Shop shop) {
+        Map<String, Object> view = new HashMap<>();
+        if (shop == null) {
+            return view;
+        }
+        view.put("shopId", shop.getId());
+        view.put("shopName", shop.getName());
+        view.put("typeId", shop.getTypeId());
+        view.put("area", shop.getArea());
+        view.put("avgPrice", shop.getAvgPrice());
+        view.put("sold", shop.getSold());
+        view.put("comments", shop.getComments());
+        view.put("score", shop.getScore());
+        view.put("openHours", shop.getOpenHours());
+        return view;
     }
 
     private boolean allowCall(String userId, String toolName, int totalLimit, int minuteLimit) {
@@ -164,12 +205,7 @@ public class ShopTool {
         if (contextUserId != null && !contextUserId.trim().isEmpty()) {
             return contextUserId;
         }
-        try {
-            return UserHolder.getUser() != null ? UserHolder.getUser().getId().toString() : "anonymous";
-        } catch (Exception e) {
-            log.debug("Use anonymous user for tool call", e);
-            return "anonymous";
-        }
+        return null;
     }
 
     private boolean validShopId(Long shopId) {

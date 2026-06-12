@@ -4,6 +4,7 @@ import com.hmdp.dto.Result;
 import com.hmdp.service.ai.AIService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Profile;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.HashMap;
@@ -17,6 +18,7 @@ import java.util.Map;
  */
 @RestController
 @RequestMapping("/api/ai/test")
+@Profile({"dev", "test"})
 @Slf4j
 public class AITestController {
 

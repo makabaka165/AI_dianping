@@ -5,3 +5,5 @@ hmdp:
 
 rag:
   enabled: false
+  redis:
+    fallback-to-memory: true

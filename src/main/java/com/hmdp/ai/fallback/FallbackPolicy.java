@@ -7,12 +7,14 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import javax.annotation.Resource;
+import java.time.Duration;
+import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Deque;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 @Component
@@ -20,7 +22,8 @@ import java.util.stream.Collectors;
 public class FallbackPolicy {
 
     private static final int FAILURE_THRESHOLD = 3;
-    private static final long FAILURE_RESET_TIME = 300000L;
+    private static final Duration FAILURE_WINDOW = Duration.ofSeconds(60);
+    private static final Duration OPEN_DURATION = Duration.ofSeconds(30);
 
     @Resource
     private AIFallbackService aiFallbackService;
@@ -28,35 +31,23 @@ public class FallbackPolicy {
     @Resource
     private AiMetricsService aiMetricsService;
 
-    private final Map<String, AtomicInteger> failureCounters = new ConcurrentHashMap<>();
-    private final Map<String, Long> lastFailureTime = new ConcurrentHashMap<>();
+    private final Map<String, FailureWindow> failureWindows = new ConcurrentHashMap<>();
 
     public boolean shouldUseFallback(String serviceType) {
-        AtomicInteger counter = failureCounters.get(serviceType);
-        int failureCount = counter == null ? 0 : counter.get();
-        Long lastFailure = lastFailureTime.get(serviceType);
-        if (failureCount >= FAILURE_THRESHOLD) {
-            long currentTime = System.currentTimeMillis();
-            if (lastFailure != null && (currentTime - lastFailure) < FAILURE_RESET_TIME) {
-                return true;
-            }
-            if (counter != null) {
-                counter.set(0);
-            }
-            lastFailureTime.remove(serviceType);
-        }
-        return false;
+        FailureWindow window = failureWindows.get(normalize(serviceType));
+        return window != null && window.shouldUseFallback(System.currentTimeMillis());
     }
 
     public void recordFailure(String serviceType) {
-        long currentTime = System.currentTimeMillis();
-        Long lastTime = lastFailureTime.get(serviceType);
-        if (lastTime == null || (currentTime - lastTime) > FAILURE_RESET_TIME) {
-            failureCounters.computeIfAbsent(serviceType, ignored -> new AtomicInteger()).set(1);
+        String key = normalize(serviceType);
+        boolean opened = failureWindows
+                .computeIfAbsent(key, ignored -> new FailureWindow())
+                .recordFailure(System.currentTimeMillis());
+        if (opened) {
+            log.warn("AI fallback window opened, serviceType={}", key);
         } else {
-            failureCounters.computeIfAbsent(serviceType, ignored -> new AtomicInteger()).incrementAndGet();
+            log.debug("AI model failure recorded by workflow, serviceType={}", key);
         }
-        lastFailureTime.put(serviceType, currentTime);
     }
 
     public ShopAIAnalysisResult fallbackAnalysis(Long shopId, String analysisType, boolean degraded) {
@@ -93,5 +84,43 @@ public class FallbackPolicy {
                 .filter(s -> !s.isEmpty())
                 .limit(5)
                 .collect(Collectors.toList());
+    }
+
+    private String normalize(String serviceType) {
+        return serviceType == null || serviceType.trim().isEmpty() ? "default" : serviceType.trim();
+    }
+
+    private static class FailureWindow {
+        private final Deque<Long> failures = new ArrayDeque<>();
+        private long openUntil;
+
+        synchronized boolean recordFailure(long now) {
+            purge(now);
+            failures.addLast(now);
+            if (failures.size() >= FAILURE_THRESHOLD) {
+                openUntil = now + OPEN_DURATION.toMillis();
+                failures.clear();
+                return true;
+            }
+            return false;
+        }
+
+        synchronized boolean shouldUseFallback(long now) {
+            if (openUntil > now) {
+                return true;
+            }
+            if (openUntil > 0) {
+                openUntil = 0;
+            }
+            purge(now);
+            return false;
+        }
+
+        private void purge(long now) {
+            long threshold = now - FAILURE_WINDOW.toMillis();
+            while (!failures.isEmpty() && failures.peekFirst() < threshold) {
+                failures.removeFirst();
+            }
+        }
     }
 }

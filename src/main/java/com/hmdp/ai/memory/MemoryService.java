@@ -26,6 +26,9 @@ import java.util.stream.Collectors;
 @Slf4j
 public class MemoryService {
 
+    private static final int SCAN_BATCH_SIZE = 100;
+    private static final int EVIDENCE_SNIPPET_LIMIT = 300;
+
     @Resource
     private ChatMemoryKeyManager keyManager;
 
@@ -98,6 +101,26 @@ public class MemoryService {
         delete(shopSummaryKey(shopId, userId));
     }
 
+    public int clearAllShopSummaryMemory(Long shopId) {
+        if (shopId == null || shopId <= 0) {
+            return 0;
+        }
+        String pattern = "hmdp:memory:" + ChatMemoryKeyManager.SHOP_SUMMARY_PREFIX + ":" + shopId + ":*";
+        int deleted = 0;
+        try {
+            List<String> keys = redissonClient.getKeys()
+                    .getKeysStreamByPattern(pattern, SCAN_BATCH_SIZE)
+                    .collect(Collectors.toList());
+            for (String key : keys) {
+                deleted += redissonClient.getKeys().unlink(key);
+            }
+            return deleted;
+        } catch (Exception e) {
+            log.warn("娓呴櫎搴楅摵鎬荤粨璁板繂澶辫触, shopId={}", shopId, e);
+            return deleted;
+        }
+    }
+
     public void clearRecommendMemory(String userId) {
         delete(shopRecommendKey(userId));
     }
@@ -115,11 +138,11 @@ public class MemoryService {
         int totalDeleted = 0;
         for (String pattern : patterns) {
             int count = 0;
-            Iterable<String> keys = redissonClient.getKeys().getKeysByPattern(pattern);
+            List<String> keys = redissonClient.getKeys()
+                    .getKeysStreamByPattern(pattern, SCAN_BATCH_SIZE)
+                    .collect(Collectors.toList());
             for (String key : keys) {
-                if (redissonClient.getBucket(key).delete()) {
-                    count++;
-                }
+                count += redissonClient.getKeys().unlink(key);
             }
             result.put(pattern, count);
             totalDeleted += count;
@@ -198,7 +221,18 @@ public class MemoryService {
     private String summarizeEvidence(List<ReviewEvidence> evidence) {
         return evidence.stream()
                 .limit(3)
-                .map(item -> "#" + item.getBlogId() + ":" + item.getSnippet())
+                .map(item -> "#" + item.getBlogId() + ":" + truncate(item.getSnippet(), EVIDENCE_SNIPPET_LIMIT))
                 .collect(Collectors.joining(" | "));
+    }
+
+    private String truncate(String value, int maxLength) {
+        if (value == null) {
+            return "";
+        }
+        String trimmed = value.trim();
+        if (trimmed.length() <= maxLength) {
+            return trimmed;
+        }
+        return trimmed.substring(0, maxLength) + "...[truncated]";
     }
 }

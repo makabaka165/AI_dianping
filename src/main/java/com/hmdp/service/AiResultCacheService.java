@@ -15,6 +15,7 @@ public class AiResultCacheService {
 
     private static final String PREFIX = "hmdp:ai:result:";
     private static final long TTL_SECONDS = 3600L;
+    private static final int SCAN_BATCH_SIZE = 100;
 
     @Resource
     private RedissonClient redissonClient;
@@ -59,10 +60,9 @@ public class AiResultCacheService {
 
     public void evictShop(Long shopId) {
         try {
-            Iterable<String> keys = redissonClient.getKeys().getKeysByPattern(PREFIX + "shop:" + shopId + ":*");
-            for (String key : keys) {
-                redissonClient.getBucket(key).delete();
-            }
+            redissonClient.getKeys()
+                    .getKeysStreamByPattern(PREFIX + "shop:" + shopId + ":*", SCAN_BATCH_SIZE)
+                    .forEach(key -> redissonClient.getKeys().unlink(key));
         } catch (Exception e) {
             log.debug("Evict AI L2 cache failed, shopId={}", shopId, e);
         }

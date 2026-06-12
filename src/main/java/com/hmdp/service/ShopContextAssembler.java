@@ -18,6 +18,7 @@ public class ShopContextAssembler {
 
     private static final int SINGLE_SHOP_EVIDENCE_LIMIT = 8;
     private static final int COMPARE_EVIDENCE_LIMIT = 5;
+    private static final int EVIDENCE_SNIPPET_LIMIT = 300;
 
     @Resource
     private BlogMapper blogMapper;
@@ -61,7 +62,7 @@ public class ShopContextAssembler {
             prompt.append("[证据").append(index++).append(" blogId=").append(evidence.getBlogId()).append("] ")
                     .append("点赞=").append(evidence.getLiked()).append(", ")
                     .append("原因=").append(evidence.getMatchedReason()).append(", ")
-                    .append("内容=").append(evidence.getSnippet()).append("\n");
+                    .append("内容=").append(truncate(evidence.getSnippet(), EVIDENCE_SNIPPET_LIMIT)).append("\n");
         }
         if (context.safeEvidence().isEmpty()) {
             prompt.append("无可用评价证据。\n");
@@ -86,6 +87,17 @@ public class ShopContextAssembler {
         } catch (NumberFormatException e) {
             return 0;
         }
+    }
+
+    private String truncate(String value, int maxLength) {
+        if (value == null) {
+            return "";
+        }
+        String trimmed = value.trim();
+        if (trimmed.length() <= maxLength) {
+            return trimmed;
+        }
+        return trimmed.substring(0, maxLength) + "...[truncated]";
     }
 
     private LocalDateTime dateTimeValue(Object value) {

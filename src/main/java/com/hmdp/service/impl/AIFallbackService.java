@@ -2,7 +2,6 @@ package com.hmdp.service.impl;
 
 import com.hmdp.entity.Blog;
 import com.hmdp.mapper.BlogMapper;
-import com.hmdp.service.ai.ShopAIService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -149,8 +148,7 @@ public class AIFallbackService {
      */
     public String analyzeShopDataFallback(String memoryId, String analysisPrompt) {
         try {
-            // 简单返回分析提示的内容
-            return "基于分析需求：" + analysisPrompt + "，当前AI服务不可用，已切换到降级模式。";
+            return "当前AI服务不可用，已切换到降级模式。暂时无法生成完整分析，请稍后重试。";
         } catch (Exception e) {
             log.error("店铺数据分析降级方案失败", e);
             return "抱歉，当前AI服务不可用，暂时无法进行详细分析。";

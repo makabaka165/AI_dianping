@@ -5,7 +5,6 @@ import cn.dev33.satoken.annotation.SaCheckPermission;
 import com.hmdp.dto.BlogCreateRequest;
 import com.hmdp.dto.Result;
 import com.hmdp.service.IBlogService;
-import com.hmdp.service.ShopSummaryService;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -25,17 +24,10 @@ public class BlogController {
     @Resource
     private IBlogService blogService;
 
-    @Resource
-    private ShopSummaryService shopSummaryService;
-
     @PostMapping
     @SaCheckPermission("blog:create")
     public Result saveBlog(@RequestBody @Validated BlogCreateRequest request) {
-        Result result = blogService.saveBlog(request);
-        if (result.getSuccess() && request.getShopId() != null) {
-            shopSummaryService.clearShopRelatedCaches(request.getShopId());
-        }
-        return result;
+        return blogService.saveBlog(request);
     }
 
     @PutMapping("/like/{id}")

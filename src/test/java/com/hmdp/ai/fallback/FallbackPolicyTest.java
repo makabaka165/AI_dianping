@@ -45,11 +45,21 @@ class FallbackPolicyTest {
     }
 
     @Test
-    void shouldUseFallbackAfterConsecutiveFailures() {
+    void shouldOpenLocalFallbackWindowAfterRepeatedFailures() {
         fallbackPolicy.recordFailure("model");
         fallbackPolicy.recordFailure("model");
         fallbackPolicy.recordFailure("model");
 
         assertThat(fallbackPolicy.shouldUseFallback("model")).isTrue();
+    }
+
+    @Test
+    void shouldKeepFailureWindowsPerServiceType() {
+        fallbackPolicy.recordFailure("model-a");
+        fallbackPolicy.recordFailure("model-a");
+        fallbackPolicy.recordFailure("model-a");
+
+        assertThat(fallbackPolicy.shouldUseFallback("model-a")).isTrue();
+        assertThat(fallbackPolicy.shouldUseFallback("model-b")).isFalse();
     }
 }

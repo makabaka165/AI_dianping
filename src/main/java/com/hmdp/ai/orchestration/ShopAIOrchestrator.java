@@ -4,16 +4,21 @@ import com.hmdp.ai.intent.ShopAIIntent;
 import com.hmdp.ai.workflow.ChatWorkflow;
 import com.hmdp.ai.workflow.CompareWorkflow;
 import com.hmdp.ai.workflow.QAWorkflow;
+import com.hmdp.ai.workflow.QualitySummaryWorkflow;
 import com.hmdp.ai.workflow.RecommendWorkflow;
 import com.hmdp.ai.workflow.SummaryWorkflow;
 import com.hmdp.ai.workflow.request.ChatWorkflowRequest;
 import com.hmdp.ai.workflow.request.CompareWorkflowRequest;
 import com.hmdp.ai.workflow.request.QAWorkflowRequest;
+import com.hmdp.ai.workflow.request.QualitySummaryWorkflowRequest;
 import com.hmdp.ai.workflow.request.RecommendWorkflowRequest;
 import com.hmdp.ai.workflow.request.SummaryWorkflowRequest;
 import com.hmdp.dto.ai.ShopAIResponse;
+import com.hmdp.dto.ai.ShopAIStreamEvent;
 import com.hmdp.entity.ShopSummaryResult;
+import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.stereotype.Service;
+import reactor.core.publisher.Flux;
 
 import javax.annotation.Resource;
 
@@ -25,6 +30,9 @@ public class ShopAIOrchestrator {
 
     @Resource
     private SummaryWorkflow summaryWorkflow;
+
+    @Resource
+    private QualitySummaryWorkflow qualitySummaryWorkflow;
 
     @Resource
     private QAWorkflow qaWorkflow;
@@ -40,9 +48,19 @@ public class ShopAIOrchestrator {
         return chatWorkflow.execute(context, request);
     }
 
+    public Flux<ServerSentEvent<ShopAIStreamEvent>> chatStream(ShopAIRequestContext context, ChatWorkflowRequest request) {
+        context.setIntent(ShopAIIntent.FREE_CHAT);
+        return chatWorkflow.stream(context, request);
+    }
+
     public ShopSummaryResult summary(ShopAIRequestContext context, SummaryWorkflowRequest request) {
         context.setIntent(ShopAIIntent.SUMMARY);
         return summaryWorkflow.execute(context, request);
+    }
+
+    public ShopSummaryResult qualitySummary(ShopAIRequestContext context, QualitySummaryWorkflowRequest request) {
+        context.setIntent(ShopAIIntent.SUMMARY);
+        return qualitySummaryWorkflow.execute(context, request);
     }
 
     public ShopAIResponse ask(ShopAIRequestContext context, QAWorkflowRequest request) {

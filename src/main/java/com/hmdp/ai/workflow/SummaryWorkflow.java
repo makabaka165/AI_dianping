@@ -27,6 +27,8 @@ import java.util.Collections;
 @Slf4j
 public class SummaryWorkflow implements ShopAIWorkflow<SummaryWorkflowRequest, ShopSummaryResult> {
 
+    private static final double MIN_MEMORY_CONFIDENCE = 0.4;
+
     @Resource
     private LocalCacheManager localCacheManager;
 
@@ -64,20 +66,29 @@ public class SummaryWorkflow implements ShopAIWorkflow<SummaryWorkflowRequest, S
         long start = System.currentTimeMillis();
         Long shopId = request.getShopId();
         if (shopId == null || shopId <= 0) {
-            throw new IllegalArgumentException("店铺ID必须是正数");
+            throw new IllegalArgumentException("shopId must be positive");
         }
 
-        String localCacheKey = LocalCacheManager.CacheKeys.shopSummaryKey(shopId);
+        ShopAnalysisContext localContext = shopContextAssembler.buildForShop(shopId, "shop summary");
+        String localCacheKey = localSummaryCacheKey(shopId, localContext);
         ShopSummaryResult cachedResult = localCacheManager.get(
                 localCacheKey, ShopSummaryResult.class, LocalCacheManager.CacheType.AI_RESULT);
         if (cachedResult != null) {
             aiMetricsService.increment("ai.cache.hit", "summary", false);
-            return cachedResult;
+            ShopSummaryResult response = attachMetadata(
+                    cachedResult, requestContext, true, PromptTemplateRegistry.SUMMARY_VERSION);
+            writeMemoryIfNeeded(request, requestContext, shopId, response, localContext);
+            aiMetricsService.recordDuration("summary", System.currentTimeMillis() - start, false);
+            return response;
         }
 
-        ShopAnalysisContext context = shopContextAssembler.buildForShop(shopId, "店铺总结");
+        ShopAnalysisContext context = localContext;
         if (context.getTotalReviews() == null || context.getTotalReviews() == 0) {
-            return createEmptyResult(shopId);
+            ShopSummaryResult response = attachMetadata(
+                    createEmptyResult(shopId), requestContext, false, PromptTemplateRegistry.SUMMARY_VERSION);
+            writeMemoryIfNeeded(request, requestContext, shopId, response, context);
+            aiMetricsService.recordDuration("summary", System.currentTimeMillis() - start, false);
+            return response;
         }
 
         ShopAIAnalysisResult analysis = generateAnalysis(shopId, context);
@@ -89,17 +100,32 @@ public class SummaryWorkflow implements ShopAIWorkflow<SummaryWorkflowRequest, S
                 .keyPoints(analysis.safeKeywords())
                 .overallSentiment(analysis.getSentiment())
                 .summaryTime(LocalDateTime.now())
+                .evidence(context.safeEvidence())
+                .confidence(analysis.getConfidence())
+                .degraded(Boolean.TRUE.equals(analysis.getDegraded()))
+                .cacheHit(false)
+                .fallbackReason(fallbackReason(analysis))
                 .build();
 
-        localCacheManager.put(localCacheKey, result, LocalCacheManager.CacheType.AI_RESULT);
-        if (request.isWriteMemory() && requestContext.getUserId() != null) {
-            memoryService.writeSummaryMemory(
-                    memoryService.shopSummaryKey(shopId, requestContext.getUserId()),
-                    result,
-                    context);
+        if (!Boolean.TRUE.equals(result.getDegraded())) {
+            localCacheManager.put(localCacheKey, result.withoutRequestMetadata(), LocalCacheManager.CacheType.AI_RESULT);
         }
+        ShopSummaryResult response = attachMetadata(
+                result, requestContext, false, PromptTemplateRegistry.SUMMARY_VERSION);
+        writeMemoryIfNeeded(request, requestContext, shopId, response, context);
         aiMetricsService.recordDuration("summary", System.currentTimeMillis() - start, Boolean.TRUE.equals(analysis.getDegraded()));
-        return result;
+        return response;
+    }
+
+    private String localSummaryCacheKey(Long shopId, ShopAnalysisContext context) {
+        return LocalCacheManager.CacheKeys.shopSummaryKey(shopId)
+                + ":ctx:" + safe(context == null ? null : context.getContextVersion())
+                + ":prompt:" + PromptTemplateRegistry.SUMMARY_VERSION
+                + ":model:" + ModelGateway.MODEL_NAME;
+    }
+
+    private String safe(String value) {
+        return value == null ? "none" : value.replaceAll("[^a-zA-Z0-9_.:-]", "_");
     }
 
     private ShopAIAnalysisResult generateAnalysis(Long shopId, ShopAnalysisContext context) {
@@ -111,14 +137,12 @@ public class SummaryWorkflow implements ShopAIWorkflow<SummaryWorkflowRequest, S
                 "summary",
                 "default");
         ShopAIAnalysisResult cached = aiResultCacheService.get(cacheKey, ShopAIAnalysisResult.class);
-        if (cached != null) {
+        if (cached != null && !Boolean.TRUE.equals(cached.getDegraded())) {
             aiMetricsService.increment("ai.cache.hit", "summary", false);
             return cached;
         }
         if (fallbackPolicy.shouldUseFallback("generateStructuredAnalysis")) {
-            ShopAIAnalysisResult fallback = fallbackPolicy.fallbackAnalysis(shopId, "summary", true);
-            aiResultCacheService.put(cacheKey, fallback);
-            return fallback;
+            return fallbackPolicy.fallbackAnalysis(shopId, "summary", true);
         }
         try {
             String prompt = promptTemplateRegistry.summaryPrompt(
@@ -127,9 +151,7 @@ public class SummaryWorkflow implements ShopAIWorkflow<SummaryWorkflowRequest, S
             ShopAIAnalysisResult result = modelGateway.generateStructuredSummary(prompt, context);
             QualityCheck quality = qualityGuard.validateAnalysis(result, context.safeEvidence(), "summary");
             if (!quality.pass()) {
-                ShopAIAnalysisResult fallback = fallbackPolicy.fallbackAnalysis(shopId, "summary", true);
-                aiResultCacheService.put(cacheKey, fallback);
-                return fallback;
+                return fallbackPolicy.fallbackAnalysis(shopId, "summary", true);
             }
             result.setSummary(qualityGuard.postProcess(result.getSummary()));
             result.setDegraded(false);
@@ -138,9 +160,7 @@ public class SummaryWorkflow implements ShopAIWorkflow<SummaryWorkflowRequest, S
         } catch (Exception e) {
             log.error("结构化店铺总结生成失败, shopId={}", shopId, e);
             fallbackPolicy.recordFailure("generateStructuredAnalysis");
-            ShopAIAnalysisResult fallback = fallbackPolicy.fallbackAnalysis(shopId, "summary", true);
-            aiResultCacheService.put(cacheKey, fallback);
-            return fallback;
+            return fallbackPolicy.fallbackAnalysis(shopId, "summary", true);
         }
     }
 
@@ -151,6 +171,47 @@ public class SummaryWorkflow implements ShopAIWorkflow<SummaryWorkflowRequest, S
                 .totalBlogs(0)
                 .keyPoints(Collections.emptyList())
                 .summaryTime(LocalDateTime.now())
+                .evidence(Collections.emptyList())
+                .confidence(0.2)
+                .degraded(false)
+                .cacheHit(false)
                 .build();
+    }
+
+    private ShopSummaryResult attachMetadata(ShopSummaryResult source,
+                                             ShopAIRequestContext requestContext,
+                                             boolean cacheHit,
+                                             String promptVersion) {
+        ShopSummaryResult result = source.copy();
+        result.setTraceId(requestContext.getTraceId());
+        result.setMemoryId(requestContext.getMemoryId());
+        result.setPromptVersion(promptVersion);
+        result.setModelName(ModelGateway.MODEL_NAME);
+        result.setCacheHit(cacheHit);
+        return result;
+    }
+
+    private void writeMemoryIfNeeded(SummaryWorkflowRequest request,
+                                     ShopAIRequestContext requestContext,
+                                     Long shopId,
+                                     ShopSummaryResult result,
+                                     ShopAnalysisContext context) {
+        if (!request.isWriteMemory() || requestContext.getUserId() == null) {
+            return;
+        }
+        if (Boolean.TRUE.equals(result.getDegraded())
+                || (result.getConfidence() != null && result.getConfidence() < MIN_MEMORY_CONFIDENCE)) {
+            return;
+        }
+        String summaryMemoryId = memoryService.shopSummaryKey(shopId, requestContext.getUserId());
+        if (requestContext.getMemoryId() == null || requestContext.getMemoryId().trim().isEmpty()) {
+            requestContext.setMemoryId(summaryMemoryId);
+            result.setMemoryId(summaryMemoryId);
+        }
+        memoryService.writeSummaryMemory(summaryMemoryId, result, context);
+    }
+
+    private String fallbackReason(ShopAIAnalysisResult analysis) {
+        return Boolean.TRUE.equals(analysis.getDegraded()) ? "AI_MODEL_OR_QUALITY_FALLBACK" : null;
     }
 }

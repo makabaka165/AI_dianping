@@ -118,4 +118,42 @@ public class CompareWorkflow implements ShopAIWorkflow<CompareWorkflowRequest, S
                 .usedTools(Collections.emptyList())
                 .build();
     }
+    public StreamWorkflowPlan prepareStreamPlan(ShopAIRequestContext context, CompareWorkflowRequest request) {
+        if (request.getShopId1() == null || request.getShopId1() <= 0
+                || request.getShopId2() == null || request.getShopId2() <= 0) {
+            throw new IllegalArgumentException("shopIds must be positive");
+        }
+        String memoryId = memoryService.shopCompareKey(context.getUserId(), context.getSessionId());
+        context.setMemoryId(memoryId);
+        ShopAnalysisContext context1 = shopContextAssembler.buildForCompare(request.getShopId1(), "shop compare", request.getAspect());
+        ShopAnalysisContext context2 = shopContextAssembler.buildForCompare(request.getShopId2(), "shop compare", request.getAspect());
+        List<ReviewEvidence> evidence = new ArrayList<>();
+        evidence.addAll(context1.safeEvidence());
+        evidence.addAll(context2.safeEvidence());
+        if (evidence.isEmpty()) {
+            return StreamWorkflowPlan.builder()
+                    .analysisType("compare")
+                    .memoryId(memoryId)
+                    .directText("当前评价证据不足以判断两家店铺的对比表现。")
+                    .evidence(evidence)
+                    .confidence(0.2)
+                    .degraded(false)
+                    .cacheHit(false)
+                    .build();
+        }
+
+        String prompt = promptTemplateRegistry.comparePrompt(
+                request.getAspect(),
+                shopContextAssembler.toPromptBlock(context1),
+                shopContextAssembler.toPromptBlock(context2));
+        return StreamWorkflowPlan.builder()
+                .analysisType("compare")
+                .memoryId(memoryId)
+                .prompt(prompt)
+                .evidence(evidence)
+                .confidence(0.7)
+                .degraded(false)
+                .cacheHit(false)
+                .build();
+    }
 }

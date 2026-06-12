@@ -32,6 +32,8 @@ import java.util.stream.Collectors;
 @Slf4j
 public class RedissonChatMemoryStore implements ChatMemoryStore {
 
+    private static final int SCAN_BATCH_SIZE = 100;
+
     private final RedissonClient redissonClient;
     private final ChatMemoryKeyManager keyManager;
     private final ObjectMapper objectMapper;
@@ -458,12 +460,10 @@ public class RedissonChatMemoryStore implements ChatMemoryStore {
         String pattern = keyManager.buildPatternKey(functionType);
 
         try {
-            Iterable<String> keys = redissonClient.getKeys().getKeysByPattern(pattern);
+            List<String> keys = scanKeys(pattern);
             int count = 0;
             for (String key : keys) {
-                if (redissonClient.getBucket(key).delete()) {
-                    count++;
-                }
+                count += redissonClient.getKeys().unlink(key);
             }
 
             if (count > 0) {
@@ -484,7 +484,7 @@ public class RedissonChatMemoryStore implements ChatMemoryStore {
         Map<String, Integer> stats = new HashMap<>();
 
         try {
-            Iterable<String> keys = redissonClient.getKeys().getKeysByPattern(pattern);
+            List<String> keys = scanKeys(pattern);
             int totalKeys = 0;
             int totalMessages = 0;
 
@@ -522,6 +522,12 @@ public class RedissonChatMemoryStore implements ChatMemoryStore {
         return allStats;
     }
 
+    private List<String> scanKeys(String pattern) {
+        return redissonClient.getKeys()
+                .getKeysStreamByPattern(pattern, SCAN_BATCH_SIZE)
+                .collect(Collectors.toList());
+    }
+
     /**
      * 根据功能类型获取TTL（使用本地缓存优化）
      */
@@ -545,7 +551,7 @@ public class RedissonChatMemoryStore implements ChatMemoryStore {
         int cleanedCount = 0;
         try {
             // 获取所有记忆相关的key
-            Iterable<String> keys = redissonClient.getKeys().getKeysByPattern("*memory*");
+            List<String> keys = scanKeys("*memory*");
 
             for (String key : keys) {
                 try {

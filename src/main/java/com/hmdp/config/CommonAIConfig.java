@@ -48,6 +48,7 @@ import java.io.IOException;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Proxy;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -80,6 +81,9 @@ public class CommonAIConfig {
     @Value("${langchain4j.open-ai.embedding-model.model-name:text-embedding-v3}")
     private String embeddingModelName;
 
+    @Value("${hmdp.ai.model.timeout-seconds:30}")
+    private long modelTimeoutSeconds;
+
     @Value("${chat.memory.max-messages:20}")
     private int maxMessages;
 
@@ -101,6 +105,9 @@ public class CommonAIConfig {
 
     @Value("${rag.data.auto-import:false}")
     private boolean autoImportData;
+
+    @Value("${rag.redis.fallback-to-memory:false}")
+    private boolean ragRedisFallbackToMemory;
 
     @Value("${hmdp.ai.redis-health-check:true}")
     private boolean redisHealthCheckEnabled;
@@ -212,6 +219,7 @@ public class CommonAIConfig {
                 .baseUrl(baseUrl)
                 .temperature(temperature)
                 .maxTokens(1500)
+                .timeout(modelTimeout())
                 .logRequests(logRequests)
                 .logResponses(logResponses)
                 .build();
@@ -226,6 +234,7 @@ public class CommonAIConfig {
                 .baseUrl(baseUrl)
                 .temperature(temperature)
                 .maxTokens(1500)
+                .timeout(modelTimeout())
                 .logRequests(logRequests)
                 .logResponses(logResponses)
                 .build();
@@ -238,33 +247,30 @@ public class CommonAIConfig {
                 .apiKey(apiKey)
                 .modelName(embeddingModelName)
                 .baseUrl(baseUrl)
+                .timeout(modelTimeout())
                 .build();
+    }
+
+    private Duration modelTimeout() {
+        return Duration.ofSeconds(Math.max(1, modelTimeoutSeconds));
     }
 
 
     /**
-     * 创建Redis向量存储Bean
+     * 创建 Redis 向量存储。不要作为独立 Bean 暴露，避免 Redis Stack 不可用时阻断应用启动。
      */
-    // RAG Redis配置已经正确指向6380
-    @Bean
-    @ConditionalOnProperty(value = "rag.enabled", havingValue = "true")
-    public RedisEmbeddingStore redisEmbeddingStore() {
+    private RedisEmbeddingStore buildRedisEmbeddingStore() {
         log.info("初始化 RedisEmbeddingStore - RAG专用 - 主机: {}, 端口: {}, 索引: {}, 维度: {}",
                 redisHost, redisPort, vectorIndexName, vectorDimension);
 
-        try {
-            RedisEmbeddingStore store = RedisEmbeddingStore.builder()
-                    .host(redisHost)
-                    .port(redisPort)  // 这里会使用6380端口
-                    .indexName(vectorIndexName)
-                    .dimension(vectorDimension)
-                    .build();
-            log.info("✅ RedisEmbeddingStore 创建成功");
-            return store;
-        } catch (Exception e) {
-            log.error("❌ RedisEmbeddingStore 创建失败: {}", e.getMessage(), e);
-            throw new RuntimeException("Redis向量存储初始化失败", e);
-        }
+        RedisEmbeddingStore store = RedisEmbeddingStore.builder()
+                .host(redisHost)
+                .port(redisPort)
+                .indexName(vectorIndexName)
+                .dimension(vectorDimension)
+                .build();
+        log.info("✅ RedisEmbeddingStore 创建成功");
+        return store;
     }
     
     /**
@@ -283,7 +289,6 @@ public class CommonAIConfig {
     @Bean
     @ConditionalOnProperty(value = "rag.enabled", havingValue = "true")
     public EmbeddingStore<TextSegment> embeddingStore(
-            RedisEmbeddingStore redisEmbeddingStore,
             InMemoryEmbeddingStore<TextSegment> inMemoryEmbeddingStore,
             EmbeddingModel embeddingModel,
             DocumentQualityAssessor documentQualityAssessor) {
@@ -292,6 +297,7 @@ public class CommonAIConfig {
 
         // 尝试使用Redis存储
         try {
+            RedisEmbeddingStore redisEmbeddingStore = buildRedisEmbeddingStore();
             // 检查是否需要初始化数据
             if (shouldInitializeVectorStore(redisEmbeddingStore, embeddingModel)) {
                 if (autoImportData) {
@@ -308,8 +314,14 @@ public class CommonAIConfig {
             log.info("✅ 使用Redis向量数据库");
             return redisEmbeddingStore;
         } catch (Exception e) {
-            log.warn("❌ Redis向量数据库不可用，切换到内存存储: {}", e.getMessage());
-            log.info("✅ 使用内存向量数据库（降级方案）");
+            if (!ragRedisFallbackToMemory) {
+                throw new IllegalStateException(
+                        "RAG is enabled but Redis Stack embedding store is unavailable. "
+                                + "Set rag.redis.fallback-to-memory=true only for dev/test fallback.",
+                        e);
+            }
+            log.warn("Redis embedding store unavailable, using in-memory fallback because rag.redis.fallback-to-memory=true: {}",
+                    e.getMessage());
             return inMemoryEmbeddingStore;
         }
     }
@@ -403,8 +415,7 @@ public class CommonAIConfig {
             return !hasData; // 没有数据则需要初始化
 
         } catch (Exception e) {
-            log.info("向量数据库状态检查失败，假设需要初始化: {}", e.getMessage());
-            return true;
+            throw new IllegalStateException("Vector store state check failed", e);
         }
     }
 

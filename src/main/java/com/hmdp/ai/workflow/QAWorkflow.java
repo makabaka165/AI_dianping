@@ -108,6 +108,47 @@ public class QAWorkflow implements ShopAIWorkflow<QAWorkflowRequest, ShopAIRespo
                 .build();
     }
 
+    public StreamWorkflowPlan prepareStreamPlan(ShopAIRequestContext context, QAWorkflowRequest request) {
+        if (request.getShopId() == null || request.getShopId() <= 0) {
+            throw new IllegalArgumentException("shopId must be positive");
+        }
+        if (isBlank(request.getQuestion())) {
+            throw new IllegalArgumentException("question must not be blank");
+        }
+
+        String memoryId = memoryService.shopQAKey(request.getShopId(), context.getUserId());
+        context.setMemoryId(memoryId);
+        ShopAnalysisContext shopContext = shopContextAssembler.buildForShop(request.getShopId(), request.getQuestion());
+        if (shopContext.safeEvidence().isEmpty()) {
+            return StreamWorkflowPlan.builder()
+                    .analysisType("ask")
+                    .memoryId(memoryId)
+                    .directText("当前评价证据不足以判断店铺" + request.getShopId() + "的情况。")
+                    .evidence(Collections.emptyList())
+                    .confidence(0.2)
+                    .degraded(false)
+                    .cacheHit(false)
+                    .build();
+        }
+
+        String summaryMemory = memoryService.readSummaryMemory(
+                memoryService.shopSummaryKey(request.getShopId(), context.getUserId()));
+        String prompt = promptTemplateRegistry.qaPrompt(
+                request.getQuestion(),
+                summaryMemory,
+                shopContextAssembler.toPromptBlock(shopContext));
+
+        return StreamWorkflowPlan.builder()
+                .analysisType("ask")
+                .memoryId(memoryId)
+                .prompt(prompt)
+                .evidence(shopContext.safeEvidence())
+                .confidence(0.75)
+                .degraded(false)
+                .cacheHit(false)
+                .build();
+    }
+
     private ShopAIResponse insufficientEvidence(Long shopId, ShopAIRequestContext context, String answer) {
         return ShopAIResponse.builder()
                 .answer(answer)

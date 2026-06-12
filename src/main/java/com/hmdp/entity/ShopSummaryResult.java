@@ -1,5 +1,6 @@
 package com.hmdp.entity;
 
+import com.hmdp.dto.ai.ReviewEvidence;
 import lombok.Builder;
 import lombok.Data;
 
@@ -24,5 +25,55 @@ public class ShopSummaryResult {
     private String overallSentiment; // 整体情感倾向
 
     private LocalDateTime summaryTime; // 总结时间
-}
 
+    private List<ReviewEvidence> evidence;
+
+    private Double confidence;
+
+    private Boolean degraded;
+
+    private Boolean cacheHit;
+
+    private String traceId;
+
+    private String memoryId;
+
+    private String promptVersion;
+
+    private String modelName;
+
+    private String fallbackReason;
+
+    public ShopSummaryResult copy() {
+        return ShopSummaryResult.builder()
+                .shopId(shopId)
+                .shopName(shopName)
+                .coreSummary(coreSummary)
+                .totalBlogs(totalBlogs)
+                .avgRating(avgRating)
+                .keyPoints(keyPoints)
+                .overallSentiment(overallSentiment)
+                .summaryTime(summaryTime)
+                .evidence(evidence)
+                .confidence(confidence)
+                .degraded(degraded)
+                .cacheHit(cacheHit)
+                .traceId(traceId)
+                .memoryId(memoryId)
+                .promptVersion(promptVersion)
+                .modelName(modelName)
+                .fallbackReason(fallbackReason)
+                .build();
+    }
+
+    public ShopSummaryResult withoutRequestMetadata() {
+        ShopSummaryResult copied = copy();
+        copied.setTraceId(null);
+        copied.setMemoryId(null);
+        copied.setPromptVersion(null);
+        copied.setModelName(null);
+        copied.setFallbackReason(null);
+        copied.setCacheHit(false);
+        return copied;
+    }
+}

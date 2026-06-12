@@ -20,6 +20,7 @@ public class CurrentUserService {
         Long userId = getCurrentUserId();
         if (userId == null) {
             StpUtil.checkLogin();
+            return StpUtil.getLoginIdAsLong();
         }
         return userId;
     }

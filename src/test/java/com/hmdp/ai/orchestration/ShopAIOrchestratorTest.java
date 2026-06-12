@@ -4,9 +4,11 @@ import com.hmdp.ai.intent.ShopAIIntent;
 import com.hmdp.ai.workflow.ChatWorkflow;
 import com.hmdp.ai.workflow.CompareWorkflow;
 import com.hmdp.ai.workflow.QAWorkflow;
+import com.hmdp.ai.workflow.QualitySummaryWorkflow;
 import com.hmdp.ai.workflow.RecommendWorkflow;
 import com.hmdp.ai.workflow.SummaryWorkflow;
 import com.hmdp.ai.workflow.request.QAWorkflowRequest;
+import com.hmdp.ai.workflow.request.QualitySummaryWorkflowRequest;
 import com.hmdp.ai.workflow.request.SummaryWorkflowRequest;
 import com.hmdp.dto.ai.ShopAIResponse;
 import com.hmdp.entity.ShopSummaryResult;
@@ -31,6 +33,9 @@ class ShopAIOrchestratorTest {
     private SummaryWorkflow summaryWorkflow;
 
     @Mock
+    private QualitySummaryWorkflow qualitySummaryWorkflow;
+
+    @Mock
     private QAWorkflow qaWorkflow;
 
     @Mock
@@ -46,6 +51,7 @@ class ShopAIOrchestratorTest {
         orchestrator = new ShopAIOrchestrator();
         ReflectionTestUtils.setField(orchestrator, "chatWorkflow", chatWorkflow);
         ReflectionTestUtils.setField(orchestrator, "summaryWorkflow", summaryWorkflow);
+        ReflectionTestUtils.setField(orchestrator, "qualitySummaryWorkflow", qualitySummaryWorkflow);
         ReflectionTestUtils.setField(orchestrator, "qaWorkflow", qaWorkflow);
         ReflectionTestUtils.setField(orchestrator, "compareWorkflow", compareWorkflow);
         ReflectionTestUtils.setField(orchestrator, "recommendWorkflow", recommendWorkflow);
@@ -77,5 +83,23 @@ class ShopAIOrchestratorTest {
         assertThat(result).isSameAs(expected);
         assertThat(context.getIntent()).isEqualTo(ShopAIIntent.QA);
         verify(qaWorkflow).execute(context, request);
+    }
+
+    @Test
+    void qualitySummaryShouldRouteToQualitySummaryWorkflow() {
+        ShopAIRequestContext context = ShopAIRequestContext.builder().build();
+        QualitySummaryWorkflowRequest request = QualitySummaryWorkflowRequest.builder()
+                .shopId(1L)
+                .minLiked(5)
+                .limit(10)
+                .build();
+        ShopSummaryResult expected = ShopSummaryResult.builder().shopId(1L).coreSummary("quality").build();
+        when(qualitySummaryWorkflow.execute(context, request)).thenReturn(expected);
+
+        ShopSummaryResult result = orchestrator.qualitySummary(context, request);
+
+        assertThat(result).isSameAs(expected);
+        assertThat(context.getIntent()).isEqualTo(ShopAIIntent.SUMMARY);
+        verify(qualitySummaryWorkflow).execute(context, request);
     }
 }

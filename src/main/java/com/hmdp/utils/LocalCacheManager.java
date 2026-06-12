@@ -11,6 +11,7 @@ import javax.annotation.PostConstruct;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * 本地缓存管理器
@@ -327,7 +328,7 @@ public class LocalCacheManager {
                 if (parts.length > 1) {
                     String idPart = parts[1];
                     // 提取数字部分
-                    return Long.parseLong(idPart.split("_")[0]);
+                    return parseLeadingLong(idPart);
                 }
             }
             if (key.contains("shop_quality_summary_")) {
@@ -335,13 +336,28 @@ public class LocalCacheManager {
                 if (parts.length > 1) {
                     String idPart = parts[1];
                     // 提取数字部分
-                    return Long.parseLong(idPart.split("_")[0]);
+                    return parseLeadingLong(idPart);
                 }
             }
         } catch (Exception e) {
             log.warn("无法从缓存键中提取店铺ID: {}", key, e);
         }
         return null;
+    }
+
+    private Long parseLeadingLong(String value) {
+        if (value == null) {
+            return null;
+        }
+        StringBuilder digits = new StringBuilder();
+        for (int i = 0; i < value.length(); i++) {
+            char ch = value.charAt(i);
+            if (!Character.isDigit(ch)) {
+                break;
+            }
+            digits.append(ch);
+        }
+        return digits.length() == 0 ? null : Long.parseLong(digits.toString());
     }
 
     /**
@@ -703,16 +719,17 @@ public class LocalCacheManager {
      * @return true表示未超过限制，false表示超过限制
      */
     public boolean checkAndIncrementUserCallCount(String userId, String toolName, int limit) {
-        String key = userId + ":" + toolName;
         Map<String, Integer> userCounter = userCallCounters.computeIfAbsent(userId, k -> new ConcurrentHashMap<>());
-        int currentCount = userCounter.getOrDefault(toolName, 0);
-        
-        if (currentCount >= limit) {
-            return false;
-        }
-        
-        userCounter.put(toolName, currentCount + 1);
-        return true;
+        AtomicBoolean allowed = new AtomicBoolean(false);
+        userCounter.compute(toolName, (key, currentCount) -> {
+            int count = currentCount == null ? 0 : currentCount;
+            if (count >= limit) {
+                return count;
+            }
+            allowed.set(true);
+            return count + 1;
+        });
+        return allowed.get();
     }
     
     /**
@@ -725,17 +742,17 @@ public class LocalCacheManager {
      */
     public boolean checkAndIncrementTimeBasedCallCount(String userId, String toolName, long timeWindow, int limit) {
         long timeSegment = System.currentTimeMillis() / timeWindow;
-        String key = userId + ":" + timeSegment + ":" + toolName;
-        
         Map<Long, Integer> timeCounter = timeSegmentCallCounters.computeIfAbsent(userId + ":" + toolName, k -> new ConcurrentHashMap<>());
-        int currentCount = timeCounter.getOrDefault(timeSegment, 0);
-        
-        if (currentCount >= limit) {
-            return false;
-        }
-        
-        timeCounter.put(timeSegment, currentCount + 1);
-        return true;
+        AtomicBoolean allowed = new AtomicBoolean(false);
+        timeCounter.compute(timeSegment, (key, currentCount) -> {
+            int count = currentCount == null ? 0 : currentCount;
+            if (count >= limit) {
+                return count;
+            }
+            allowed.set(true);
+            return count + 1;
+        });
+        return allowed.get();
     }
     
     /**
