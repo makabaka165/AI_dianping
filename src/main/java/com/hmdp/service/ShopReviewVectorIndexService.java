@@ -58,6 +58,12 @@ public class ShopReviewVectorIndexService {
     @Value("${rag.review.backfill-page-size:200}")
     private int backfillPageSize;
 
+    @Value("${rag.review.compact.enabled:true}")
+    private boolean compactEnabled;
+
+    @Value("${rag.review.compact.warn-invalid-ratio:0.3}")
+    private double compactWarnInvalidRatio;
+
     public ShopReviewVectorIndexService(@Qualifier("shopReviewEmbeddingStore")
                                         ObjectProvider<EmbeddingStore<TextSegment>> embeddingStoreProvider,
                                         ObjectProvider<EmbeddingModel> embeddingModelProvider) {
@@ -125,6 +131,41 @@ public class ShopReviewVectorIndexService {
                 "RAG review full rebuild finished");
         recordRagIndex("rebuild_all", indexed, skipped, failed, result.getDurationMs());
         return result;
+    }
+
+    public ShopRagRebuildResult compactShop(Long shopId, Integer limit) {
+        long start = System.currentTimeMillis();
+        if (!compactEnabled) {
+            return result(shopId, 0, 0, 0, start, "RAG review compact disabled");
+        }
+        if (!available()) {
+            return result(shopId, 0, 0, 0, start, "RAG review index disabled or unavailable");
+        }
+        ShopRagRebuildResult rebuild = rebuildShop(shopId, limit);
+        ShopRagRebuildResult result = result(shopId,
+                safe(rebuild.getIndexed()),
+                safe(rebuild.getSkipped()),
+                safe(rebuild.getFailed()),
+                start,
+                "RAG review compact completed as rebuild/refresh only. Current LangChain4j RedisEmbeddingStore does not support precise old vector deletion; stale vectors are filtered at search time by DB active status and contentHash.");
+        recordRagIndex("compact_shop", safe(result.getIndexed()), safe(result.getSkipped()),
+                safe(result.getFailed()), result.getDurationMs());
+        return result;
+    }
+
+    public ShopRagRebuildResult analyzeShopIndexHealth(Long shopId, Integer limit) {
+        long start = System.currentTimeMillis();
+        if (shopId == null || shopId <= 0) {
+            return result(shopId, 0, 1, 0, start, "shopId invalid");
+        }
+        int safeLimit = normalizeLimit(limit, backfillPageSize);
+        List<Blog> activeBlogs = blogMapper.selectActiveBlogsByShopIdForRag(shopId, safeLimit);
+        int active = activeBlogs == null ? 0 : activeBlogs.size();
+        String message = active == 0
+                ? "No active review blogs found; rebuild is not useful now."
+                : "Active review blogs sampled=" + active
+                + ", compact is rebuild/refresh only because old vectors cannot be precisely deleted by current RedisEmbeddingStore.";
+        return result(shopId, active, 0, 0, start, message);
     }
 
     public List<EvidenceItem> search(Long shopId, String query, String aspect, Integer limit) {

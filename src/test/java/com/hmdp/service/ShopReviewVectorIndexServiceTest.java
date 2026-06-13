@@ -24,10 +24,12 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -67,6 +69,7 @@ class ShopReviewVectorIndexServiceTest {
         ReflectionTestUtils.setField(service, "minScore", 0.5);
         ReflectionTestUtils.setField(service, "maxVectorCandidates", 20);
         ReflectionTestUtils.setField(service, "backfillPageSize", 200);
+        ReflectionTestUtils.setField(service, "compactEnabled", true);
     }
 
     @Test
@@ -112,6 +115,32 @@ class ShopReviewVectorIndexServiceTest {
 
         assertThat(result.getIndexed()).isZero();
         assertThat(result.getMessage()).contains("disabled");
+    }
+
+    @Test
+    void compactShopShouldRefreshVectorsAndDiscloseDeletionLimitation() {
+        Blog blog = activeBlog(1L, "服务稳定，适合聚餐");
+        when(blogMapper.selectActiveBlogsByShopIdForRag(10L, 3)).thenReturn(List.of(blog));
+        when(embeddingModel.embed(anyString())).thenReturn(Response.from(Embedding.from(new float[]{0.1f, 0.2f})));
+        when(embeddingStore.add(any(Embedding.class), any(TextSegment.class))).thenReturn("embedding-1");
+
+        ShopRagRebuildResult result = service.compactShop(10L, 3);
+
+        assertThat(result.getIndexed()).isEqualTo(1);
+        assertThat(result.getMessage()).contains("does not support precise old vector deletion");
+        verify(embeddingStore).add(any(Embedding.class), any(TextSegment.class));
+        verify(aiMetricsService).recordRagIndex(eq("compact_shop"), eq(1), eq(0), eq(0), anyLong());
+    }
+
+    @Test
+    void compactShopShouldReturnUnavailableWhenStoreOrModelDisabled() {
+        ReflectionTestUtils.setField(service, "reviewRagEnabled", false);
+
+        ShopRagRebuildResult result = service.compactShop(10L, 3);
+
+        assertThat(result.getIndexed()).isZero();
+        assertThat(result.getMessage()).contains("unavailable");
+        verify(embeddingStore, never()).add(any(Embedding.class), any(TextSegment.class));
     }
 
     private Blog activeBlog(Long id, String content) {

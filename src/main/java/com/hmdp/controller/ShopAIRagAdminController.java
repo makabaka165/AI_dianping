@@ -3,6 +3,7 @@ package com.hmdp.controller;
 import cn.dev33.satoken.annotation.SaCheckPermission;
 import com.hmdp.dto.Result;
 import com.hmdp.dto.ai.ShopRagRebuildResult;
+import com.hmdp.ai.application.ShopAICacheInvalidationService;
 import com.hmdp.service.ShopReviewVectorIndexService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -21,6 +22,9 @@ public class ShopAIRagAdminController {
     @Resource
     private ShopReviewVectorIndexService shopReviewVectorIndexService;
 
+    @Resource
+    private ShopAICacheInvalidationService shopAICacheInvalidationService;
+
     @PostMapping("/shops/{shopId}/rebuild")
     @SaCheckPermission("ai:rag:manage")
     public Result rebuildShop(@PathVariable Long shopId,
@@ -31,6 +35,23 @@ public class ShopAIRagAdminController {
         } catch (RuntimeException e) {
             log.error("重建店铺评价 RAG 索引失败, shopId={}", shopId, e);
             return Result.fail("重建店铺评价 RAG 索引失败");
+        }
+    }
+
+    @PostMapping("/shops/{shopId}/compact")
+    @SaCheckPermission("ai:rag:manage")
+    public Result compactShop(@PathVariable Long shopId,
+                              @RequestParam(value = "limit", required = false) Integer limit) {
+        try {
+            if (shopAICacheInvalidationService != null) {
+                shopAICacheInvalidationService.clearShopRelatedCaches(shopId);
+            }
+            ShopRagRebuildResult result = shopReviewVectorIndexService.compactShop(shopId, limit);
+            return Result.ok(result);
+        } catch (RuntimeException e) {
+            log.error("压缩店铺评价 RAG 索引失败, shopId={}", shopId, e);
+            return Result.ok(ShopRagRebuildResult.empty(shopId, 0,
+                    "RAG review compact unavailable: " + e.getMessage()));
         }
     }
 

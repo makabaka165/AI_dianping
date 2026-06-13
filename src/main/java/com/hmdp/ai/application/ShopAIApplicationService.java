@@ -10,6 +10,7 @@ import com.hmdp.ai.workflow.request.QAWorkflowRequest;
 import com.hmdp.ai.workflow.request.QualitySummaryWorkflowRequest;
 import com.hmdp.ai.workflow.request.RecommendWorkflowRequest;
 import com.hmdp.ai.workflow.request.SummaryWorkflowRequest;
+import com.hmdp.config.ChatMemoryKeyManager;
 import com.hmdp.dto.ai.ShopAIResponse;
 import com.hmdp.dto.ai.ShopAIStreamEvent;
 import com.hmdp.entity.ShopSummaryResult;
@@ -34,6 +35,9 @@ public class ShopAIApplicationService {
 
     @Resource
     private AiUserQuotaService aiUserQuotaService;
+
+    @Resource
+    private ChatMemoryKeyManager keyManager;
 
     public ShopAIResponse chat(String userId, String sessionId, String message, Long shopId, String sourceEndpoint) {
         checkQuota(userId, "chat");
@@ -173,10 +177,7 @@ public class ShopAIApplicationService {
     }
 
     private String normalizeSessionId(String sessionId) {
-        if (sessionId == null || sessionId.trim().isEmpty()) {
-            return "default";
-        }
-        return sessionId.trim();
+        return keyManager.normalizeSessionId(sessionId);
     }
 
     private String newTraceId() {

@@ -73,7 +73,13 @@ class ShopSummaryControllerArchitectureTest {
                 "compareShops",
                 "recommendShops",
                 "smartChat",
-                "smartChatStream");
+                "smartChatStream",
+                "clearShopQAMemory",
+                "clearShopSummaryMemory",
+                "clearRecommendMemory",
+                "clearAllMemory",
+                "getMemoryStatus",
+                "refreshMemory");
         Set<String> secured = Arrays.stream(ShopSummaryController.class.getDeclaredMethods())
                 .filter(method -> method.getAnnotation(SaCheckPermission.class) != null)
                 .filter(method -> "ai:chat".equals(method.getAnnotation(SaCheckPermission.class).value()[0]))
@@ -81,6 +87,20 @@ class ShopSummaryControllerArchitectureTest {
                 .collect(Collectors.toSet());
 
         assertThat(secured).containsAll(aiChatMethods);
+    }
+
+    @Test
+    void adminMemoryEndpointsShouldKeepMemoryManagePermission() {
+        Set<String> memoryManageMethods = Set.of(
+                "getMemoryStats",
+                "adminCleanupMemory");
+        Set<String> secured = Arrays.stream(ShopSummaryController.class.getDeclaredMethods())
+                .filter(method -> method.getAnnotation(SaCheckPermission.class) != null)
+                .filter(method -> "ai:memory:manage".equals(method.getAnnotation(SaCheckPermission.class).value()[0]))
+                .map(Method::getName)
+                .collect(Collectors.toSet());
+
+        assertThat(secured).containsAll(memoryManageMethods);
     }
 
     @Test

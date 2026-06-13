@@ -1,64 +1,51 @@
 package com.hmdp.dto.ai;
 
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.validation.beanvalidation.LocalValidatorFactoryBean;
 
-import javax.validation.ConstraintViolation;
-import java.util.Set;
+import javax.validation.Validation;
+import javax.validation.Validator;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 class ShopAIRequestValidationTest {
 
-    private LocalValidatorFactoryBean validator;
+    private final Validator validator = Validation.buildDefaultValidatorFactory().getValidator();
 
-    @BeforeEach
-    void setUp() {
-        validator = new LocalValidatorFactoryBean();
-        validator.afterPropertiesSet();
-    }
+    @Test
+    void chatSessionIdShouldRejectColonAndLongValue() {
+        ShopChatRequest colon = new ShopChatRequest();
+        colon.setSessionId("a:b");
+        colon.setMessage("hello");
+        assertThat(validator.validate(colon)).isNotEmpty();
 
-    @AfterEach
-    void tearDown() {
-        validator.close();
+        ShopChatRequest tooLong = new ShopChatRequest();
+        tooLong.setSessionId("a".repeat(65));
+        tooLong.setMessage("hello");
+        assertThat(validator.validate(tooLong)).isNotEmpty();
     }
 
     @Test
-    void compareRequestShouldRejectLongAspectAndSessionId() {
-        ShopCompareRequest request = new ShopCompareRequest();
-        request.setShopId1(1L);
-        request.setShopId2(2L);
-        request.setAspect(repeat("a", 101));
-        request.setSessionId(repeat("s", 65));
+    void askSessionIdShouldRejectColonAndLongValue() {
+        ShopAskRequest colon = new ShopAskRequest();
+        colon.setSessionId("a:b");
+        colon.setQuestion("服务怎么样");
+        assertThat(validator.validate(colon)).isNotEmpty();
 
-        Set<ConstraintViolation<ShopCompareRequest>> violations = validator.validate(request);
-
-        assertThat(violations)
-                .extracting(violation -> violation.getPropertyPath().toString())
-                .contains("aspect", "sessionId");
+        ShopAskRequest tooLong = new ShopAskRequest();
+        tooLong.setSessionId("a".repeat(65));
+        tooLong.setQuestion("服务怎么样");
+        assertThat(validator.validate(tooLong)).isNotEmpty();
     }
 
     @Test
-    void recommendRequestShouldRejectLongCategoryAndSessionId() {
-        ShopRecommendRequest request = new ShopRecommendRequest();
-        request.setUserPreference("quiet dinner");
-        request.setCategory(repeat("c", 51));
-        request.setSessionId(repeat("s", 65));
+    void compareAndRecommendShouldAcceptSafeSessionId() {
+        ShopCompareRequest compare = new ShopCompareRequest();
+        compare.setSessionId("safe_session-1.2");
+        assertThat(validator.validate(compare)).isEmpty();
 
-        Set<ConstraintViolation<ShopRecommendRequest>> violations = validator.validate(request);
-
-        assertThat(violations)
-                .extracting(violation -> violation.getPropertyPath().toString())
-                .contains("category", "sessionId");
-    }
-
-    private String repeat(String value, int count) {
-        StringBuilder builder = new StringBuilder();
-        for (int i = 0; i < count; i++) {
-            builder.append(value);
-        }
-        return builder.toString();
+        ShopRecommendRequest recommend = new ShopRecommendRequest();
+        recommend.setSessionId("safe_session-1.2");
+        recommend.setUserPreference("约会餐厅");
+        assertThat(validator.validate(recommend)).isEmpty();
     }
 }

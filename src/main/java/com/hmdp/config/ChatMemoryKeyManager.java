@@ -7,7 +7,7 @@ import org.springframework.stereotype.Component;
 public class ChatMemoryKeyManager {
 
     @Value("${app.name:hmdp}")
-    private String appName;
+    private String appName = "hmdp";
 
     // 不同功能的前缀常量
     public static final String SHOP_SUMMARY_PREFIX = "shop:summary";
@@ -15,40 +15,49 @@ public class ChatMemoryKeyManager {
     public static final String SHOP_COMPARE_PREFIX = "shop:compare";
     public static final String SHOP_RECOMMEND_PREFIX = "shop:recommend";
     public static final String AI_CHAT_PREFIX = "ai:chat";
+    public static final int SESSION_ID_MAX_LENGTH = 64;
+    public static final int KEY_SEGMENT_MAX_LENGTH = 128;
 
     /**
      * 构建店铺总结记忆Key
      */
     public String buildShopSummaryKey(Long shopId, String userId) {
-        return String.format("%s:memory:%s:%d:%s", appName, SHOP_SUMMARY_PREFIX, shopId, userId);
+        return String.format("%s:memory:%s:%d:%s", appName, SHOP_SUMMARY_PREFIX, shopId,
+                normalizeKeySegment(userId, "anonymous", KEY_SEGMENT_MAX_LENGTH));
     }
 
     /**
      * 构建店铺问答记忆Key
      */
     public String buildShopQAKey(Long shopId, String userId) {
-        return String.format("%s:memory:%s:%d:%s", appName, SHOP_QA_PREFIX, shopId, userId);
+        return String.format("%s:memory:%s:%d:%s", appName, SHOP_QA_PREFIX, shopId,
+                normalizeKeySegment(userId, "anonymous", KEY_SEGMENT_MAX_LENGTH));
     }
 
     /**
      * 构建店铺对比记忆Key
      */
     public String buildShopCompareKey(String userId, String sessionId) {
-        return String.format("%s:memory:%s:%s:%s", appName, SHOP_COMPARE_PREFIX, userId, sessionId);
+        return String.format("%s:memory:%s:%s:%s", appName, SHOP_COMPARE_PREFIX,
+                normalizeKeySegment(userId, "anonymous", KEY_SEGMENT_MAX_LENGTH),
+                normalizeSessionId(sessionId));
     }
 
     /**
      * 构建店铺推荐记忆Key
      */
     public String buildShopRecommendKey(String userId) {
-        return String.format("%s:memory:%s:%s", appName, SHOP_RECOMMEND_PREFIX, userId);
+        return String.format("%s:memory:%s:%s", appName, SHOP_RECOMMEND_PREFIX,
+                normalizeKeySegment(userId, "anonymous", KEY_SEGMENT_MAX_LENGTH));
     }
 
     /**
      * 构建AI聊天记忆Key
      */
     public String buildAIChatKey(String userId, String sessionId) {
-        return String.format("%s:memory:%s:%s:%s", appName, AI_CHAT_PREFIX, userId, sessionId);
+        return String.format("%s:memory:%s:%s:%s", appName, AI_CHAT_PREFIX,
+                normalizeKeySegment(userId, "anonymous", KEY_SEGMENT_MAX_LENGTH),
+                normalizeSessionId(sessionId));
     }
 
     /**
@@ -58,9 +67,30 @@ public class ChatMemoryKeyManager {
         StringBuilder key = new StringBuilder();
         key.append(appName).append(":memory:").append(functionType);
         for (String param : params) {
-            key.append(":").append(param);
+            key.append(":").append(normalizeKeySegment(param, "default", KEY_SEGMENT_MAX_LENGTH));
         }
         return key.toString();
+    }
+
+    public String normalizeSessionId(String sessionId) {
+        return normalizeKeySegment(sessionId, "default", SESSION_ID_MAX_LENGTH);
+    }
+
+    public String normalizeKeySegment(String value, String defaultValue, int maxLength) {
+        String fallback = defaultValue == null || defaultValue.trim().isEmpty() ? "default" : defaultValue.trim();
+        int safeMax = maxLength <= 0 ? KEY_SEGMENT_MAX_LENGTH : maxLength;
+        String text = value == null ? fallback : value.trim();
+        if (text.isEmpty()) {
+            text = fallback;
+        }
+        text = text.replaceAll("[^a-zA-Z0-9_.-]", "_");
+        if (text.length() > safeMax) {
+            text = text.substring(0, safeMax);
+        }
+        if (text.isEmpty()) {
+            return fallback.replaceAll("[^a-zA-Z0-9_.-]", "_");
+        }
+        return text;
     }
 
     /**
@@ -127,7 +157,7 @@ public class ChatMemoryKeyManager {
     }
 
     private String safeIndexSegment(String value) {
-        return value == null ? "unknown" : value.replaceAll("[^a-zA-Z0-9_.:-]", "_");
+        return normalizeKeySegment(value, "unknown", KEY_SEGMENT_MAX_LENGTH);
     }
 
     /**

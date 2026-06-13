@@ -47,12 +47,18 @@ class ModelGatewayTest {
         modelGateway = new ModelGateway();
         ReflectionTestUtils.setField(modelGateway, "shopAIService", shopAIService);
         ReflectionTestUtils.setField(modelGateway, "shopRepairAIService", shopRepairAIService);
-        ReflectionTestUtils.setField(modelGateway, "timeoutSeconds", 30L);
-        ReflectionTestUtils.setField(modelGateway, "maxConcurrentCalls", 8);
-        ReflectionTestUtils.setField(modelGateway, "rateLimitPeriodSeconds", 1L);
-        ReflectionTestUtils.setField(modelGateway, "rateLimitPermits", 100);
-        ReflectionTestUtils.setField(modelGateway, "aiMetricsService", aiMetricsService);
-        ReflectionTestUtils.setField(modelGateway, "aiTokenEstimator", new AiTokenEstimator());
+        ModelResilienceExecutor executor = new ModelResilienceExecutor();
+        ReflectionTestUtils.setField(executor, "timeoutSeconds", 30L);
+        ReflectionTestUtils.setField(executor, "maxConcurrentCalls", 8);
+        ReflectionTestUtils.setField(executor, "rateLimitPeriodSeconds", 1L);
+        ReflectionTestUtils.setField(executor, "rateLimitPermits", 100);
+        ReflectionTestUtils.setField(modelGateway, "resilienceExecutor", executor);
+        ReflectionTestUtils.setField(modelGateway, "structuredOutputParser", new StructuredOutputParser());
+        ReflectionTestUtils.setField(modelGateway, "repairPromptFactory", new RepairPromptFactory());
+        ModelMetricsRecorder metricsRecorder = new ModelMetricsRecorder();
+        ReflectionTestUtils.setField(metricsRecorder, "aiMetricsService", aiMetricsService);
+        ReflectionTestUtils.setField(metricsRecorder, "aiTokenEstimator", new AiTokenEstimator());
+        ReflectionTestUtils.setField(modelGateway, "modelMetricsRecorder", metricsRecorder);
     }
 
     @Test
@@ -122,7 +128,12 @@ class ModelGatewayTest {
 
     @Test
     void shouldTimeoutSlowModelCall() {
-        ReflectionTestUtils.setField(modelGateway, "timeoutSeconds", 1L);
+        ModelResilienceExecutor executor = new ModelResilienceExecutor();
+        ReflectionTestUtils.setField(executor, "timeoutSeconds", 1L);
+        ReflectionTestUtils.setField(executor, "maxConcurrentCalls", 8);
+        ReflectionTestUtils.setField(executor, "rateLimitPeriodSeconds", 1L);
+        ReflectionTestUtils.setField(executor, "rateLimitPermits", 100);
+        ReflectionTestUtils.setField(modelGateway, "resilienceExecutor", executor);
         when(shopAIService.analyzeShopData("m1", "prompt")).thenAnswer(invocation -> {
             Thread.sleep(1500);
             return "{\"shopId\":1,\"question\":\"q\",\"answer\":\"late\",\"evidenceIds\":[],\"insufficientEvidence\":false}";

@@ -5,6 +5,7 @@ import com.hmdp.ai.orchestration.ShopAIOrchestrator;
 import com.hmdp.ai.orchestration.ShopAIRequestContext;
 import com.hmdp.ai.quota.AiUserQuotaService;
 import com.hmdp.ai.workflow.request.ChatWorkflowRequest;
+import com.hmdp.config.ChatMemoryKeyManager;
 import com.hmdp.dto.ai.ShopAIStreamEvent;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -41,6 +42,7 @@ class ShopAIApplicationServiceTest {
         ReflectionTestUtils.setField(service, "orchestrator", orchestrator);
         ReflectionTestUtils.setField(service, "memoryService", memoryService);
         ReflectionTestUtils.setField(service, "aiUserQuotaService", aiUserQuotaService);
+        ReflectionTestUtils.setField(service, "keyManager", new ChatMemoryKeyManager());
     }
 
     @Test

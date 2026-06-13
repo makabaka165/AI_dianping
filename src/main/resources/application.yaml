@@ -162,6 +162,9 @@ rag:
     min-score: 0.55
     max-vector-candidates: 20
     backfill-page-size: 200
+    compact:
+      enabled: true
+      warn-invalid-ratio: 0.3
   platform-policy:
     index-name: platform_policy_kb
     dimension: 1024

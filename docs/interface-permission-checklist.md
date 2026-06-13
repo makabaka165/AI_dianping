@@ -61,6 +61,12 @@
 | `ShopSummaryController` | `POST /api/shop-summary/{shopId}/ask` | `@SaCheckPermission("ai:chat")` |
 | `ShopSummaryController` | `POST /api/shop-summary/compare` | `@SaCheckPermission("ai:chat")` |
 | `ShopSummaryController` | `POST /api/shop-summary/recommend` | `@SaCheckPermission("ai:chat")` |
+| `ShopSummaryController` | `DELETE /api/shop-summary/{shopId}/memory/qa` | `@SaCheckPermission("ai:chat")`，用户自助 AI 记忆管理 |
+| `ShopSummaryController` | `DELETE /api/shop-summary/{shopId}/memory/summary` | `@SaCheckPermission("ai:chat")`，用户自助 AI 记忆管理 |
+| `ShopSummaryController` | `DELETE /api/shop-summary/memory/recommend` | `@SaCheckPermission("ai:chat")`，用户自助 AI 记忆管理 |
+| `ShopSummaryController` | `DELETE /api/shop-summary/memory/all` | `@SaCheckPermission("ai:chat")`，用户自助 AI 记忆管理 |
+| `ShopSummaryController` | `GET /api/shop-summary/memory/{shopId}/status` | `@SaCheckPermission("ai:chat")`，用户自助 AI 记忆状态 |
+| `ShopSummaryController` | `POST /api/shop-summary/memory/{shopId}/refresh` | `@SaCheckPermission("ai:chat")`，用户自助刷新 AI 记忆 TTL |
 
 ## 管理员接口
 
@@ -72,6 +78,9 @@
 | `DocumentManagementController` | `/document/**` | `@SaCheckPermission("document:manage")` |
 | `ShopSummaryController` | `GET /api/shop-summary/memory/stats` | `@SaCheckPermission("ai:memory:manage")` |
 | `ShopSummaryController` | `DELETE /api/shop-summary/admin/memory/{functionType}` | `@SaCheckPermission("ai:memory:manage")` |
+| `ShopAIRagAdminController` | `POST /api/shop-summary/admin/rag/shops/{shopId}/rebuild` | `@SaCheckPermission("ai:rag:manage")` |
+| `ShopAIRagAdminController` | `POST /api/shop-summary/admin/rag/shops/{shopId}/compact` | `@SaCheckPermission("ai:rag:manage")`，只做重建刷新，不声明物理删除旧向量 |
+| `ShopAIRagAdminController` | `POST /api/shop-summary/admin/rag/rebuild` | `@SaCheckPermission("ai:rag:manage")` |
 | 待补 | 用户禁用 | `user:disable` |
 | 待补 | 角色分配 | `role:assign` |
 | 待补 | 系统日志 | `system:log:read` |

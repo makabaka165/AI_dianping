@@ -1,6 +1,7 @@
 package com.hmdp.controller;
 
 import cn.dev33.satoken.annotation.SaCheckPermission;
+import com.hmdp.ai.application.ShopAICacheInvalidationService;
 import com.hmdp.dto.ai.ShopRagRebuildResult;
 import com.hmdp.service.ShopReviewVectorIndexService;
 import org.junit.jupiter.api.BeforeEach;
@@ -27,12 +28,16 @@ class ShopAIRagAdminControllerTest {
     @Mock
     private ShopReviewVectorIndexService vectorIndexService;
 
+    @Mock
+    private ShopAICacheInvalidationService cacheInvalidationService;
+
     private MockMvc mockMvc;
 
     @BeforeEach
     void setUp() {
         ShopAIRagAdminController controller = new ShopAIRagAdminController();
         ReflectionTestUtils.setField(controller, "shopReviewVectorIndexService", vectorIndexService);
+        ReflectionTestUtils.setField(controller, "shopAICacheInvalidationService", cacheInvalidationService);
         mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
     }
 
@@ -64,11 +69,48 @@ class ShopAIRagAdminControllerTest {
     }
 
     @Test
+    void compactShopShouldClearCacheAndCallService() throws Exception {
+        ShopRagRebuildResult compacted = ShopRagRebuildResult.builder()
+                .shopId(7L)
+                .indexed(3)
+                .skipped(1)
+                .failed(0)
+                .durationMs(12L)
+                .message("RAG review compact completed as rebuild/refresh only. Current LangChain4j RedisEmbeddingStore does not support precise old vector deletion.")
+                .build();
+        when(vectorIndexService.compactShop(7L, 20)).thenReturn(compacted);
+
+        mockMvc.perform(post("/api/shop-summary/admin/rag/shops/7/compact").param("limit", "20"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.shopId").value(7))
+                .andExpect(jsonPath("$.data.indexed").value(3))
+                .andExpect(jsonPath("$.data.message").value(org.hamcrest.Matchers.containsString("does not support precise old vector deletion")));
+
+        verify(cacheInvalidationService).clearShopRelatedCaches(7L);
+        verify(vectorIndexService).compactShop(7L, 20);
+    }
+
+    @Test
+    void compactShopShouldReturnOkWhenServiceUnavailable() throws Exception {
+        when(vectorIndexService.compactShop(7L, 20)).thenThrow(new RuntimeException("embedding unavailable"));
+
+        mockMvc.perform(post("/api/shop-summary/admin/rag/shops/7/compact").param("limit", "20"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.shopId").value(7))
+                .andExpect(jsonPath("$.data.indexed").value(0))
+                .andExpect(jsonPath("$.data.message").value(org.hamcrest.Matchers.containsString("unavailable")));
+    }
+
+    @Test
     void endpointsShouldRequireRagManagePermission() throws Exception {
         Method rebuildShop = ShopAIRagAdminController.class.getMethod("rebuildShop", Long.class, Integer.class);
+        Method compactShop = ShopAIRagAdminController.class.getMethod("compactShop", Long.class, Integer.class);
         Method rebuildAll = ShopAIRagAdminController.class.getMethod("rebuildAll", Integer.class, Integer.class);
 
         assertThat(rebuildShop.getAnnotation(SaCheckPermission.class).value()).containsExactly("ai:rag:manage");
+        assertThat(compactShop.getAnnotation(SaCheckPermission.class).value()).containsExactly("ai:rag:manage");
         assertThat(rebuildAll.getAnnotation(SaCheckPermission.class).value()).containsExactly("ai:rag:manage");
     }
 

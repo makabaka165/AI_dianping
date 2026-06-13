@@ -222,7 +222,7 @@ public class ShopSummaryController {
     }
 
     @DeleteMapping("/{shopId}/memory/qa")
-    @SaCheckLogin
+    @SaCheckPermission("ai:chat")
     public Result clearShopQAMemory(@PathVariable Long shopId) {
         try {
             shopAIApplicationService.clearShopQAMemory(getCurrentUserId(), shopId);
@@ -234,7 +234,7 @@ public class ShopSummaryController {
     }
 
     @DeleteMapping("/{shopId}/memory/summary")
-    @SaCheckLogin
+    @SaCheckPermission("ai:chat")
     public Result clearShopSummaryMemory(@PathVariable Long shopId) {
         try {
             shopAIApplicationService.clearShopSummaryMemory(getCurrentUserId(), shopId);
@@ -246,7 +246,7 @@ public class ShopSummaryController {
     }
 
     @DeleteMapping("/memory/recommend")
-    @SaCheckLogin
+    @SaCheckPermission("ai:chat")
     public Result clearRecommendMemory() {
         try {
             shopAIApplicationService.clearRecommendMemory(getCurrentUserId());
@@ -258,7 +258,7 @@ public class ShopSummaryController {
     }
 
     @DeleteMapping("/memory/all")
-    @SaCheckLogin
+    @SaCheckPermission("ai:chat")
     public Result clearAllMemory() {
         try {
             Map<String, Integer> result = shopAIApplicationService.clearAllUserMemory(getCurrentUserId());
@@ -285,7 +285,7 @@ public class ShopSummaryController {
     }
 
     @GetMapping("/memory/{shopId}/status")
-    @SaCheckLogin
+    @SaCheckPermission("ai:chat")
     public Result getMemoryStatus(@PathVariable Long shopId, @RequestParam String type) {
         try {
             String memoryKey = memoryKey(shopId, type, getCurrentUserId());
@@ -309,7 +309,7 @@ public class ShopSummaryController {
     }
 
     @PostMapping("/memory/{shopId}/refresh")
-    @SaCheckLogin
+    @SaCheckPermission("ai:chat")
     public Result refreshMemory(@PathVariable Long shopId, @RequestParam String type) {
         try {
             String memoryKey = memoryKey(shopId, type, getCurrentUserId());
@@ -343,7 +343,7 @@ public class ShopSummaryController {
     }
 
     private String normalizeSessionId(String sessionId) {
-        return isBlank(sessionId) ? "default" : sessionId.trim();
+        return keyManager.normalizeSessionId(sessionId);
     }
 
     private boolean isBlank(String value) {
