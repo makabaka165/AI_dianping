@@ -1,6 +1,7 @@
 package com.hmdp.ai.workflow;
 
 import com.hmdp.ai.fallback.FallbackPolicy;
+import com.hmdp.ai.guard.GovernedGeneration;
 import com.hmdp.ai.guard.QualityCheck;
 import com.hmdp.ai.guard.QualityDecision;
 import com.hmdp.ai.guard.QualityGuard;
@@ -66,6 +67,7 @@ class CompareWorkflowTest {
         ReflectionTestUtils.setField(workflow, "modelGateway", modelGateway);
         ReflectionTestUtils.setField(workflow, "qualityGuard", qualityGuard);
         ReflectionTestUtils.setField(workflow, "fallbackPolicy", fallbackPolicy);
+        ReflectionTestUtils.setField(workflow, "governedGeneration", new GovernedGeneration());
         ReflectionTestUtils.setField(workflow, "aiMetricsService", aiMetricsService);
     }
 
@@ -104,7 +106,6 @@ class CompareWorkflowTest {
                         .variant("stable")
                         .build());
         when(promptTemplateRegistry.comparePrompt("服务", "first block", "second block")).thenReturn("compare prompt");
-        when(fallbackPolicy.shouldUseFallback("compare:analyzeShopData")).thenReturn(false);
         when(modelGateway.generateStructuredComparison("compare-memory", "compare prompt", 1L, 2L, "服务", evidence))
                 .thenReturn(bad);
         when(qualityGuard.validateCompare(bad, 1L, 2L, evidence, "compare")).thenReturn(QualityCheck.builder()
@@ -128,7 +129,6 @@ class CompareWorkflowTest {
         assertThat(response.getCompare().getWinnerByAspect()).isEqualTo(ShopCompareResult.SHOP_1);
         assertThat(response.getDegraded()).isFalse();
         assertThat(response.getMemoryId()).isEqualTo("compare-memory");
-        verify(fallbackPolicy).shouldUseFallback("compare:analyzeShopData");
         verify(modelGateway).repairStructuredComparison("compare-memory", "compare prompt", 1L, 2L, "服务", "too generic");
         verify(fallbackPolicy, never()).fallbackText(anyString(), anyString(), anyString());
     }

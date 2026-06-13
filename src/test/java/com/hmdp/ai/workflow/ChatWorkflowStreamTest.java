@@ -4,8 +4,13 @@ import com.hmdp.ai.intent.IntentRouteCoordinator;
 import com.hmdp.ai.intent.IntentRouteSource;
 import com.hmdp.ai.intent.IntentRoutingResult;
 import com.hmdp.ai.intent.ShopAIIntent;
+import com.hmdp.ai.guard.QualityCheck;
+import com.hmdp.ai.guard.QualityDecision;
+import com.hmdp.ai.guard.QualityGuard;
 import com.hmdp.ai.memory.MemoryService;
+import com.hmdp.ai.model.ModelGateway;
 import com.hmdp.ai.orchestration.ShopAIRequestContext;
+import com.hmdp.ai.prompt.PromptTemplateRegistry;
 import com.hmdp.ai.workflow.request.ChatWorkflowRequest;
 import com.hmdp.dto.ai.ShopAIResponse;
 import com.hmdp.dto.ai.ShopAIStreamEvent;
@@ -38,6 +43,12 @@ class ChatWorkflowStreamTest {
     @Mock
     private SummaryWorkflow summaryWorkflow;
 
+    @Mock
+    private ModelGateway modelGateway;
+
+    @Mock
+    private QualityGuard qualityGuard;
+
     private ChatWorkflow workflow;
 
     @BeforeEach
@@ -46,6 +57,9 @@ class ChatWorkflowStreamTest {
         ReflectionTestUtils.setField(workflow, "intentRouteCoordinator", intentRouteCoordinator);
         ReflectionTestUtils.setField(workflow, "memoryService", memoryService);
         ReflectionTestUtils.setField(workflow, "summaryWorkflow", summaryWorkflow);
+        ReflectionTestUtils.setField(workflow, "modelGateway", modelGateway);
+        ReflectionTestUtils.setField(workflow, "qualityGuard", qualityGuard);
+        ReflectionTestUtils.setField(workflow, "promptTemplateRegistry", new PromptTemplateRegistry());
     }
 
     @Test
@@ -134,5 +148,34 @@ class ChatWorkflowStreamTest {
         assertThat(response.getMemoryId()).isEqualTo("chat-memory");
         assertThat(response.getIntent()).isEqualTo(ShopAIIntent.SUMMARY);
         verify(summaryWorkflow).execute(eq(context), any());
+    }
+
+    @Test
+    void freeChatStreamShouldEmitAuditEventAfterDeltas() {
+        ShopAIRequestContext context = ShopAIRequestContext.builder()
+                .userId("u1")
+                .sessionId("s1")
+                .traceId("t1")
+                .build();
+        when(memoryService.aiChatKey("u1", "s1")).thenReturn("m1");
+        when(intentRouteCoordinator.route(context, "hello", null)).thenReturn(IntentRoutingResult.builder()
+                .intent(ShopAIIntent.FREE_CHAT)
+                .source(IntentRouteSource.RULE)
+                .confidence(0.3)
+                .build());
+        when(modelGateway.streamChat(eq("m1"), any())).thenReturn(reactor.core.publisher.Flux.just("你好", "，请提供店铺ID"));
+        when(qualityGuard.validateText("你好，请提供店铺ID", "chat"))
+                .thenReturn(QualityCheck.builder().decision(QualityDecision.PASS).build());
+
+        List<ServerSentEvent<ShopAIStreamEvent>> events = workflow.stream(context, ChatWorkflowRequest.builder()
+                        .message("hello")
+                        .build())
+                .collectList()
+                .block();
+
+        assertThat(events).extracting(ServerSentEvent::event)
+                .containsExactly("metadata", "delta", "delta", "audit", "done");
+        ShopAIStreamEvent audit = events.get(3).data();
+        assertThat(audit.getAuditStatus()).isEqualTo("PASS");
     }
 }

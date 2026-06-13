@@ -3,9 +3,18 @@ package com.hmdp.service;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.util.regex.Pattern;
+
 @Service
 @Slf4j
 public class AIResultQualityService {
+
+    private static final Pattern AI_SELF_REFERENCE = Pattern.compile(
+            "(?i)(作为\\s*(ai|人工智能|大语言模型)|我是\\s*(ai|人工智能|大语言模型)|as\\s+an\\s+ai)");
+    private static final Pattern CLEARLY_UNSAFE = Pattern.compile(
+            "(违法犯罪指导|规避监管|色情交易|赌博平台|暴力伤害教程|仇恨煽动)");
+    private static final Pattern HALLUCINATION_RISK = Pattern.compile(
+            "(我保证|一定是|绝对最好|官方承诺|无需看商家规则)");
 
     public QualityCheckResult validateContent(String content) {
         QualityCheckResult result = new QualityCheckResult();
@@ -22,16 +31,21 @@ public class AIResultQualityService {
             return result;
         }
 
-        if (containsSensitiveWords(content)) {
+        if (containsClearlyUnsafeContent(content)) {
             result.setValid(false);
-            result.setReason("内容包含敏感词");
+            result.setReason("内容包含明显不合规表达");
             return result;
         }
 
-        String lower = content.toLowerCase();
-        if ((lower.contains("作为") || lower.contains("我是")) && lower.contains("ai")) {
+        if (AI_SELF_REFERENCE.matcher(content).find()) {
             result.setValid(false);
             result.setReason("内容包含模型自我引用");
+            return result;
+        }
+
+        if (HALLUCINATION_RISK.matcher(content).find()) {
+            result.setValid(false);
+            result.setReason("内容包含过度确定或越界承诺");
             return result;
         }
 
@@ -50,32 +64,18 @@ public class AIResultQualityService {
             return null;
         }
         String processed = content;
-        processed = processed.replaceAll("(?i)作为.*?ai.*?模型.*?", "");
-        processed = processed.replaceAll("(?i)我是.*?ai.*?助手.*?", "");
-        processed = processed.replaceAll("根据.*?提供.*?信息.*?", "");
-        processed = processed.replaceAll("基于.*?以上.*?分析.*?", "");
+        processed = AI_SELF_REFERENCE.matcher(processed).replaceAll("");
+        processed = processed.replaceAll("(?m)^\\s*(希望以上信息对您有帮助|如有需要请继续提问|请告诉我更多细节)[。！!\\s]*$", "");
         processed = processed.replaceAll("\\n\\s*\\n", "\n\n");
         return processed.trim();
     }
 
-    private boolean containsSensitiveWords(String content) {
-        String[] sensitiveWords = {
-                "违法", "违规", "不当", "禁止", "政治", "色情", "暴力", "赌博"
-        };
-        String lowerContent = content.toLowerCase();
-        for (String word : sensitiveWords) {
-            if (lowerContent.contains(word.toLowerCase())) {
-                return true;
-            }
-        }
-        return false;
+    private boolean containsClearlyUnsafeContent(String content) {
+        return CLEARLY_UNSAFE.matcher(content).find();
     }
 
     private boolean isTemplateContent(String content) {
         String[] templatePhrases = {
-                "根据您提供的信息",
-                "基于以上信息",
-                "根据上述内容",
                 "希望以上信息对您有帮助",
                 "如有需要请继续提问",
                 "请告诉我更多细节"

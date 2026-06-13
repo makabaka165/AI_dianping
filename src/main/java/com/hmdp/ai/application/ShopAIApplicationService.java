@@ -3,6 +3,7 @@ package com.hmdp.ai.application;
 import com.hmdp.ai.memory.MemoryService;
 import com.hmdp.ai.orchestration.ShopAIOrchestrator;
 import com.hmdp.ai.orchestration.ShopAIRequestContext;
+import com.hmdp.ai.quota.AiUserQuotaService;
 import com.hmdp.ai.workflow.request.ChatWorkflowRequest;
 import com.hmdp.ai.workflow.request.CompareWorkflowRequest;
 import com.hmdp.ai.workflow.request.QAWorkflowRequest;
@@ -18,6 +19,7 @@ import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 
 import javax.annotation.Resource;
+import java.util.Map;
 import java.util.UUID;
 
 @Service
@@ -30,7 +32,11 @@ public class ShopAIApplicationService {
     @Resource
     private MemoryService memoryService;
 
+    @Resource
+    private AiUserQuotaService aiUserQuotaService;
+
     public ShopAIResponse chat(String userId, String sessionId, String message, Long shopId, String sourceEndpoint) {
+        checkQuota(userId, "chat");
         ShopAIRequestContext context = baseContext(userId, sessionId, sourceEndpoint);
         context.setMemoryId(memoryService.aiChatKey(userId, context.getSessionId()));
         return orchestrator.chat(context, ChatWorkflowRequest.builder()
@@ -40,6 +46,7 @@ public class ShopAIApplicationService {
     }
 
     public Flux<ServerSentEvent<ShopAIStreamEvent>> chatStream(String userId, String sessionId, String message, Long shopId, String sourceEndpoint) {
+        checkQuota(userId, "chatStream");
         ShopAIRequestContext context = baseContext(userId, sessionId, sourceEndpoint);
         context.setMemoryId(memoryService.aiChatKey(userId, context.getSessionId()));
         return orchestrator.chatStream(context, ChatWorkflowRequest.builder()
@@ -63,6 +70,7 @@ public class ShopAIApplicationService {
     }
 
     public ShopSummaryResult summary(String userId, Long shopId, boolean writeMemory, String sourceEndpoint) {
+        checkQuota(userId, "summary");
         ShopAIRequestContext context = baseContext(userId, "summary_" + shopId, sourceEndpoint);
         context.setMemoryId(memoryService.shopSummaryKey(shopId, userId));
         return orchestrator.summary(context, SummaryWorkflowRequest.builder()
@@ -72,6 +80,7 @@ public class ShopAIApplicationService {
     }
 
     public ShopSummaryResult qualitySummary(String userId, Long shopId, Integer minLiked, Integer limit, boolean writeMemory, String sourceEndpoint) {
+        checkQuota(userId, "qualitySummary");
         ShopAIRequestContext context = baseContext(userId, "quality_summary_" + shopId, sourceEndpoint);
         context.setMemoryId(memoryService.shopSummaryKey(shopId, userId));
         return orchestrator.qualitySummary(context, QualitySummaryWorkflowRequest.builder()
@@ -83,6 +92,7 @@ public class ShopAIApplicationService {
     }
 
     public ShopAIResponse ask(String userId, String sessionId, Long shopId, String question, String sourceEndpoint) {
+        checkQuota(userId, "ask");
         ShopAIRequestContext context = baseContext(userId, sessionId, sourceEndpoint);
         context.setMemoryId(memoryService.shopQAKey(shopId, userId));
         return orchestrator.ask(context, QAWorkflowRequest.builder()
@@ -92,6 +102,7 @@ public class ShopAIApplicationService {
     }
 
     public ShopAIResponse compare(String userId, String sessionId, Long shopId1, Long shopId2, String aspect, String sourceEndpoint) {
+        checkQuota(userId, "compare");
         ShopAIRequestContext context = baseContext(userId, sessionId, sourceEndpoint);
         context.setMemoryId(memoryService.shopCompareKey(userId, context.getSessionId()));
         return orchestrator.compare(context, CompareWorkflowRequest.builder()
@@ -102,6 +113,7 @@ public class ShopAIApplicationService {
     }
 
     public ShopAIResponse recommend(String userId, String sessionId, String userPreference, String category, Integer limit, String sourceEndpoint) {
+        checkQuota(userId, "recommend");
         ShopAIRequestContext context = baseContext(userId, sessionId, sourceEndpoint);
         context.setMemoryId(memoryService.shopRecommendKey(userId));
         return orchestrator.recommend(context, RecommendWorkflowRequest.builder()
@@ -109,6 +121,46 @@ public class ShopAIApplicationService {
                 .category(category)
                 .limit(limit)
                 .build());
+    }
+
+    public void clearShopQAMemory(String userId, Long shopId) {
+        memoryService.clearShopQAMemory(userId, shopId);
+    }
+
+    public void clearShopSummaryMemory(String userId, Long shopId) {
+        memoryService.clearShopSummaryMemory(userId, shopId);
+    }
+
+    public void clearRecommendMemory(String userId) {
+        memoryService.clearRecommendMemory(userId);
+    }
+
+    public Map<String, Integer> clearAllUserMemory(String userId) {
+        return memoryService.clearAllUserMemory(userId);
+    }
+
+    public boolean hasMemory(String memoryKey) {
+        return memoryService.hasMemory(memoryKey);
+    }
+
+    public int getMemoryMessageCount(String memoryKey) {
+        return memoryService.getMemoryMessageCount(memoryKey);
+    }
+
+    public long getMemoryTtl(String memoryKey) {
+        return memoryService.getMemoryTtl(memoryKey);
+    }
+
+    public void refreshMemoryTtl(String memoryKey) {
+        memoryService.refreshMemoryTtl(memoryKey);
+    }
+
+    public Map<String, Map<String, Integer>> getMemoryStats() {
+        return memoryService.getMemoryStats();
+    }
+
+    public int cleanupMemoryByFunction(String functionType) {
+        return memoryService.cleanupMemoryByFunction(functionType);
     }
 
     private ShopAIRequestContext baseContext(String userId, String sessionId, String sourceEndpoint) {
@@ -129,5 +181,11 @@ public class ShopAIApplicationService {
 
     private String newTraceId() {
         return UUID.randomUUID().toString().replace("-", "");
+    }
+
+    private void checkQuota(String userId, String operation) {
+        if (aiUserQuotaService != null) {
+            aiUserQuotaService.checkAndConsume(userId, operation);
+        }
     }
 }

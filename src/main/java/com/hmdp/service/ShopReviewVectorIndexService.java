@@ -13,6 +13,7 @@ import dev.langchain4j.store.embedding.EmbeddingMatch;
 import dev.langchain4j.store.embedding.EmbeddingStore;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -57,7 +58,8 @@ public class ShopReviewVectorIndexService {
     @Value("${rag.review.backfill-page-size:200}")
     private int backfillPageSize;
 
-    public ShopReviewVectorIndexService(ObjectProvider<EmbeddingStore<TextSegment>> embeddingStoreProvider,
+    public ShopReviewVectorIndexService(@Qualifier("shopReviewEmbeddingStore")
+                                        ObjectProvider<EmbeddingStore<TextSegment>> embeddingStoreProvider,
                                         ObjectProvider<EmbeddingModel> embeddingModelProvider) {
         this.embeddingStoreProvider = embeddingStoreProvider;
         this.embeddingModelProvider = embeddingModelProvider;

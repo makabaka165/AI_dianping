@@ -87,11 +87,14 @@ ShopSummaryController
 - 评价向量索引由博客发布事件自动追加；点赞事件只清缓存，不重新 embedding。由于当前 LangChain4j 版本没有删除接口，旧向量通过 DB 状态和 contentHash 在检索时过滤。
 - 生产默认 `rag.redis.fallback-to-memory=false`：`rag.enabled=true` 且 Redis Stack 不可用时启动失败。
 - dev/test 可显式设置 `rag.redis.fallback-to-memory=true`，允许回退 `InMemoryEmbeddingStore`。
+- 平台 FAQ/政策知识库与店铺评价 RAG 使用独立索引：`platform_policy_kb` 与 `shop_review_kb`。
+- 启动期不再调用外部 embedding API 做探测；平台知识库自动导入失败只告警，不阻塞应用启动。
 
 ## AI 观测与 Prompt 灰度
 
 - `/actuator/prometheus` 暴露 Prometheus 指标；默认只暴露 `health`、`info`、`prometheus`。
 - AI 指标包括请求耗时、模型耗时、估算 token、缓存命中、降级次数、质量拒绝、证据数量、RAG 搜索和索引统计。
+- AI 入口增加用户级配额，默认每用户每分钟 10 次、每天 200 次；系统级 `ModelGateway` RateLimiter 仍作为全局保护。
 - `ModelGateway` 会按模型调用记录估算输入/输出 token；该估算用于成本趋势，不等同于供应商精确计费。
 - Prompt 默认全部走 stable 版本；开启 canary 后按 `userId + intent + routeKey` 稳定 hash，保证同一用户同任务命中稳定版本。
 
@@ -102,7 +105,8 @@ ShopSummaryController
 | `POST` | `/api/shop-summary/ai/chat` | 自然语言总入口，先路由再进入工作流 |
 | `POST` | `/api/shop-summary/ai/chat/stream` | SSE 流式自然语言入口 |
 | `GET` | `/api/shop-summary/{shopId}` | 店铺总结 |
-| `GET` | `/api/shop-summary/{shopId}/quality` | 高质量评价总结 |
+| `GET` | `/api/shop-summary/{shopId}/quality` | 高质量评价总结，不写记忆 |
+| `POST` | `/api/shop-summary/{shopId}/quality/with-memory` | 高质量评价总结并写入 summary memory |
 | `POST` | `/api/shop-summary/{shopId}/ask` | 指定店铺问答 |
 | `POST` | `/api/shop-summary/compare` | 店铺对比 |
 | `POST` | `/api/shop-summary/recommend` | 店铺推荐 |
@@ -178,18 +182,25 @@ rag:
   enabled: true
   review:
     enabled: true
+    index-name: shop_review_kb
     min-score: 0.55
     max-vector-candidates: 20
     backfill-page-size: 200
+  platform-policy:
+    index-name: platform_policy_kb
   redis:
     host: 127.0.0.1
     port: 6380
-    index-name: shop_knowledge_base
     dimension: 1024
     fallback-to-memory: false
 
 hmdp:
   ai:
+    quota:
+      enabled: true
+      minute-permits: 10
+      daily-permits: 200
+      fail-open: false
     prompt:
       canary:
         enabled: false

@@ -1,9 +1,9 @@
 package com.hmdp.ai.workflow;
 
 import com.hmdp.ai.fallback.FallbackPolicy;
-import com.hmdp.ai.guard.QualityCheck;
+import com.hmdp.ai.fallback.FallbackReason;
+import com.hmdp.ai.guard.GovernedGeneration;
 import com.hmdp.ai.guard.QualityGuard;
-import com.hmdp.ai.intent.ShopAIIntent;
 import com.hmdp.ai.memory.MemoryService;
 import com.hmdp.ai.model.ModelGateway;
 import com.hmdp.ai.orchestration.ShopAIRequestContext;
@@ -23,11 +23,9 @@ import java.util.Collections;
 import java.util.List;
 
 @Component
-public class QAWorkflow implements ShopAIWorkflow<QAWorkflowRequest, ShopAIResponse> {
+public class QAWorkflow {
 
     private static final String ANALYSIS_TYPE = "ask";
-    private static final String MODEL_OPERATION = "ask:analyzeShopData";
-
     @Resource
     private ShopContextAssembler shopContextAssembler;
 
@@ -47,14 +45,11 @@ public class QAWorkflow implements ShopAIWorkflow<QAWorkflowRequest, ShopAIRespo
     private FallbackPolicy fallbackPolicy;
 
     @Resource
+    private GovernedGeneration governedGeneration;
+
+    @Resource
     private AiMetricsService aiMetricsService;
 
-    @Override
-    public ShopAIIntent intent() {
-        return ShopAIIntent.QA;
-    }
-
-    @Override
     public ShopAIResponse execute(ShopAIRequestContext context, QAWorkflowRequest request) {
         long start = System.currentTimeMillis();
         if (request.getShopId() == null || request.getShopId() <= 0) {
@@ -77,38 +72,23 @@ public class QAWorkflow implements ShopAIWorkflow<QAWorkflowRequest, ShopAIRespo
                 request.getQuestion(),
                 summaryMemory,
                 shopContextAssembler.toPromptBlock(shopContext));
-        boolean degraded = false;
-        ShopQAResult qa;
-        if (fallbackPolicy.shouldUseFallback(MODEL_OPERATION)) {
-            qa = fallbackPolicy.fallbackQA(request.getShopId(), request.getQuestion(), ANALYSIS_TYPE);
-            degraded = true;
-        } else {
-            try {
-                qa = modelGateway.generateStructuredAnswer(memoryId, prompt.getContent(), request.getShopId(),
-                        request.getQuestion(), shopContext.safeEvidence());
-                QualityCheck quality = qualityGuard.validateQA(qa, shopContext.safeEvidence(), ANALYSIS_TYPE);
-                if (!quality.pass()) {
-                    qa = modelGateway.repairStructuredAnswer(memoryId, prompt.getContent(), request.getShopId(),
-                            request.getQuestion(), quality.getReason());
-                    quality = qualityGuard.validateQA(qa, shopContext.safeEvidence(), ANALYSIS_TYPE);
-                    if (!quality.pass()) {
-                        qa = fallbackPolicy.fallbackQA(request.getShopId(), request.getQuestion(), ANALYSIS_TYPE);
-                        degraded = true;
-                    } else {
-                        qa.setAnswer(qualityGuard.postProcess(qa.getAnswer()));
-                    }
-                } else {
+        GovernedGeneration.GovernedResult<ShopQAResult> generated = governedGeneration.runWithReason(
+                () -> modelGateway.generateStructuredAnswer(memoryId, prompt.getContent(), request.getShopId(),
+                        request.getQuestion(), shopContext.safeEvidence()),
+                reason -> modelGateway.repairStructuredAnswer(memoryId, prompt.getContent(), request.getShopId(),
+                        request.getQuestion(), reason),
+                qa -> qualityGuard.validateQA(qa, shopContext.safeEvidence(), ANALYSIS_TYPE),
+                reason -> fallbackPolicy.fallbackQA(request.getShopId(), request.getQuestion(), ANALYSIS_TYPE, reason),
+                qa -> {
                     qa.setAnswer(qualityGuard.postProcess(qa.getAnswer()));
-                }
-            } catch (Exception e) {
-                fallbackPolicy.recordFailure(MODEL_OPERATION);
-                qa = fallbackPolicy.fallbackQA(request.getShopId(), request.getQuestion(), ANALYSIS_TYPE);
-                degraded = true;
-            }
-        }
+                    return qa;
+                });
+        ShopQAResult qa = generated.getValue();
+        boolean degraded = generated.isDegraded();
+        String fallbackReason = generated.getFallbackReason() == null ? null : generated.getFallbackReason().name();
         aiMetricsService.recordDuration(ANALYSIS_TYPE, System.currentTimeMillis() - start, degraded);
         aiMetricsService.recordEvidenceCount(ANALYSIS_TYPE, shopContext.safeEvidence().size(), "hybrid");
-        return response(context, shopContext.safeEvidence(), qa, degraded, degraded ? 0.35 : 0.7, null,
+        return response(context, shopContext.safeEvidence(), qa, degraded, degraded ? 0.35 : 0.7, fallbackReason,
                 prompt.getVersion());
     }
 

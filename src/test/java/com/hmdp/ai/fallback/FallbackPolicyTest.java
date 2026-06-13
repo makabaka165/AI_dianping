@@ -45,21 +45,21 @@ class FallbackPolicyTest {
     }
 
     @Test
-    void shouldOpenLocalFallbackWindowAfterRepeatedFailures() {
-        fallbackPolicy.recordFailure("model");
-        fallbackPolicy.recordFailure("model");
-        fallbackPolicy.recordFailure("model");
+    void fallbackAnalysisShouldRecordFallbackMetric() {
+        when(aiFallbackService.generateSummaryFallback(99L)).thenReturn("fallback for 99");
+        when(aiFallbackService.extractKeywordsFallback("fallback for 99")).thenReturn("");
 
-        assertThat(fallbackPolicy.shouldUseFallback("model")).isTrue();
+        fallbackPolicy.fallbackAnalysis(99L, "summary", true);
+
+        verify(aiMetricsService).increment("ai.fallback.count", "summary", true);
     }
 
     @Test
-    void shouldKeepFailureWindowsPerServiceType() {
-        fallbackPolicy.recordFailure("model-a");
-        fallbackPolicy.recordFailure("model-a");
-        fallbackPolicy.recordFailure("model-a");
+    void fallbackChatShouldUseQualityRejectedMessage() {
+        String message = fallbackPolicy.fallbackChat("hello", "chat", FallbackReason.QUALITY_REJECTED)
+                .getMessage();
 
-        assertThat(fallbackPolicy.shouldUseFallback("model-a")).isTrue();
-        assertThat(fallbackPolicy.shouldUseFallback("model-b")).isFalse();
+        assertThat(message).contains("质量校验");
+        assertThat(message).doesNotContain("服务不可用");
     }
 }

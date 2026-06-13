@@ -9,6 +9,9 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -133,6 +136,63 @@ class IntentRouteCoordinatorTest {
         assertThat(result.getSource()).isEqualTo(IntentRouteSource.CLARIFICATION);
         assertThat(result.getShopId()).isNull();
         assertThat(result.getMissingParams()).contains("shopId");
+    }
+
+    @Test
+    void missingParamsShouldSavePendingSlots() {
+        ShopAIRequestContext context = context();
+        when(intentSlotMemoryService.load("u1", "s1")).thenReturn(null);
+
+        IntentRoutingResult result = coordinator.route(context, "对比店铺7", null);
+
+        assertThat(result.getIntent()).isEqualTo(ShopAIIntent.COMPARE);
+        assertThat(result.getMissingParams()).contains("shopId2");
+        verify(intentSlotMemoryService).savePending(eq("u1"), eq("s1"), any(IntentRouteCandidate.class));
+        verify(intentSlotMemoryService, never()).save(eq("u1"), eq("s1"), any(IntentRouteCandidate.class));
+    }
+
+    @Test
+    void followUpShouldCompleteSamePendingIntent() {
+        ShopAIRequestContext context = context();
+        IntentSlotState pending = IntentSlotState.builder()
+                .userId("u1")
+                .sessionId("s1")
+                .pendingIntent(ShopAIIntent.COMPARE)
+                .pendingShopId1(7L)
+                .missingFields(java.util.List.of("shopId2"))
+                .pendingUpdatedAtEpochMillis(System.currentTimeMillis())
+                .build();
+        when(intentSlotMemoryService.load("u1", "s1")).thenReturn(pending);
+        when(intentSlotMemoryService.pendingExpired(pending)).thenReturn(false);
+
+        IntentRoutingResult result = coordinator.route(context, "店铺5", null);
+
+        assertThat(result.getIntent()).isEqualTo(ShopAIIntent.COMPARE);
+        assertThat(result.getShopId1()).isEqualTo(7L);
+        assertThat(result.getShopId2()).isEqualTo(5L);
+        verify(intentSlotMemoryService).clearPending("u1", "s1");
+        verify(intentSlotMemoryService).save(eq("u1"), eq("s1"), any(IntentRouteCandidate.class));
+    }
+
+    @Test
+    void differentIntentShouldClearPendingInsteadOfReusingSlots() {
+        ShopAIRequestContext context = context();
+        IntentSlotState pending = IntentSlotState.builder()
+                .userId("u1")
+                .sessionId("s1")
+                .pendingIntent(ShopAIIntent.COMPARE)
+                .pendingShopId1(7L)
+                .missingFields(java.util.List.of("shopId2"))
+                .pendingUpdatedAtEpochMillis(System.currentTimeMillis())
+                .build();
+        when(intentSlotMemoryService.load("u1", "s1")).thenReturn(pending);
+        when(intentSlotMemoryService.pendingExpired(pending)).thenReturn(false);
+
+        IntentRoutingResult result = coordinator.route(context, "推荐适合约会的餐厅", null);
+
+        assertThat(result.getIntent()).isEqualTo(ShopAIIntent.RECOMMEND);
+        assertThat(result.getShopId1()).isNull();
+        verify(intentSlotMemoryService).clearPending("u1", "s1");
     }
 
     private ShopAIRequestContext context() {

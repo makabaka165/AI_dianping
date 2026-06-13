@@ -1,6 +1,7 @@
 package com.hmdp.ai.workflow;
 
 import com.hmdp.ai.fallback.FallbackPolicy;
+import com.hmdp.ai.guard.GovernedGeneration;
 import com.hmdp.ai.guard.QualityCheck;
 import com.hmdp.ai.guard.QualityDecision;
 import com.hmdp.ai.guard.QualityGuard;
@@ -71,6 +72,7 @@ class RecommendWorkflowTest {
         ReflectionTestUtils.setField(workflow, "modelGateway", modelGateway);
         ReflectionTestUtils.setField(workflow, "qualityGuard", qualityGuard);
         ReflectionTestUtils.setField(workflow, "fallbackPolicy", fallbackPolicy);
+        ReflectionTestUtils.setField(workflow, "governedGeneration", new GovernedGeneration());
         ReflectionTestUtils.setField(workflow, "aiMetricsService", aiMetricsService);
     }
 
@@ -118,7 +120,6 @@ class RecommendWorkflowTest {
                         .build());
         when(promptTemplateRegistry.recommendPrompt(eq("适合约会"), eq("餐厅"), eq(1), anyString()))
                 .thenReturn("recommend prompt");
-        when(fallbackPolicy.shouldUseFallback("recommend:analyzeShopData")).thenReturn(false);
         when(modelGateway.generateStructuredRecommendation(eq("recommend-memory"), eq("recommend prompt"), eq("适合约会"),
                 eq("餐厅"), eq(List.of(shop)), any())).thenReturn(bad);
         when(qualityGuard.validateRecommend(eq(bad), eq(Set.of(1L)), any(), eq("recommend"))).thenReturn(QualityCheck.builder()
@@ -142,7 +143,6 @@ class RecommendWorkflowTest {
         assertThat(response.getEvidence()).extracting("id").contains("shop_profile:1");
         assertThat(response.getDegraded()).isFalse();
         assertThat(response.getMemoryId()).isEqualTo("recommend-memory");
-        verify(fallbackPolicy).shouldUseFallback("recommend:analyzeShopData");
         verify(modelGateway).repairStructuredRecommendation("recommend-memory", "recommend prompt", "适合约会", "餐厅",
                 List.of(shop), "too generic");
         verify(fallbackPolicy, never()).fallbackText(anyString(), anyString(), anyString());

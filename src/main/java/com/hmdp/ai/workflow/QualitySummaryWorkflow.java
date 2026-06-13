@@ -1,9 +1,8 @@
 package com.hmdp.ai.workflow;
 
 import com.hmdp.ai.fallback.FallbackPolicy;
-import com.hmdp.ai.guard.QualityCheck;
+import com.hmdp.ai.guard.GovernedGeneration;
 import com.hmdp.ai.guard.QualityGuard;
-import com.hmdp.ai.intent.ShopAIIntent;
 import com.hmdp.ai.memory.MemoryService;
 import com.hmdp.ai.model.ModelGateway;
 import com.hmdp.ai.orchestration.ShopAIRequestContext;
@@ -36,11 +35,10 @@ import java.util.stream.Collectors;
 
 @Component
 @Slf4j
-public class QualitySummaryWorkflow implements ShopAIWorkflow<QualitySummaryWorkflowRequest, ShopSummaryResult> {
+public class QualitySummaryWorkflow {
 
     private static final double MIN_MEMORY_CONFIDENCE = 0.4;
     private static final String ANALYSIS_TYPE = "quality_summary";
-    private static final String MODEL_OPERATION = "quality_summary:generateStructuredAnalysis";
 
     @Resource
     private BlogMapper blogMapper;
@@ -67,6 +65,9 @@ public class QualitySummaryWorkflow implements ShopAIWorkflow<QualitySummaryWork
     private FallbackPolicy fallbackPolicy;
 
     @Resource
+    private GovernedGeneration governedGeneration;
+
+    @Resource
     private AiResultCacheService aiResultCacheService;
 
     @Resource
@@ -75,12 +76,6 @@ public class QualitySummaryWorkflow implements ShopAIWorkflow<QualitySummaryWork
     @Resource
     private MemoryService memoryService;
 
-    @Override
-    public ShopAIIntent intent() {
-        return ShopAIIntent.SUMMARY;
-    }
-
-    @Override
     public ShopSummaryResult execute(ShopAIRequestContext requestContext, QualitySummaryWorkflowRequest request) {
         long start = System.currentTimeMillis();
         Long shopId = request.getShopId();
@@ -155,28 +150,24 @@ public class QualitySummaryWorkflow implements ShopAIWorkflow<QualitySummaryWork
             aiMetricsService.increment("ai.cache.hit", ANALYSIS_TYPE, false);
             return cached;
         }
-        if (fallbackPolicy.shouldUseFallback(MODEL_OPERATION)) {
-            return fallbackPolicy.fallbackAnalysis(shopId, ANALYSIS_TYPE, true);
+        GovernedGeneration.GovernedResult<ShopAIAnalysisResult> generated = governedGeneration.runWithReason(
+                () -> modelGateway.generateStructuredSummary(prompt.getContent(), context),
+                reason -> modelGateway.repairStructuredSummary(prompt.getContent(), context, reason),
+                analysis -> qualityGuard.validateAnalysis(analysis, context.safeEvidence(), ANALYSIS_TYPE),
+                reason -> fallbackPolicy.fallbackAnalysis(shopId, ANALYSIS_TYPE, true, reason),
+                analysis -> {
+                    analysis.setSummary(qualityGuard.postProcess(analysis.getSummary()));
+                    analysis.setDegraded(false);
+                    return analysis;
+                });
+        if (generated.getFallbackReason() != null && generated.getValue() != null) {
+            generated.getValue().setDegraded(true);
+            generated.getValue().setFallbackReason(generated.getFallbackReason().name());
         }
-        try {
-            ShopAIAnalysisResult result = modelGateway.generateStructuredSummary(prompt.getContent(), context);
-            QualityCheck quality = qualityGuard.validateAnalysis(result, context.safeEvidence(), ANALYSIS_TYPE);
-            if (!quality.pass()) {
-                result = modelGateway.repairStructuredSummary(prompt.getContent(), context, quality.getReason());
-                quality = qualityGuard.validateAnalysis(result, context.safeEvidence(), ANALYSIS_TYPE);
-                if (!quality.pass()) {
-                    return fallbackPolicy.fallbackAnalysis(shopId, ANALYSIS_TYPE, true);
-                }
-            }
-            result.setSummary(qualityGuard.postProcess(result.getSummary()));
-            result.setDegraded(false);
-            aiResultCacheService.put(cacheKey, result);
-            return result;
-        } catch (Exception e) {
-            log.error("高质量店铺总结生成失败, shopId={}", shopId, e);
-            fallbackPolicy.recordFailure(MODEL_OPERATION);
-            return fallbackPolicy.fallbackAnalysis(shopId, ANALYSIS_TYPE, true);
+        if (!generated.isDegraded()) {
+            aiResultCacheService.put(cacheKey, generated.getValue());
         }
+        return generated.getValue();
     }
 
     private ShopAnalysisContext buildContext(Long shopId, List<Blog> blogs) {
@@ -299,7 +290,9 @@ public class QualitySummaryWorkflow implements ShopAIWorkflow<QualitySummaryWork
     }
 
     private String fallbackReason(ShopAIAnalysisResult analysis) {
-        return Boolean.TRUE.equals(analysis.getDegraded()) ? "AI_MODEL_OR_QUALITY_FALLBACK" : null;
+        return Boolean.TRUE.equals(analysis.getDegraded())
+                ? (analysis.getFallbackReason() == null ? "MODEL_UNAVAILABLE" : analysis.getFallbackReason())
+                : null;
     }
 
     private String modelName() {

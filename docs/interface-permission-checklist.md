@@ -21,7 +21,6 @@
 | `BlogController` | `GET /blog/{id}` | 博客详情 |
 | `BlogController` | `GET /blog/likes/{id}` | 博客点赞榜 |
 | `BlogController` | `GET /blog/of/user?id={id}` | 指定用户博客 |
-| `ShopSummaryController` | `GET /api/shop-summary/{shopId}` | 店铺摘要预览 |
 | `AITestController` | `/api/ai/test/**` | 开发测试接口，生产应关闭或改 admin |
 
 ## 登录接口
@@ -40,7 +39,6 @@
 | `FollowController` | `GET /follow/common/{id}` | `@SaCheckLogin` |
 | `UploadController` | `POST /upload/blog` | `@SaCheckLogin` |
 | `UploadController` | `DELETE /upload/blog` | `@SaCheckLogin` |
-| `ShopSummaryController` | 带 memory 的用户会话接口 | `@SaCheckLogin` |
 
 ## 权限接口
 
@@ -56,6 +54,13 @@
 | `VoucherController` | `POST /voucher` | `voucher:create:own OR voucher:manage` |
 | `VoucherController` | `POST /voucher/seckill` | `voucher:create:own OR voucher:manage` |
 | `ShopSummaryController` | `/api/shop-summary/ai/**` | `@SaCheckPermission("ai:chat")` |
+| `ShopSummaryController` | `GET /api/shop-summary/{shopId}` | `@SaCheckPermission("ai:chat")` |
+| `ShopSummaryController` | `POST /api/shop-summary/{shopId}/with-memory` | `@SaCheckPermission("ai:chat")` |
+| `ShopSummaryController` | `GET /api/shop-summary/{shopId}/quality` | `@SaCheckPermission("ai:chat")`，无写记忆副作用 |
+| `ShopSummaryController` | `POST /api/shop-summary/{shopId}/quality/with-memory` | `@SaCheckPermission("ai:chat")`，显式写 summary memory |
+| `ShopSummaryController` | `POST /api/shop-summary/{shopId}/ask` | `@SaCheckPermission("ai:chat")` |
+| `ShopSummaryController` | `POST /api/shop-summary/compare` | `@SaCheckPermission("ai:chat")` |
+| `ShopSummaryController` | `POST /api/shop-summary/recommend` | `@SaCheckPermission("ai:chat")` |
 
 ## 管理员接口
 

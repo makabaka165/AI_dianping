@@ -21,6 +21,7 @@ public class ShopAIAnalysisResult {
     private Double confidence;
     private List<String> evidenceIds;
     private Boolean degraded;
+    private String fallbackReason;
 
     public List<String> safeKeywords() {
         return keywords == null ? new ArrayList<>() : keywords;

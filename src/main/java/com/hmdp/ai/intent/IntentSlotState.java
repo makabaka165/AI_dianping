@@ -5,6 +5,8 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.util.List;
+
 @Data
 @Builder
 @NoArgsConstructor
@@ -21,4 +23,14 @@ public class IntentSlotState {
     private String category;
     private Integer limit;
     private Long updatedAtEpochMillis;
+    private ShopAIIntent pendingIntent;
+    private Long pendingShopId;
+    private Long pendingShopId1;
+    private Long pendingShopId2;
+    private String pendingAspect;
+    private String pendingUserPreference;
+    private String pendingCategory;
+    private Integer pendingLimit;
+    private List<String> missingFields;
+    private Long pendingUpdatedAtEpochMillis;
 }

@@ -1,6 +1,7 @@
 package com.hmdp.ai.workflow;
 
 import com.hmdp.ai.fallback.FallbackPolicy;
+import com.hmdp.ai.guard.GovernedGeneration;
 import com.hmdp.ai.guard.QualityCheck;
 import com.hmdp.ai.guard.QualityDecision;
 import com.hmdp.ai.guard.QualityGuard;
@@ -66,6 +67,7 @@ class QAWorkflowTest {
         ReflectionTestUtils.setField(workflow, "modelGateway", modelGateway);
         ReflectionTestUtils.setField(workflow, "qualityGuard", qualityGuard);
         ReflectionTestUtils.setField(workflow, "fallbackPolicy", fallbackPolicy);
+        ReflectionTestUtils.setField(workflow, "governedGeneration", new GovernedGeneration());
         ReflectionTestUtils.setField(workflow, "aiMetricsService", aiMetricsService);
     }
 
@@ -107,7 +109,6 @@ class QAWorkflowTest {
                         .variant("stable")
                         .build());
         when(promptTemplateRegistry.qaPrompt("服务怎么样", "summary snapshot", "evidence block")).thenReturn("qa prompt");
-        when(fallbackPolicy.shouldUseFallback("ask:analyzeShopData")).thenReturn(false);
         when(modelGateway.generateStructuredAnswer("qa-memory", "qa prompt", 1L, "服务怎么样", analysisContext.safeEvidence()))
                 .thenReturn(bad);
         when(qualityGuard.validateQA(bad, analysisContext.safeEvidence(), "ask")).thenReturn(QualityCheck.builder()
@@ -132,6 +133,5 @@ class QAWorkflowTest {
         assertThat(response.getMemoryId()).isEqualTo("qa-memory");
         verify(modelGateway).repairStructuredAnswer("qa-memory", "qa prompt", 1L, "服务怎么样", "too generic");
         verify(fallbackPolicy, never()).fallbackText(anyString(), anyString(), anyString());
-        verify(fallbackPolicy, never()).recordFailure(anyString());
     }
 }

@@ -1,9 +1,8 @@
 package com.hmdp.ai.workflow;
 
 import com.hmdp.ai.fallback.FallbackPolicy;
-import com.hmdp.ai.guard.QualityCheck;
+import com.hmdp.ai.guard.GovernedGeneration;
 import com.hmdp.ai.guard.QualityGuard;
-import com.hmdp.ai.intent.ShopAIIntent;
 import com.hmdp.ai.memory.MemoryService;
 import com.hmdp.ai.model.ModelGateway;
 import com.hmdp.ai.orchestration.ShopAIRequestContext;
@@ -26,13 +25,13 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Set;
+import java.util.function.UnaryOperator;
 import java.util.stream.Collectors;
 
 @Component
-public class RecommendWorkflow implements ShopAIWorkflow<RecommendWorkflowRequest, ShopAIResponse> {
+public class RecommendWorkflow {
 
     private static final String ANALYSIS_TYPE = "recommend";
-    private static final String MODEL_OPERATION = "recommend:analyzeShopData";
     private static final int EVIDENCE_SNIPPET_LIMIT = 300;
     private static final int SHOP_FIELD_LIMIT = 120;
 
@@ -58,14 +57,11 @@ public class RecommendWorkflow implements ShopAIWorkflow<RecommendWorkflowReques
     private FallbackPolicy fallbackPolicy;
 
     @Resource
+    private GovernedGeneration governedGeneration;
+
+    @Resource
     private AiMetricsService aiMetricsService;
 
-    @Override
-    public ShopAIIntent intent() {
-        return ShopAIIntent.RECOMMEND;
-    }
-
-    @Override
     public ShopAIResponse execute(ShopAIRequestContext context, RecommendWorkflowRequest request) {
         long start = System.currentTimeMillis();
         if (isBlank(request.getUserPreference())) {
@@ -97,38 +93,22 @@ public class RecommendWorkflow implements ShopAIWorkflow<RecommendWorkflowReques
                 .filter(shop -> shop != null && shop.getId() != null)
                 .map(Shop::getId)
                 .collect(Collectors.toSet());
-        boolean degraded = false;
-        ShopRecommendResult recommend;
-        if (fallbackPolicy.shouldUseFallback(MODEL_OPERATION)) {
-            recommend = fallbackPolicy.fallbackRecommend(request.getUserPreference(), request.getCategory(),
-                    candidates, safeLimit, ANALYSIS_TYPE);
-            degraded = true;
-        } else {
-            try {
-                recommend = modelGateway.generateStructuredRecommendation(memoryId, prompt.getContent(), request.getUserPreference(),
-                        request.getCategory(), candidates, evidence);
-                QualityCheck quality = qualityGuard.validateRecommend(recommend, candidateShopIds, evidence, ANALYSIS_TYPE);
-                if (!quality.pass()) {
-                    recommend = modelGateway.repairStructuredRecommendation(memoryId, prompt.getContent(), request.getUserPreference(),
-                            request.getCategory(), candidates, quality.getReason());
-                    quality = qualityGuard.validateRecommend(recommend, candidateShopIds, evidence, ANALYSIS_TYPE);
-                    if (!quality.pass()) {
-                        recommend = fallbackPolicy.fallbackRecommend(request.getUserPreference(), request.getCategory(),
-                                candidates, safeLimit, ANALYSIS_TYPE);
-                        degraded = true;
-                    }
-                }
-            } catch (Exception e) {
-                fallbackPolicy.recordFailure(MODEL_OPERATION);
-                recommend = fallbackPolicy.fallbackRecommend(request.getUserPreference(), request.getCategory(),
-                        candidates, safeLimit, ANALYSIS_TYPE);
-                degraded = true;
-            }
-        }
+        GovernedGeneration.GovernedResult<ShopRecommendResult> generated = governedGeneration.runWithReason(
+                () -> modelGateway.generateStructuredRecommendation(memoryId, prompt.getContent(), request.getUserPreference(),
+                        request.getCategory(), candidates, evidence),
+                reason -> modelGateway.repairStructuredRecommendation(memoryId, prompt.getContent(), request.getUserPreference(),
+                        request.getCategory(), candidates, reason),
+                recommend -> qualityGuard.validateRecommend(recommend, candidateShopIds, evidence, ANALYSIS_TYPE),
+                reason -> fallbackPolicy.fallbackRecommend(request.getUserPreference(), request.getCategory(),
+                        candidates, safeLimit, ANALYSIS_TYPE, reason),
+                UnaryOperator.identity());
+        ShopRecommendResult recommend = generated.getValue();
+        boolean degraded = generated.isDegraded();
+        String fallbackReason = generated.getFallbackReason() == null ? null : generated.getFallbackReason().name();
         aiMetricsService.recordDuration(ANALYSIS_TYPE, System.currentTimeMillis() - start, degraded);
         aiMetricsService.recordEvidenceCount(ANALYSIS_TYPE, evidence.size(), "hybrid");
         return response(context, evidence, recommend, degraded, degraded ? 0.35 : 0.7,
-                degraded ? "AI_MODEL_OR_QUALITY_FALLBACK" : null,
+                fallbackReason,
                 prompt.getVersion());
     }
 

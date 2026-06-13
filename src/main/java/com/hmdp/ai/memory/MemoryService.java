@@ -12,6 +12,7 @@ import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.UserMessage;
 import lombok.extern.slf4j.Slf4j;
 import org.redisson.api.RedissonClient;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import javax.annotation.Resource;
@@ -40,6 +41,9 @@ public class MemoryService {
 
     @Resource
     private LocalCacheManager localCacheManager;
+
+    @Value("${hmdp.ai.memory.admin-scan-limit:10000}")
+    private int adminScanLimit;
 
     public String aiChatKey(String userId, String sessionId) {
         return keyManager.buildAIChatKey(userId, sessionId);
@@ -109,6 +113,7 @@ public class MemoryService {
         try {
             List<String> keys = redissonClient.getKeys()
                     .getKeysStreamByPattern(pattern, SCAN_BATCH_SIZE)
+                    .limit(scanLimit())
                     .collect(Collectors.toList());
             for (String key : keys) {
                 deleted += redissonClient.getKeys().unlink(key);
@@ -139,6 +144,7 @@ public class MemoryService {
             int count = 0;
             List<String> keys = redissonClient.getKeys()
                     .getKeysStreamByPattern(pattern, SCAN_BATCH_SIZE)
+                    .limit(scanLimit())
                     .collect(Collectors.toList());
             for (String key : keys) {
                 count += redissonClient.getKeys().unlink(key);
@@ -203,6 +209,11 @@ public class MemoryService {
         statsSummary.put("totalMemories", allStats.size());
         statsSummary.put("totalMessages", totalMessages);
         result.put("overview", statsSummary);
+        if (scanLimit() > 0) {
+            Map<String, Integer> scanGuard = new HashMap<>();
+            scanGuard.put("adminScanLimit", scanLimit());
+            result.put("scanGuard", scanGuard);
+        }
         localCacheManager.put(cacheKey, result, LocalCacheManager.CacheType.MEMORY_STATS);
         return result;
     }
@@ -215,6 +226,10 @@ public class MemoryService {
 
     private void delete(String memoryKey) {
         chatMemoryStore.deleteMessages(memoryKey);
+    }
+
+    private int scanLimit() {
+        return adminScanLimit <= 0 ? 10000 : adminScanLimit;
     }
 
     private String summarizeEvidence(List<EvidenceItem> evidence) {

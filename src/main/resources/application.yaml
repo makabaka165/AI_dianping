@@ -28,6 +28,13 @@ hmdp:
       max-concurrent-calls: ${HMDP_AI_MAX_CONCURRENT_CALLS:8}
       rate-limit-period-seconds: ${HMDP_AI_RATE_LIMIT_PERIOD_SECONDS:1}
       rate-limit-permits: ${HMDP_AI_RATE_LIMIT_PERMITS:2}
+    quota:
+      enabled: ${HMDP_AI_QUOTA_ENABLED:true}
+      minute-permits: ${HMDP_AI_QUOTA_MINUTE_PERMITS:10}
+      daily-permits: ${HMDP_AI_QUOTA_DAILY_PERMITS:200}
+      fail-open: ${HMDP_AI_QUOTA_FAIL_OPEN:false}
+    memory:
+      admin-scan-limit: ${HMDP_AI_MEMORY_ADMIN_SCAN_LIMIT:10000}
     prompt:
       canary:
         enabled: ${HMDP_AI_PROMPT_CANARY_ENABLED:false}
@@ -150,12 +157,16 @@ rag:
     auto-import: true
   review:
     enabled: true
+    index-name: shop_review_kb
+    dimension: 1024
     min-score: 0.55
     max-vector-candidates: 20
     backfill-page-size: 200
+  platform-policy:
+    index-name: platform_policy_kb
+    dimension: 1024
   redis:
     host: 127.0.0.1
     port: 6380
-    index-name: shop_knowledge_base
     dimension: 1024
     fallback-to-memory: false

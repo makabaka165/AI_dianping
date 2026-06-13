@@ -4,7 +4,6 @@ import com.hmdp.entity.DocumentMetadata;
 import com.hmdp.entity.DocumentStatus;
 import com.hmdp.repository.RedissonChatMemoryStore;
 import com.hmdp.service.DocumentManagementService;
-import com.hmdp.service.impl.DocumentManagementServiceImpl;
 import com.hmdp.service.impl.DocumentQualityAssessor;
 import com.hmdp.service.impl.QualityBasedContentRetriever;
 import dev.langchain4j.data.document.Document;
@@ -22,7 +21,6 @@ import dev.langchain4j.model.openai.OpenAiChatModel;
 import dev.langchain4j.model.openai.OpenAiEmbeddingModel;
 import dev.langchain4j.model.openai.OpenAiStreamingChatModel;
 import dev.langchain4j.rag.content.retriever.ContentRetriever;
-import dev.langchain4j.rag.content.retriever.EmbeddingStoreContentRetriever;
 import dev.langchain4j.store.embedding.EmbeddingStore;
 import dev.langchain4j.store.embedding.EmbeddingStoreIngestor;
 import dev.langchain4j.store.embedding.inmemory.InMemoryEmbeddingStore;
@@ -32,6 +30,7 @@ import org.redisson.Redisson;
 import org.redisson.api.RedissonClient;
 import org.redisson.config.Config;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.ApplicationContext;
@@ -55,6 +54,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 @Configuration
 @Slf4j
@@ -97,11 +97,20 @@ public class CommonAIConfig {
     @Value("${rag.redis.port:6380}")
     private int redisPort;
 
-    @Value("${rag.redis.index-name:shop_knowledge_base}")
-    private String vectorIndexName;
-
     @Value("${rag.redis.dimension:1536}")
     private int vectorDimension;
+
+    @Value("${rag.platform-policy.index-name:platform_policy_kb}")
+    private String platformPolicyIndexName;
+
+    @Value("${rag.platform-policy.dimension:${rag.redis.dimension:1536}}")
+    private int platformPolicyDimension;
+
+    @Value("${rag.review.index-name:shop_review_kb}")
+    private String reviewIndexName;
+
+    @Value("${rag.review.dimension:${rag.redis.dimension:1536}}")
+    private int reviewDimension;
 
     @Value("${rag.enabled:false}")
     private boolean ragEnabled;
@@ -121,6 +130,8 @@ public class CommonAIConfig {
     // 注入ApplicationContext
     @Autowired
     private ApplicationContext applicationContext;
+
+    private final AtomicBoolean platformPolicyImportAttempted = new AtomicBoolean(false);
 
     // ========== Redis配置 ==========
 
@@ -275,99 +286,111 @@ public class CommonAIConfig {
 
 
     /**
-     * 创建 Redis 向量存储。不要作为独立 Bean 暴露，避免 Redis Stack 不可用时阻断应用启动。
+     * ???? Redis ?????????? FAQ ?????????????????? RAG ???
      */
-    private RedisEmbeddingStore buildRedisEmbeddingStore() {
-        log.info("初始化 RedisEmbeddingStore - RAG专用 - 主机: {}, 端口: {}, 索引: {}, 维度: {}",
-                redisHost, redisPort, vectorIndexName, vectorDimension);
+    private RedisEmbeddingStore buildRedisEmbeddingStore(String indexName, int dimension) {
+        log.info("??? RedisEmbeddingStore - RAG?? - ??: {}, ??: {}, ??: {}, ??: {}",
+                redisHost, redisPort, indexName, dimension);
 
         RedisEmbeddingStore store = RedisEmbeddingStore.builder()
                 .host(redisHost)
                 .port(redisPort)
-                .indexName(vectorIndexName)
-                .dimension(vectorDimension)
+                .indexName(indexName)
+                .dimension(dimension)
                 .build();
-        log.info("✅ RedisEmbeddingStore 创建成功");
+        log.info("RedisEmbeddingStore ????, index={}", indexName);
         return store;
     }
-    
-    /**
-     * 创建内存向量存储Bean（降级方案）
-     */
-    @Bean
+
+    @Bean("platformPolicyInMemoryEmbeddingStore")
     @ConditionalOnProperty(value = "rag.enabled", havingValue = "true", matchIfMissing = false)
-    public InMemoryEmbeddingStore<TextSegment> inMemoryEmbeddingStore() {
-        log.info("初始化 InMemoryEmbeddingStore - 降级方案");
+    public InMemoryEmbeddingStore<TextSegment> platformPolicyInMemoryEmbeddingStore() {
+        log.info("??????? InMemoryEmbeddingStore - ????");
         return new InMemoryEmbeddingStore<>();
     }
 
-    /**
-     * 构建向量数据库操作对象（主方案：Redis，降级方案：内存）
-     */
-    @Bean
+    @Bean("shopReviewInMemoryEmbeddingStore")
+    @ConditionalOnProperty(value = "rag.enabled", havingValue = "true", matchIfMissing = false)
+    public InMemoryEmbeddingStore<TextSegment> shopReviewInMemoryEmbeddingStore() {
+        log.info("??????? InMemoryEmbeddingStore - ????");
+        return new InMemoryEmbeddingStore<>();
+    }
+
+    @Bean("platformPolicyEmbeddingStore")
     @ConditionalOnProperty(value = "rag.enabled", havingValue = "true")
-    public EmbeddingStore<TextSegment> embeddingStore(
-            InMemoryEmbeddingStore<TextSegment> inMemoryEmbeddingStore,
-            EmbeddingModel embeddingModel,
-            DocumentQualityAssessor documentQualityAssessor) {
+    public EmbeddingStore<TextSegment> platformPolicyEmbeddingStore(
+            @Qualifier("platformPolicyInMemoryEmbeddingStore")
+            InMemoryEmbeddingStore<TextSegment> platformPolicyInMemoryEmbeddingStore,
+            EmbeddingModel embeddingModel) {
 
-        log.info("初始化向量数据库...");
-
-        // 尝试使用Redis存储
+        log.info("??????????...");
         try {
-            RedisEmbeddingStore redisEmbeddingStore = buildRedisEmbeddingStore();
-            // 检查是否需要初始化数据
-            if (shouldInitializeVectorStore(redisEmbeddingStore, embeddingModel)) {
-                if (autoImportData) {
-                    initializeVectorStore(redisEmbeddingStore, embeddingModel, documentQualityAssessor);
-                } else {
-                    log.info("rag.data.auto-import=false, skip vector store import");
-                }
-                log.info("检测到空的Redis向量数据库，开始初始化文档数据...");
-                // 初始化向量存储的逻辑已移至应用启动时执行，避免循环依赖
+            RedisEmbeddingStore redisEmbeddingStore = buildRedisEmbeddingStore(platformPolicyIndexName, platformPolicyDimension);
+            if (autoImportData) {
+                log.info("rag.data.auto-import=true, platform policy import will run lazily on first retrieval");
             } else {
-                log.info("Redis向量数据库已有数据，跳过初始化");
+                log.info("rag.data.auto-import=false, skip platform policy vector store import");
             }
-            
-            log.info("✅ 使用Redis向量数据库");
             return redisEmbeddingStore;
         } catch (Exception e) {
             if (!ragRedisFallbackToMemory) {
                 throw new IllegalStateException(
-                        "RAG is enabled but Redis Stack embedding store is unavailable. "
+                        "RAG is enabled but platform policy Redis Stack embedding store is unavailable. "
                                 + "Set rag.redis.fallback-to-memory=true only for dev/test fallback.",
                         e);
             }
-            log.warn("Redis embedding store unavailable, using in-memory fallback because rag.redis.fallback-to-memory=true: {}",
-                    e.getMessage());
-            return inMemoryEmbeddingStore;
+            log.warn("Platform policy Redis embedding store unavailable, using in-memory fallback: {}", e.getMessage());
+            return platformPolicyInMemoryEmbeddingStore;
         }
     }
 
-    /**
-     * 构建向量数据库检索对象
-     */
-    @Bean
+    @Bean("shopReviewEmbeddingStore")
     @ConditionalOnProperty(value = "rag.enabled", havingValue = "true")
-    public ContentRetriever contentRetriever(
-            EmbeddingStore<TextSegment> embeddingStore,
-            EmbeddingModel embeddingModel) {
+    public EmbeddingStore<TextSegment> shopReviewEmbeddingStore(
+            @Qualifier("shopReviewInMemoryEmbeddingStore")
+            InMemoryEmbeddingStore<TextSegment> shopReviewInMemoryEmbeddingStore) {
 
-        log.info("初始化基于质量的 ContentRetriever，最小分数: 0.5, 最大结果数: 5");
+        log.info("??????????...");
+        try {
+            return buildRedisEmbeddingStore(reviewIndexName, reviewDimension);
+        } catch (Exception e) {
+            if (!ragRedisFallbackToMemory) {
+                throw new IllegalStateException(
+                        "RAG is enabled but shop review Redis Stack embedding store is unavailable. "
+                                + "Set rag.redis.fallback-to-memory=true only for dev/test fallback.",
+                        e);
+            }
+            log.warn("Shop review Redis embedding store unavailable, using in-memory fallback: {}", e.getMessage());
+            return shopReviewInMemoryEmbeddingStore;
+        }
+    }
 
-        return QualityBasedContentRetriever.builder()
-                .embeddingStore(embeddingStore)
+    @Bean("platformPolicyContentRetriever")
+    @ConditionalOnProperty(value = "rag.enabled", havingValue = "true")
+    public ContentRetriever platformPolicyContentRetriever(
+            @Qualifier("platformPolicyEmbeddingStore")
+            EmbeddingStore<TextSegment> platformPolicyEmbeddingStore,
+            EmbeddingModel embeddingModel,
+            DocumentQualityAssessor documentQualityAssessor) {
+
+        log.info("??????? ContentRetriever?????: 0.5, ?????: 5");
+        ContentRetriever delegate = QualityBasedContentRetriever.builder()
+                .embeddingStore(platformPolicyEmbeddingStore)
                 .embeddingModel(embeddingModel)
                 .documentManagementService(null)
                 .minScore(0.5)
                 .maxResults(5)
                 .build();
+        return query -> {
+            initializePlatformPolicyStoreIfNeeded(platformPolicyEmbeddingStore, embeddingModel, documentQualityAssessor);
+            return delegate.retrieve(query);
+        };
     }
 
-    @Bean("contentRetriever")
+    @Bean("platformPolicyContentRetriever")
     @ConditionalOnProperty(value = "rag.enabled", havingValue = "false", matchIfMissing = true)
-    public ContentRetriever noopContentRetriever() {
-        log.info("rag.enabled=false, 初始化空 ContentRetriever");
+    public ContentRetriever noopPlatformPolicyContentRetriever() {
+        log.info("rag.enabled=false, ???????? ContentRetriever");
         return query -> Collections.emptyList();
     }
 
@@ -416,29 +439,8 @@ public class CommonAIConfig {
     /**
      * 检查是否需要初始化向量存储
      */
-    private boolean shouldInitializeVectorStore(EmbeddingStore<TextSegment> embeddingStore, EmbeddingModel embeddingModel) {
-        try {
-            // 执行一个测试查询来检查是否有数据
-            var testEmbedding = embeddingModel.embed("测试查询").content();
-            log.debug("测试查询向量维度: {}", testEmbedding.dimension());
-            var results = embeddingStore.findRelevant(testEmbedding, 1, 0.0);
-
-            boolean hasData = results != null && !results.isEmpty();
-            log.info("向量数据库状态检查 - 是否有数据: {}", hasData);
-            
-            if (hasData) {
-                log.debug("找到数据示例: {}", results.get(0).embedded().text());
-            }
-
-            return !hasData; // 没有数据则需要初始化
-
-        } catch (Exception e) {
-            throw new IllegalStateException("Vector store state check failed", e);
-        }
-    }
-
     /**
-     * 初始化向量存储数据
+     * 初始化向量存储数据。Embedding API 抖动只告警，不阻塞应用启动。
      */
     private void initializeVectorStore(EmbeddingStore<TextSegment> embeddingStore, 
                                       EmbeddingModel embeddingModel,
@@ -496,79 +498,22 @@ public class CommonAIConfig {
 
             log.info("✅ 成功将 {} 个文档导入向量数据库！", documents.size());
 
-            // 5. 验证导入结果
-            verifyVectorStoreData(embeddingStore, embeddingModel);
-
         } catch (Exception e) {
-            log.error("❌ 初始化向量数据库失败", e);
-            throw new RuntimeException("向量数据库初始化失败: " + e.getMessage(), e);
+            log.warn("Platform policy vector import skipped because embedding service is unavailable or import failed: {}",
+                    e.getMessage(), e);
         }
     }
 
-    /**
-     * 验证向量存储数据
-     */
-    private void verifyVectorStoreData(EmbeddingStore<TextSegment> embeddingStore, EmbeddingModel embeddingModel) {
-        try {
-            // 首先尝试获取任意内容
-            log.info("尝试获取向量存储中的任意内容...");
-            var testEmbedding = embeddingModel.embed("测试").content();
-            var allResults = embeddingStore.findRelevant(testEmbedding, 5, 0.0);
-            log.info("在向量存储中找到 {} 个条目", allResults.size());
-            
-            if (!allResults.isEmpty()) {
-                for (int i = 0; i < Math.min(3, allResults.size()); i++) {
-                    String text = allResults.get(i).embedded().text();
-                    double score = allResults.get(i).score();
-                    String preview = text.length() > 100 ? text.substring(0, 100) + "..." : text;
-                    log.debug("存储条目 {} (得分: {}): {}", i+1, score, preview);
-                }
-            } else {
-                log.warn("向量存储中没有任何内容");
-            }
-
-            // 使用一些测试查询来验证数据
-            String[] testQueries = {"营业时间", "支付方式", "退换货", "周一至周日"};
-
-            for (String query : testQueries) {
-                log.info("开始验证查询: '{}'", query);
-                var embedding = embeddingModel.embed(query).content();
-                log.debug("查询 '{}' 的嵌入向量维度: {}", query, embedding.dimension());
-                
-                // 进一步降低最小分数阈值，增加返回结果数量
-                var results = embeddingStore.findRelevant(embedding, 10, 0.01);
-
-                log.info("验证查询 '{}' - 找到 {} 个相关结果 (阈值: 0.01)", query, results.size());
-
-                if (!results.isEmpty()) {
-                    // 打印第一个结果的部分内容（用于调试）
-                    String text = results.get(0).embedded().text();
-                    String preview = text.length() > 100 ? text.substring(0, 100) + "..." : text;
-                    log.debug("示例结果预览: {}", preview);
-                } else {
-                    // 尝试用更宽松的方式检索所有内容
-                    var allResultsQuery = embeddingStore.findRelevant(embedding, 10, 0.0);
-                    log.info("使用阈值0.0查询 '{}' - 找到 {} 个相关结果", query, allResultsQuery.size());
-                    
-                    // 如果仍然没有结果，尝试检索所有内容
-                    if (allResultsQuery.isEmpty()) {
-                        log.info("尝试获取存储中的所有内容...");
-                    } else {
-                        for (int i = 0; i < Math.min(3, allResultsQuery.size()); i++) {
-                            String text = allResultsQuery.get(i).embedded().text();
-                            double score = allResultsQuery.get(i).score();
-                            String preview = text.length() > 100 ? text.substring(0, 100) + "..." : text;
-                            log.debug("结果 {} (得分: {}): {}", i+1, score, preview);
-                        }
-                    }
-                }
-            }
-
-            log.info("✅ 向量数据库验证完成！");
-
-        } catch (Exception e) {
-            log.warn("向量数据库验证失败: {}", e.getMessage(), e);
+    private void initializePlatformPolicyStoreIfNeeded(EmbeddingStore<TextSegment> embeddingStore,
+                                                       EmbeddingModel embeddingModel,
+                                                       DocumentQualityAssessor documentQualityAssessor) {
+        if (!autoImportData) {
+            return;
         }
+        if (!platformPolicyImportAttempted.compareAndSet(false, true)) {
+            return;
+        }
+        initializeVectorStore(embeddingStore, embeddingModel, documentQualityAssessor);
     }
 
 

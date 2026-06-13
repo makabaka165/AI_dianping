@@ -36,19 +36,21 @@ public class IntentRouteCoordinator {
         if (rule.getConfidence() < RULE_DIRECT_THRESHOLD) {
             IntentRouteCandidate llm = llmIntentClassifier.classify(message, rule, slotState);
             sanitizeLlmIds(llm, message, explicitShopId, slotState);
-            if (llm.getConfidence() > rule.getConfidence() && llm.getIntent() != ShopAIIntent.UNSUPPORTED) {
+            if (llm != null && llm.getConfidence() > rule.getConfidence() && llm.getIntent() != ShopAIIntent.UNSUPPORTED) {
                 selected = llm;
             }
         }
 
-        selected = fillFromMemory(selected, slotState);
+        selected = fillFromPendingOrMemory(selected, slotState);
         List<String> missing = requiredMissing(selected);
         selected.setMissingParams(missing);
         if (!missing.isEmpty()) {
             selected.setSource(IntentRouteSource.CLARIFICATION);
             selected.setClarification(clarification(selected.getIntent(), missing));
+            intentSlotMemoryService.savePending(context.getUserId(), context.getSessionId(), selected);
             return selected.toRoutingResult();
         }
+        intentSlotMemoryService.clearPending(context.getUserId(), context.getSessionId());
         intentSlotMemoryService.save(context.getUserId(), context.getSessionId(), selected);
         return selected.toRoutingResult();
     }
@@ -125,6 +127,80 @@ public class IntentRouteCoordinator {
         return value == null || trustedIds.contains(value);
     }
 
+    private IntentRouteCandidate fillFromPendingOrMemory(IntentRouteCandidate selected, IntentSlotState slotState) {
+        if (slotState != null && slotState.getPendingIntent() != null
+                && !intentSlotMemoryService.pendingExpired(slotState)) {
+            boolean continuation = selectedLooksLikeContinuation(selected, slotState.getPendingIntent());
+            boolean sameIntent = selected.getIntent() == slotState.getPendingIntent()
+                    || selected.getIntent() == ShopAIIntent.UNSUPPORTED
+                    || selected.getIntent() == ShopAIIntent.FREE_CHAT
+                    || continuation;
+            if (sameIntent) {
+                if (selected.getIntent() == ShopAIIntent.UNSUPPORTED || selected.getIntent() == ShopAIIntent.FREE_CHAT
+                        || continuation) {
+                    selected.setIntent(slotState.getPendingIntent());
+                }
+                fillFromPending(selected, slotState);
+                selected.setSource(IntentRouteSource.MEMORY);
+                return selected;
+            }
+        }
+        return fillFromMemory(selected, slotState);
+    }
+
+    private boolean selectedLooksLikeContinuation(IntentRouteCandidate selected, ShopAIIntent pendingIntent) {
+        if (selected == null || pendingIntent == null) {
+            return false;
+        }
+        if (pendingIntent == ShopAIIntent.COMPARE) {
+            return selected.getShopId() != null || selected.getShopId1() != null
+                    || selected.getShopId2() != null || selected.getAspect() != null;
+        }
+        if (pendingIntent == ShopAIIntent.SUMMARY || pendingIntent == ShopAIIntent.QA) {
+            return selected.getShopId() != null || selected.getAspect() != null;
+        }
+        if (pendingIntent == ShopAIIntent.RECOMMEND) {
+            return selected.getUserPreference() != null || selected.getCategory() != null || selected.getLimit() != null;
+        }
+        return selected != null
+                && selected.getShopId() == null
+                && (selected.getShopId1() != null || selected.getShopId2() != null
+                || selected.getAspect() != null || selected.getUserPreference() != null
+                || selected.getCategory() != null || selected.getLimit() != null);
+    }
+
+    private void fillFromPending(IntentRouteCandidate selected, IntentSlotState slotState) {
+        Long currentShopId = selected.getShopId();
+        if (slotState.getPendingIntent() == ShopAIIntent.COMPARE && currentShopId != null) {
+            if (slotState.getPendingShopId1() == null && selected.getShopId1() == null) {
+                selected.setShopId1(currentShopId);
+            } else if (slotState.getPendingShopId2() == null && selected.getShopId2() == null) {
+                selected.setShopId2(currentShopId);
+            }
+        }
+        if (selected.getShopId() == null) {
+            selected.setShopId(slotState.getPendingShopId());
+        }
+        if (selected.getShopId1() == null) {
+            selected.setShopId1(slotState.getPendingShopId1());
+        }
+        if (selected.getShopId2() == null) {
+            selected.setShopId2(slotState.getPendingShopId2());
+        }
+        if (selected.getAspect() == null) {
+            selected.setAspect(slotState.getPendingAspect());
+        }
+        if (selected.getUserPreference() == null) {
+            selected.setUserPreference(slotState.getPendingUserPreference());
+        }
+        if (selected.getCategory() == null) {
+            selected.setCategory(slotState.getPendingCategory());
+        }
+        if (selected.getLimit() == null) {
+            selected.setLimit(slotState.getPendingLimit());
+        }
+    }
+
     private IntentRouteCandidate fillFromMemory(IntentRouteCandidate selected, IntentSlotState slotState) {
         if (slotState == null) {
             return selected;
@@ -139,6 +215,41 @@ public class IntentRouteCoordinator {
             selected.setShopId1(slotState.getShopId1());
             selected.setShopId2(slotState.getShopId2());
             selected.setSource(IntentRouteSource.MEMORY);
+            return selected;
+        }
+        if (selected.getIntent() == ShopAIIntent.SUMMARY || selected.getIntent() == ShopAIIntent.QA) {
+            if (selected.getShopId() == null && slotState.getIntent() == selected.getIntent()
+                    && slotState.getShopId() != null) {
+                selected.setShopId(slotState.getShopId());
+                selected.setSource(IntentRouteSource.MEMORY);
+            }
+            return selected;
+        }
+        if (selected.getIntent() == ShopAIIntent.COMPARE && slotState.getIntent() == ShopAIIntent.COMPARE) {
+            if (selected.getShopId1() == null && slotState.getShopId1() != null) {
+                selected.setShopId1(slotState.getShopId1());
+                selected.setSource(IntentRouteSource.MEMORY);
+            }
+            if (selected.getShopId2() == null && slotState.getShopId2() != null) {
+                selected.setShopId2(slotState.getShopId2());
+                selected.setSource(IntentRouteSource.MEMORY);
+            }
+            if (selected.getAspect() == null && slotState.getAspect() != null) {
+                selected.setAspect(slotState.getAspect());
+            }
+            return selected;
+        }
+        if (selected.getIntent() == ShopAIIntent.RECOMMEND && slotState.getIntent() == ShopAIIntent.RECOMMEND) {
+            if (selected.getUserPreference() == null && slotState.getUserPreference() != null) {
+                selected.setUserPreference(slotState.getUserPreference());
+                selected.setSource(IntentRouteSource.MEMORY);
+            }
+            if (selected.getCategory() == null && slotState.getCategory() != null) {
+                selected.setCategory(slotState.getCategory());
+            }
+            if (selected.getLimit() == null && slotState.getLimit() != null) {
+                selected.setLimit(slotState.getLimit());
+            }
             return selected;
         }
         if (selected.getShopId() == null && slotState.getShopId() != null) {

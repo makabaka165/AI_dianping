@@ -1,9 +1,8 @@
 package com.hmdp.ai.workflow;
 
 import com.hmdp.ai.fallback.FallbackPolicy;
-import com.hmdp.ai.guard.QualityCheck;
+import com.hmdp.ai.guard.GovernedGeneration;
 import com.hmdp.ai.guard.QualityGuard;
-import com.hmdp.ai.intent.ShopAIIntent;
 import com.hmdp.ai.memory.MemoryService;
 import com.hmdp.ai.model.ModelGateway;
 import com.hmdp.ai.orchestration.ShopAIRequestContext;
@@ -24,10 +23,9 @@ import java.util.Collections;
 import java.util.List;
 
 @Component
-public class CompareWorkflow implements ShopAIWorkflow<CompareWorkflowRequest, ShopAIResponse> {
+public class CompareWorkflow {
 
     private static final String ANALYSIS_TYPE = "compare";
-    private static final String MODEL_OPERATION = "compare:analyzeShopData";
 
     @Resource
     private ShopContextAssembler shopContextAssembler;
@@ -48,14 +46,11 @@ public class CompareWorkflow implements ShopAIWorkflow<CompareWorkflowRequest, S
     private FallbackPolicy fallbackPolicy;
 
     @Resource
+    private GovernedGeneration governedGeneration;
+
+    @Resource
     private AiMetricsService aiMetricsService;
 
-    @Override
-    public ShopAIIntent intent() {
-        return ShopAIIntent.COMPARE;
-    }
-
-    @Override
     public ShopAIResponse execute(ShopAIRequestContext context, CompareWorkflowRequest request) {
         long start = System.currentTimeMillis();
         validate(request);
@@ -76,43 +71,26 @@ public class CompareWorkflow implements ShopAIWorkflow<CompareWorkflowRequest, S
                 request.getAspect(),
                 shopContextAssembler.toPromptBlock(context1),
                 shopContextAssembler.toPromptBlock(context2));
-        boolean degraded = false;
-        ShopCompareResult compare;
-        if (fallbackPolicy.shouldUseFallback(MODEL_OPERATION)) {
-            compare = fallbackPolicy.fallbackCompare(request.getShopId1(), request.getShopId2(), request.getAspect(), ANALYSIS_TYPE);
-            degraded = true;
-        } else {
-            try {
-                compare = modelGateway.generateStructuredComparison(memoryId, prompt.getContent(), request.getShopId1(),
-                        request.getShopId2(), request.getAspect(), evidence);
-                QualityCheck quality = qualityGuard.validateCompare(compare, request.getShopId1(), request.getShopId2(),
-                        evidence, ANALYSIS_TYPE);
-                if (!quality.pass()) {
-                    compare = modelGateway.repairStructuredComparison(memoryId, prompt.getContent(), request.getShopId1(),
-                            request.getShopId2(), request.getAspect(), quality.getReason());
-                    quality = qualityGuard.validateCompare(compare, request.getShopId1(), request.getShopId2(),
-                            evidence, ANALYSIS_TYPE);
-                    if (!quality.pass()) {
-                        compare = fallbackPolicy.fallbackCompare(request.getShopId1(), request.getShopId2(),
-                                request.getAspect(), ANALYSIS_TYPE);
-                        degraded = true;
-                    } else {
-                        compare.setConclusion(qualityGuard.postProcess(compare.getConclusion()));
-                    }
-                } else {
+        GovernedGeneration.GovernedResult<ShopCompareResult> generated = governedGeneration.runWithReason(
+                () -> modelGateway.generateStructuredComparison(memoryId, prompt.getContent(), request.getShopId1(),
+                        request.getShopId2(), request.getAspect(), evidence),
+                reason -> modelGateway.repairStructuredComparison(memoryId, prompt.getContent(), request.getShopId1(),
+                        request.getShopId2(), request.getAspect(), reason),
+                compare -> qualityGuard.validateCompare(compare, request.getShopId1(), request.getShopId2(),
+                        evidence, ANALYSIS_TYPE),
+                reason -> fallbackPolicy.fallbackCompare(request.getShopId1(), request.getShopId2(),
+                        request.getAspect(), ANALYSIS_TYPE, reason),
+                compare -> {
                     compare.setConclusion(qualityGuard.postProcess(compare.getConclusion()));
-                }
-            } catch (Exception e) {
-                fallbackPolicy.recordFailure(MODEL_OPERATION);
-                compare = fallbackPolicy.fallbackCompare(request.getShopId1(), request.getShopId2(),
-                        request.getAspect(), ANALYSIS_TYPE);
-                degraded = true;
-            }
-        }
+                    return compare;
+                });
+        ShopCompareResult compare = generated.getValue();
+        boolean degraded = generated.isDegraded();
+        String fallbackReason = generated.getFallbackReason() == null ? null : generated.getFallbackReason().name();
         aiMetricsService.recordDuration(ANALYSIS_TYPE, System.currentTimeMillis() - start, degraded);
         aiMetricsService.recordEvidenceCount(ANALYSIS_TYPE, evidence.size(), "hybrid");
         return response(context, evidence, compare, degraded, degraded ? 0.35 : 0.7,
-                degraded ? "AI_MODEL_OR_QUALITY_FALLBACK" : null,
+                fallbackReason,
                 prompt.getVersion());
     }
 

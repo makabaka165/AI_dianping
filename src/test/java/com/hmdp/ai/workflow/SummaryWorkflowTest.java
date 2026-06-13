@@ -1,5 +1,8 @@
 package com.hmdp.ai.workflow;
 
+import com.hmdp.ai.fallback.FallbackPolicy;
+import com.hmdp.ai.guard.GovernedGeneration;
+import com.hmdp.ai.guard.QualityGuard;
 import com.hmdp.ai.memory.MemoryService;
 import com.hmdp.ai.model.ModelGateway;
 import com.hmdp.ai.orchestration.ShopAIRequestContext;
@@ -9,6 +12,7 @@ import com.hmdp.ai.workflow.request.SummaryWorkflowRequest;
 import com.hmdp.dto.ai.ShopAnalysisContext;
 import com.hmdp.entity.ShopSummaryResult;
 import com.hmdp.service.AiMetricsService;
+import com.hmdp.service.AiResultCacheService;
 import com.hmdp.service.ShopContextAssembler;
 import com.hmdp.utils.LocalCacheManager;
 import org.junit.jupiter.api.BeforeEach;
@@ -51,6 +55,15 @@ class SummaryWorkflowTest {
     @Mock
     private PromptTemplateRegistry promptTemplateRegistry;
 
+    @Mock
+    private QualityGuard qualityGuard;
+
+    @Mock
+    private FallbackPolicy fallbackPolicy;
+
+    @Mock
+    private AiResultCacheService aiResultCacheService;
+
     private SummaryWorkflow workflow;
 
     @BeforeEach
@@ -62,6 +75,10 @@ class SummaryWorkflowTest {
         ReflectionTestUtils.setField(workflow, "memoryService", memoryService);
         ReflectionTestUtils.setField(workflow, "modelGateway", modelGateway);
         ReflectionTestUtils.setField(workflow, "promptTemplateRegistry", promptTemplateRegistry);
+        ReflectionTestUtils.setField(workflow, "qualityGuard", qualityGuard);
+        ReflectionTestUtils.setField(workflow, "fallbackPolicy", fallbackPolicy);
+        ReflectionTestUtils.setField(workflow, "aiResultCacheService", aiResultCacheService);
+        ReflectionTestUtils.setField(workflow, "governedGeneration", new GovernedGeneration());
         lenient().when(modelGateway.modelName()).thenReturn("qwen-plus");
         lenient().when(promptTemplateRegistry.renderSummary(any(), any(), any()))
                 .thenReturn(PromptTemplateRender.builder()

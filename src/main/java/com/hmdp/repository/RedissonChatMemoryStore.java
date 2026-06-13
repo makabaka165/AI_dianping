@@ -45,6 +45,9 @@ public class RedissonChatMemoryStore implements ChatMemoryStore {
     @Value("${chat.memory.debug.enabled:false}")
     private boolean debugEnabled;
 
+    @Value("${hmdp.ai.memory.admin-scan-limit:10000}")
+    private int adminScanLimit;
+
     // 注入本地缓存管理器
     @Autowired
     private LocalCacheManager localCacheManager;
@@ -511,7 +514,12 @@ public class RedissonChatMemoryStore implements ChatMemoryStore {
     private List<String> scanKeys(String pattern) {
         return redissonClient.getKeys()
                 .getKeysStreamByPattern(pattern, SCAN_BATCH_SIZE)
+                .limit(scanLimit())
                 .collect(Collectors.toList());
+    }
+
+    private int scanLimit() {
+        return adminScanLimit <= 0 ? 10000 : adminScanLimit;
     }
 
     /**

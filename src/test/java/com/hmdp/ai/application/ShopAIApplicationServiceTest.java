@@ -3,6 +3,7 @@ package com.hmdp.ai.application;
 import com.hmdp.ai.memory.MemoryService;
 import com.hmdp.ai.orchestration.ShopAIOrchestrator;
 import com.hmdp.ai.orchestration.ShopAIRequestContext;
+import com.hmdp.ai.quota.AiUserQuotaService;
 import com.hmdp.ai.workflow.request.ChatWorkflowRequest;
 import com.hmdp.dto.ai.ShopAIStreamEvent;
 import org.junit.jupiter.api.BeforeEach;
@@ -29,6 +30,9 @@ class ShopAIApplicationServiceTest {
     @Mock
     private MemoryService memoryService;
 
+    @Mock
+    private AiUserQuotaService aiUserQuotaService;
+
     private ShopAIApplicationService service;
 
     @BeforeEach
@@ -36,6 +40,7 @@ class ShopAIApplicationServiceTest {
         service = new ShopAIApplicationService();
         ReflectionTestUtils.setField(service, "orchestrator", orchestrator);
         ReflectionTestUtils.setField(service, "memoryService", memoryService);
+        ReflectionTestUtils.setField(service, "aiUserQuotaService", aiUserQuotaService);
     }
 
     @Test
@@ -51,5 +56,6 @@ class ShopAIApplicationServiceTest {
         ArgumentCaptor<ChatWorkflowRequest> requestCaptor = ArgumentCaptor.forClass(ChatWorkflowRequest.class);
         verify(orchestrator).chatStream(any(ShopAIRequestContext.class), requestCaptor.capture());
         assertThat(requestCaptor.getValue().getShopId()).isEqualTo(12L);
+        verify(aiUserQuotaService).checkAndConsume("u1", "chatStream");
     }
 }

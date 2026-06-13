@@ -17,6 +17,7 @@ public class ShopAIStreamEvent {
     private String type;
     private String text;
     private String message;
+    private Integer errorCode;
     private String traceId;
     private String sessionId;
     private String memoryId;
@@ -28,4 +29,6 @@ public class ShopAIStreamEvent {
     private Double confidence;
     private Boolean degraded;
     private Boolean cacheHit;
+    private String auditStatus;
+    private String auditReason;
 }

@@ -18,8 +18,7 @@ import reactor.core.publisher.Flux;
         wiringMode = AiServiceWiringMode.EXPLICIT,
         chatModel = "chatLanguageModel",
         streamingChatModel = "streamingChatModel",
-        chatMemoryProvider = "chatMemoryProvider",
-        contentRetriever = "contentRetriever"
+        chatMemoryProvider = "chatMemoryProvider"
 )
 public interface ShopAIService {
 
