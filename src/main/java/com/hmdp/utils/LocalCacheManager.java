@@ -4,14 +4,12 @@ import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.benmanes.caffeine.cache.stats.CacheStats;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import javax.annotation.PostConstruct;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * 本地缓存管理器
@@ -22,20 +20,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
 @Slf4j
 public class LocalCacheManager {
 
-    private Cache<String, Object> cache;
-
     // 不同业务场景的缓存实例
     private Cache<String, Object> shopInfoCache;      // 店铺基础信息：30分钟
     private Cache<String, Object> shopStatsCache;     // 店铺统计信息：5分钟
     private Cache<String, Object> memoryStatsCache;   // 记忆统计：2分钟
     private Cache<String, Object> aiResultCache;      // AI分析结果：1小时
     private Cache<String, Object> quickCache;         // 快速缓存：1分钟
-
-    // 用户调用计数器 - 用于流控
-    private Map<String, Map<String, Integer>> userCallCounters = new ConcurrentHashMap<>();
-    
-    // 时间段调用限制 - 用于流控
-    private Map<String, Map<Long, Integer>> timeSegmentCallCounters = new ConcurrentHashMap<>();
 
     // 店铺相关的缓存键映射，用于快速清理
     private Map<Long, Set<String>> shopRelatedCacheKeys = new ConcurrentHashMap<>();
@@ -53,78 +43,18 @@ public class LocalCacheManager {
     public static class CacheKeys {
         public static final String SHOP_EXISTS = "shop_exists_";
         public static final String SHOP_REVIEW_COUNT = "shop_review_count_";
-        public static final String SENTIMENT_DISPLAY = "sentiment_display_";
-        public static final String TOOL_CALL_COUNT = "tool_call_count";
         public static final String MEMORY_STATS = "memory_stats";
         public static final String SHOP_SUMMARY = "shop_summary_";
         public static final String SHOP_QUALITY_SUMMARY = "shop_quality_summary_";
-        
+
         public static String shopExistsKey(Long shopId) {
             return SHOP_EXISTS + shopId;
         }
-        
+
         public static String shopReviewCountKey(Long shopId) {
             return SHOP_REVIEW_COUNT + shopId;
         }
-        
-        public static String sentimentDisplayKey(String sentiment) {
-            return SENTIMENT_DISPLAY + sentiment;
-        }
-        
-        public static String toolCallCountKey(String sessionId, String toolName, Object... params) {
-            StringBuilder sb = new StringBuilder(TOOL_CALL_COUNT);
-            sb.append(":").append(sessionId);
-            sb.append(":").append(toolName);
-            for (Object param : params) {
-                sb.append(":").append(param);
-            }
-            return sb.toString();
-        }
-        
-        /**
-         * 生成基于线程的工具调用计数键
-         * 适用于没有明确会话ID的场景（如匿名用户测试）
-         */
-        public static String threadBasedToolCallCountKey(String toolName, Object... params) {
-            long threadId = Thread.currentThread().getId();
-            long timeSegment = System.currentTimeMillis() / 30000; // 30秒为一个时间段
-            StringBuilder sb = new StringBuilder(TOOL_CALL_COUNT);
-            sb.append(":thread:").append(threadId).append(":").append(timeSegment);
-            sb.append(":").append(toolName);
-            for (Object param : params) {
-                sb.append(":").append(param);
-            }
-            return sb.toString();
-        }
-        
-        /**
-         * 生成基于用户ID的工具调用计数键
-         */
-        public static String userBasedToolCallCountKey(String userId, String toolName, Object... params) {
-            StringBuilder sb = new StringBuilder(TOOL_CALL_COUNT);
-            sb.append(":user:").append(userId);
-            sb.append(":").append(toolName);
-            for (Object param : params) {
-                sb.append(":").append(param);
-            }
-            return sb.toString();
-        }
-        
-        /**
-         * 生成基于用户ID和时间段的工具调用计数键
-         */
-        public static String userTimeBasedToolCallCountKey(String userId, String toolName, long timeWindow, Object... params) {
-            long timeSegment = System.currentTimeMillis() / timeWindow;
-            StringBuilder sb = new StringBuilder(TOOL_CALL_COUNT);
-            sb.append(":user:").append(userId);
-            sb.append(":time:").append(timeSegment);
-            sb.append(":").append(toolName);
-            for (Object param : params) {
-                sb.append(":").append(param);
-            }
-            return sb.toString();
-        }
-        
+
         /**
          * 生成店铺总结缓存键
          */
@@ -470,58 +400,6 @@ public class LocalCacheManager {
         return Collections.unmodifiableMap(sizes);
     }
 
-    // 清理所有工具调用计数缓存
-    public void clearToolCallCounters() {
-        // 获取所有以tool_call_count_开头的缓存键并删除
-        quickCache.asMap().keySet().stream()
-            .filter(key -> key.startsWith(CacheKeys.TOOL_CALL_COUNT))
-            .forEach(quickCache::invalidate);
-        log.info("已清理所有工具调用计数器");
-    }
-    
-    // 清理特定工具调用计数缓存
-    public void clearToolCallCounter(String sessionId, String toolName, Object... params) {
-        String key = CacheKeys.toolCallCountKey(sessionId, toolName, params);
-        quickCache.invalidate(key);
-        log.debug("已清理工具调用计数器: {}", key);
-    }
-    
-    // 清理过期的工具调用计数缓存（超过1分钟的）
-    public void cleanupExpiredToolCallCounters() {
-        long oneMinuteAgo = System.currentTimeMillis() - 60000; // 1分钟前
-        quickCache.asMap().keySet().stream()
-            .filter(key -> {
-                if (key.startsWith(CacheKeys.TOOL_CALL_COUNT)) {
-                    // 从键名中提取时间戳
-                    try {
-                        String[] parts = key.split("_");
-                        if (parts.length >= 3) {
-                            long timestamp = Long.parseLong(parts[2]);
-                            return timestamp < oneMinuteAgo;
-                        }
-                    } catch (NumberFormatException e) {
-                        // 如果解析失败，保留键
-                        return false;
-                    }
-                }
-                return false;
-            })
-            .forEach(quickCache::invalidate);
-        log.info("已清理过期的工具调用计数器");
-    }
-
-    /**
-     * 定时清理过期的工具调用计数器（每分钟执行一次）
-     */
-    @Scheduled(fixedRate = 60000) // 每分钟执行一次
-    public void scheduledCleanupExpiredToolCallCounters() {
-        try {
-            cleanupExpiredToolCallCounters();
-        } catch (Exception e) {
-            log.error("定时清理过期工具调用计数器时发生错误", e);
-        }
-    }
-    
     /**
      * 缓存自动调优建议
      * 基于缓存统计信息提供调优建议
@@ -707,87 +585,5 @@ public class LocalCacheManager {
             }
         }
         return true;
-    }
-    
-    // ========== 流控相关方法 ==========
-    
-    /**
-     * 检查并增加用户调用计数
-     * @param userId 用户ID
-     * @param toolName 工具名称
-     * @param limit 限制次数
-     * @return true表示未超过限制，false表示超过限制
-     */
-    public boolean checkAndIncrementUserCallCount(String userId, String toolName, int limit) {
-        Map<String, Integer> userCounter = userCallCounters.computeIfAbsent(userId, k -> new ConcurrentHashMap<>());
-        AtomicBoolean allowed = new AtomicBoolean(false);
-        userCounter.compute(toolName, (key, currentCount) -> {
-            int count = currentCount == null ? 0 : currentCount;
-            if (count >= limit) {
-                return count;
-            }
-            allowed.set(true);
-            return count + 1;
-        });
-        return allowed.get();
-    }
-    
-    /**
-     * 检查并增加基于时间段的调用计数
-     * @param userId 用户ID
-     * @param toolName 工具名称
-     * @param timeWindow 时间窗口（毫秒）
-     * @param limit 限制次数
-     * @return true表示未超过限制，false表示超过限制
-     */
-    public boolean checkAndIncrementTimeBasedCallCount(String userId, String toolName, long timeWindow, int limit) {
-        long timeSegment = System.currentTimeMillis() / timeWindow;
-        Map<Long, Integer> timeCounter = timeSegmentCallCounters.computeIfAbsent(userId + ":" + toolName, k -> new ConcurrentHashMap<>());
-        AtomicBoolean allowed = new AtomicBoolean(false);
-        timeCounter.compute(timeSegment, (key, currentCount) -> {
-            int count = currentCount == null ? 0 : currentCount;
-            if (count >= limit) {
-                return count;
-            }
-            allowed.set(true);
-            return count + 1;
-        });
-        return allowed.get();
-    }
-    
-    /**
-     * 清理过期的用户调用计数器
-     */
-    public void cleanupExpiredUserCallCounters() {
-        // 这里可以实现定期清理逻辑，但在当前实现中，我们依赖于外部定期清理
-        log.debug("用户调用计数器清理完成");
-    }
-    
-    /**
-     * 清理过期的时间段调用计数器
-     * @param timeWindow 时间窗口（毫秒）
-     */
-    public void cleanupExpiredTimeSegmentCallCounters(long timeWindow) {
-        long currentTimeSegment = System.currentTimeMillis() / timeWindow;
-        long expiredSegment = currentTimeSegment - 2; // 保留最近2个时间段的数据
-        
-        timeSegmentCallCounters.values().forEach(map -> 
-            map.entrySet().removeIf(entry -> entry.getKey() < expiredSegment)
-        );
-        
-        log.debug("时间段调用计数器清理完成");
-    }
-    
-    /**
-     * 定时清理过期的调用计数器
-     */
-    @Scheduled(fixedRate = 300000) // 每5分钟执行一次
-    public void scheduledCleanupExpiredCallCounters() {
-        try {
-            cleanupExpiredUserCallCounters();
-            cleanupExpiredTimeSegmentCallCounters(60000); // 清理1分钟前的时间段计数器
-        } catch (Exception e) {
-            log.error("定时清理过期调用计数器时发生错误", e);
-        }
     }
 }

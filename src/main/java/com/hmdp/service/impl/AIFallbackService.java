@@ -59,52 +59,6 @@ public class AIFallbackService {
     }
 
     /**
-     * 情感分析的降级实现
-     * @param content 待分析内容
-     * @return 情感倾向
-     */
-    public String analyzeSentimentFallback(String content) {
-        try {
-            if (content == null || content.trim().isEmpty()) {
-                return "neutral";
-            }
-
-            // 简单的关键词匹配
-            String lowerContent = content.toLowerCase();
-            int positiveCount = 0;
-            int negativeCount = 0;
-
-            // 正面关键词
-            String[] positiveKeywords = {"好", "棒", "赞", "优秀", "满意", "推荐", "不错", "喜欢", "值得", "完美"};
-            // 负面关键词
-            String[] negativeKeywords = {"差", "坏", "糟糕", "失望", "不满", "不推荐", "不好", "讨厌", "浪费", "坑"};
-
-            for (String keyword : positiveKeywords) {
-                if (lowerContent.contains(keyword)) {
-                    positiveCount++;
-                }
-            }
-
-            for (String keyword : negativeKeywords) {
-                if (lowerContent.contains(keyword)) {
-                    negativeCount++;
-                }
-            }
-
-            if (positiveCount > negativeCount) {
-                return "positive";
-            } else if (negativeCount > positiveCount) {
-                return "negative";
-            } else {
-                return "neutral";
-            }
-        } catch (Exception e) {
-            log.error("情感分析降级方案失败", e);
-            return "neutral";
-        }
-    }
-
-    /**
      * 关键词提取的降级实现
      * @param content 待分析内容
      * @return 关键词

@@ -91,6 +91,10 @@ class ShopSummaryControllerArchitectureTest {
                 .isInstanceOf(ClassNotFoundException.class);
         assertThatThrownBy(() -> Class.forName("com.hmdp.tools.DocumentManagementTool"))
                 .isInstanceOf(ClassNotFoundException.class);
+        assertThatThrownBy(() -> Class.forName("com.hmdp.tools.ShopTool"))
+                .isInstanceOf(ClassNotFoundException.class);
+        assertThatThrownBy(() -> Class.forName("com.hmdp.config.AiRequestContext"))
+                .isInstanceOf(ClassNotFoundException.class);
     }
 
     @Test

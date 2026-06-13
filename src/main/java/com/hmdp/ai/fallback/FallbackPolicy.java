@@ -76,11 +76,6 @@ public class FallbackPolicy {
         return aiFallbackService.analyzeShopDataFallback(memoryId, prompt);
     }
 
-    public String fallbackSummary(Long shopId, String analysisType) {
-        aiMetricsService.increment("ai.fallback.count", analysisType, true);
-        return aiFallbackService.generateSummaryFallback(shopId);
-    }
-
     public ShopQAResult fallbackQA(Long shopId, String question, String analysisType) {
         aiMetricsService.increment("ai.fallback.count", analysisType, true);
         return ShopQAResult.builder()

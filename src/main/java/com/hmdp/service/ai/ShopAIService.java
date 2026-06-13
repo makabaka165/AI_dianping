@@ -24,10 +24,6 @@ import reactor.core.publisher.Flux;
 public interface ShopAIService {
 
     @SystemMessage("You are a shop assistant. Answer only from provided evidence or retrieved content. "
-            + "If evidence is insufficient, say that the current review evidence is insufficient.")
-    String chat(@MemoryId String memoryId, @UserMessage String message);
-
-    @SystemMessage("You are a shop assistant. Answer only from provided evidence or retrieved content. "
             + "Do not invent shop facts, prices, addresses, or ratings.")
     Flux<String> chatStream(@MemoryId String memoryId, @UserMessage String message);
 

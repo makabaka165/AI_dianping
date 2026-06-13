@@ -43,13 +43,6 @@ public interface AIService {
     @SystemMessage("你是AI记忆测试助手，请记住用户说的话并在后续对话中引用，用于测试记忆功能。")
     String testMemory(@MemoryId String memoryId, @UserMessage String message);
 
-    /**
-     * 流式对话测试
-     */
-    @SystemMessage("你是AI流式测试助手，用于测试流式响应功能。")
-    @UserMessage("{{message}}")
-    String testStreaming(@V("message") String message);
-
     // ========== 测试专用的原子功能 ==========
 
     /**
@@ -78,27 +71,8 @@ public interface AIService {
     String testSentimentAnalysisDetailed(@V("content") String content);
 
     /**
-     * 批量测试功能
-     */
-    @SystemMessage("你是AI批量测试助手，请按要求回答每个测试问题。")
-    @UserMessage("这是一个批量测试，请简短回答：{{testPrompt}}")
-    String batchTest(@V("testPrompt") String testPrompt);
-
-    /**
-     * 模型性能测试
-     */
-    @SystemMessage("你是AI性能测试助手，用于测试模型响应速度和质量。")
-    String performanceTest(@UserMessage String testContent);
-
-    /**
      * 文本总结测试 - 仅用于测试
      */
     @SystemMessage("你是文本总结专家，请对提供的文本进行简洁总结，用于测试目的。")
     String testSummarize(@UserMessage String text);
-
-    /**
-     * 文本分析测试 - 仅用于测试
-     */
-    @SystemMessage("你是文本分析专家，请客观分析提供的文本内容，用于测试目的。")
-    String testAnalyze(@UserMessage String text);
 }

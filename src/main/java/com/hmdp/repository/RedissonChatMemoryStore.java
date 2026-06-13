@@ -508,20 +508,6 @@ public class RedissonChatMemoryStore implements ChatMemoryStore {
         }
     }
 
-    /**
-     * 获取所有记忆统计
-     */
-    public Map<String, Map<String, Integer>> getAllMemoryStats() {
-        Map<String, Map<String, Integer>> allStats = new HashMap<>();
-        String[] functionTypes = ChatMemoryKeyManager.getAllFunctionTypes();
-
-        for (String functionType : functionTypes) {
-            allStats.put(functionType, getMemoryStatsByFunction(functionType));
-        }
-
-        return allStats;
-    }
-
     private List<String> scanKeys(String pattern) {
         return redissonClient.getKeys()
                 .getKeysStreamByPattern(pattern, SCAN_BATCH_SIZE)
@@ -581,23 +567,6 @@ public class RedissonChatMemoryStore implements ChatMemoryStore {
     }
 
 
-    // ========== 新增：为重构后的服务提供便捷方法 ==========
-
-    /**
-     * 获取记忆的详细信息
-     */
-    public MemoryInfo getMemoryInfo(Object memoryId) {
-        String key = memoryId.toString();
-
-        return MemoryInfo.builder()
-                .memoryKey(key)
-                .exists(exists(memoryId))
-                .messageCount(getMessages(memoryId).size())
-                .ttlSeconds(getTimeToLive(memoryId))
-                .functionType(keyManager.getFunctionType(key))
-                .build();
-    }
-
     /**
      * 批量获取记忆统计
      */
@@ -615,39 +584,6 @@ public class RedissonChatMemoryStore implements ChatMemoryStore {
         }
 
         return allStats;
-    }
-
-    // ========== 内部类：记忆信息 ==========
-
-    @Data
-    @Builder
-    public static class MemoryInfo {
-        private String memoryKey;
-        private boolean exists;
-        private int messageCount;
-        private long ttlSeconds;
-        private String functionType;
-        
-        // 添加getter方法
-        public String getMemoryKey() {
-            return memoryKey;
-        }
-        
-        public boolean isExists() {
-            return exists;
-        }
-        
-        public int getMessageCount() {
-            return messageCount;
-        }
-        
-        public long getTtlSeconds() {
-            return ttlSeconds;
-        }
-        
-        public String getFunctionType() {
-            return functionType;
-        }
     }
 
     @Data
