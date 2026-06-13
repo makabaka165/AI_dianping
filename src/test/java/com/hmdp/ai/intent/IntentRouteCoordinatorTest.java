@@ -175,6 +175,122 @@ class IntentRouteCoordinatorTest {
     }
 
     @Test
+    void completedCompareShouldNotFillMissingShopId2ForNewCompare() {
+        ShopAIRequestContext context = context();
+        IntentSlotState completed = IntentSlotState.builder()
+                .intent(ShopAIIntent.COMPARE)
+                .shopId1(3L)
+                .shopId2(5L)
+                .build();
+        when(intentSlotMemoryService.load("u1", "s1")).thenReturn(completed);
+
+        IntentRoutingResult result = coordinator.route(context, "对比店铺7和", null);
+
+        assertThat(result.getIntent()).isEqualTo(ShopAIIntent.COMPARE);
+        assertThat(result.getSource()).isEqualTo(IntentRouteSource.CLARIFICATION);
+        assertThat(result.getShopId1()).isEqualTo(7L);
+        assertThat(result.getShopId2()).isNull();
+        assertThat(result.getMissingParams()).contains("shopId2");
+    }
+
+    @Test
+    void pendingCompareShouldFillSecondShopId() {
+        ShopAIRequestContext context = context();
+        IntentSlotState pending = IntentSlotState.builder()
+                .userId("u1")
+                .sessionId("s1")
+                .pendingIntent(ShopAIIntent.COMPARE)
+                .pendingShopId1(7L)
+                .missingFields(java.util.List.of("shopId2"))
+                .pendingUpdatedAtEpochMillis(System.currentTimeMillis())
+                .build();
+        when(intentSlotMemoryService.load("u1", "s1")).thenReturn(pending);
+        when(intentSlotMemoryService.pendingExpired(pending)).thenReturn(false);
+
+        IntentRoutingResult result = coordinator.route(context, "店铺5", null);
+
+        assertThat(result.getIntent()).isEqualTo(ShopAIIntent.COMPARE);
+        assertThat(result.getShopId1()).isEqualTo(7L);
+        assertThat(result.getShopId2()).isEqualTo(5L);
+        assertThat(result.getMissingParams()).isEmpty();
+    }
+
+    @Test
+    void aspectOnlyShouldContinuePreviousCompare() {
+        ShopAIRequestContext context = context();
+        IntentSlotState completed = IntentSlotState.builder()
+                .intent(ShopAIIntent.COMPARE)
+                .shopId1(3L)
+                .shopId2(5L)
+                .aspect("环境")
+                .build();
+        IntentRouteCandidate rule = new RuleIntentParser().parse("服务呢", null);
+        when(intentSlotMemoryService.load("u1", "s1")).thenReturn(completed);
+        when(llmIntentClassifier.classify("服务呢", rule, completed)).thenReturn(IntentRouteCandidate.builder()
+                .intent(ShopAIIntent.UNSUPPORTED)
+                .confidence(0.0)
+                .source(IntentRouteSource.LLM)
+                .build());
+
+        IntentRoutingResult result = coordinator.route(context, "服务呢", null);
+
+        assertThat(result.getIntent()).isEqualTo(ShopAIIntent.COMPARE);
+        assertThat(result.getShopId1()).isEqualTo(3L);
+        assertThat(result.getShopId2()).isEqualTo(5L);
+        assertThat(result.getAspect()).isEqualTo("服务");
+    }
+
+    @Test
+    void intentSwitchShouldNotLeakCompareSlotsIntoQA() {
+        ShopAIRequestContext context = context();
+        IntentSlotState completed = IntentSlotState.builder()
+                .intent(ShopAIIntent.COMPARE)
+                .shopId1(3L)
+                .shopId2(5L)
+                .build();
+        IntentRouteCandidate rule = new RuleIntentParser().parse("这家店服务怎么样", null);
+        when(intentSlotMemoryService.load("u1", "s1")).thenReturn(completed);
+        when(llmIntentClassifier.classify("这家店服务怎么样", rule, completed)).thenReturn(IntentRouteCandidate.builder()
+                .intent(ShopAIIntent.QA)
+                .confidence(0.9)
+                .source(IntentRouteSource.LLM)
+                .build());
+
+        IntentRoutingResult result = coordinator.route(context, "这家店服务怎么样", null);
+
+        assertThat(result.getIntent()).isEqualTo(ShopAIIntent.QA);
+        assertThat(result.getSource()).isEqualTo(IntentRouteSource.CLARIFICATION);
+        assertThat(result.getShopId()).isNull();
+        assertThat(result.getMissingParams()).contains("shopId");
+    }
+
+    @Test
+    void llmIdsFromOldCompletedMemoryAreNotTrusted() {
+        ShopAIRequestContext context = context();
+        IntentSlotState completed = IntentSlotState.builder()
+                .intent(ShopAIIntent.COMPARE)
+                .shopId1(3L)
+                .shopId2(5L)
+                .build();
+        IntentRouteCandidate rule = new RuleIntentParser().parse("对比店铺7和", null);
+        when(intentSlotMemoryService.load("u1", "s1")).thenReturn(completed);
+        when(llmIntentClassifier.classify("对比店铺7和", rule, completed)).thenReturn(IntentRouteCandidate.builder()
+                .intent(ShopAIIntent.COMPARE)
+                .shopId1(7L)
+                .shopId2(5L)
+                .confidence(0.9)
+                .source(IntentRouteSource.LLM)
+                .build());
+
+        IntentRoutingResult result = coordinator.route(context, "对比店铺7和", null);
+
+        assertThat(result.getIntent()).isEqualTo(ShopAIIntent.COMPARE);
+        assertThat(result.getShopId1()).isEqualTo(7L);
+        assertThat(result.getShopId2()).isNull();
+        assertThat(result.getMissingParams()).contains("shopId2");
+    }
+
+    @Test
     void differentIntentShouldClearPendingInsteadOfReusingSlots() {
         ShopAIRequestContext context = context();
         IntentSlotState pending = IntentSlotState.builder()

@@ -87,6 +87,49 @@ public class ChatMemoryKeyManager {
         return String.format("%s:memory:%s:*", appName, functionType);
     }
 
+    public String buildUserIndexKey(String userId) {
+        return String.format("%s:memory:index:user:%s", appName, safeIndexSegment(userId));
+    }
+
+    public String buildFunctionIndexKey(String functionType) {
+        return String.format("%s:memory:index:function:%s", appName, safeIndexSegment(functionType));
+    }
+
+    public String buildShopSummaryIndexKey(Long shopId) {
+        return String.format("%s:memory:index:shop-summary:%d", appName, shopId);
+    }
+
+    public String getUserId(String key) {
+        String[] parts = key == null ? new String[0] : key.split(":");
+        String functionType = getFunctionType(key == null ? "" : key);
+        if (SHOP_SUMMARY_PREFIX.equals(functionType) || SHOP_QA_PREFIX.equals(functionType)) {
+            return parts.length > 5 ? parts[5] : null;
+        }
+        if (SHOP_COMPARE_PREFIX.equals(functionType) || AI_CHAT_PREFIX.equals(functionType)) {
+            return parts.length > 4 ? parts[4] : null;
+        }
+        if (SHOP_RECOMMEND_PREFIX.equals(functionType)) {
+            return parts.length > 4 ? parts[4] : null;
+        }
+        return null;
+    }
+
+    public Long getShopSummaryShopId(String key) {
+        String[] parts = key == null ? new String[0] : key.split(":");
+        if (!SHOP_SUMMARY_PREFIX.equals(getFunctionType(key == null ? "" : key)) || parts.length <= 4) {
+            return null;
+        }
+        try {
+            return Long.parseLong(parts[4]);
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    private String safeIndexSegment(String value) {
+        return value == null ? "unknown" : value.replaceAll("[^a-zA-Z0-9_.:-]", "_");
+    }
+
     /**
      * 获取所有功能类型数组
      */

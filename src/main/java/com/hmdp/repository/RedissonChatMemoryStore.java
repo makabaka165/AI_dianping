@@ -14,6 +14,7 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 import org.redisson.api.RBucket;
+import org.redisson.api.RSet;
 import org.redisson.api.RedissonClient;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -21,6 +22,7 @@ import org.springframework.stereotype.Component;
 
 import javax.annotation.PostConstruct;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -33,6 +35,7 @@ import java.util.stream.Collectors;
 public class RedissonChatMemoryStore implements ChatMemoryStore {
 
     private static final int SCAN_BATCH_SIZE = 100;
+    private static final long INDEX_TTL_PADDING_SECONDS = 86400L;
 
     private final RedissonClient redissonClient;
     private final ChatMemoryKeyManager keyManager;
@@ -167,6 +170,7 @@ public class RedissonChatMemoryStore implements ChatMemoryStore {
 
             long ttl = getTtlByFunctionType(key);
             bucket.set(json, ttl, TimeUnit.SECONDS);
+            indexMemory(key, ttl);
 
             // 简化日志：只在有意义的变化时输出
             int messageCount = simpleMessages.size();
@@ -191,6 +195,7 @@ public class RedissonChatMemoryStore implements ChatMemoryStore {
         try {
             RBucket<String> bucket = redissonClient.getBucket(key);
             boolean deleted = bucket.delete();
+            removeMemoryIndexes(key);
 
             if (deleted) {
                 log.info("删除记忆: {}", getShortKey(key));
@@ -463,10 +468,14 @@ public class RedissonChatMemoryStore implements ChatMemoryStore {
         String pattern = keyManager.buildPatternKey(functionType);
 
         try {
-            List<String> keys = scanKeys(pattern);
+            List<String> keys = getIndexedMemoryIdsByFunction(functionType);
+            if (keys.isEmpty()) {
+                log.debug("Memory function index is empty, fallback to bounded scan, functionType={}", functionType);
+                keys = scanKeys(pattern);
+            }
             int count = 0;
             for (String key : keys) {
-                count += redissonClient.getKeys().unlink(key);
+                count += deleteMemoryKey(key);
             }
 
             if (count > 0) {
@@ -487,7 +496,11 @@ public class RedissonChatMemoryStore implements ChatMemoryStore {
         Map<String, Integer> stats = new HashMap<>();
 
         try {
-            List<String> keys = scanKeys(pattern);
+            List<String> keys = getIndexedMemoryIdsByFunction(functionType);
+            if (keys.isEmpty()) {
+                log.debug("Memory function index is empty, fallback to bounded scan for stats, functionType={}", functionType);
+                keys = scanKeys(pattern);
+            }
             int totalKeys = 0;
             int totalMessages = 0;
 
@@ -516,6 +529,131 @@ public class RedissonChatMemoryStore implements ChatMemoryStore {
                 .getKeysStreamByPattern(pattern, SCAN_BATCH_SIZE)
                 .limit(scanLimit())
                 .collect(Collectors.toList());
+    }
+
+    public List<String> getIndexedMemoryIdsByUser(String userId) {
+        return validIndexedKeys(keyManager.buildUserIndexKey(userId));
+    }
+
+    public List<String> getIndexedMemoryIdsByFunction(String functionType) {
+        return validIndexedKeys(keyManager.buildFunctionIndexKey(functionType));
+    }
+
+    public List<String> getIndexedShopSummaryMemoryIds(Long shopId) {
+        if (shopId == null || shopId <= 0) {
+            return new ArrayList<>();
+        }
+        return validIndexedKeys(keyManager.buildShopSummaryIndexKey(shopId));
+    }
+
+    public int deleteMemoryKeys(Collection<String> memoryIds) {
+        if (memoryIds == null || memoryIds.isEmpty()) {
+            return 0;
+        }
+        int deleted = 0;
+        for (String memoryId : memoryIds) {
+            deleted += deleteMemoryKey(memoryId);
+        }
+        return deleted;
+    }
+
+    private int deleteMemoryKey(String memoryId) {
+        if (memoryId == null || memoryId.trim().isEmpty()) {
+            return 0;
+        }
+        try {
+            long deleted = redissonClient.getKeys().unlink(memoryId);
+            removeMemoryIndexes(memoryId);
+            return (int) deleted;
+        } catch (Exception e) {
+            log.warn("Delete indexed memory failed: {}", getShortKey(memoryId), e);
+            return 0;
+        }
+    }
+
+    private List<String> validIndexedKeys(String indexKey) {
+        List<String> keys = new ArrayList<>();
+        try {
+            RSet<String> index = redissonClient.getSet(indexKey);
+            if (index == null) {
+                return keys;
+            }
+            if (!index.isExists()) {
+                return keys;
+            }
+            for (String memoryId : index.readAll()) {
+                if (keys.size() >= scanLimit()) {
+                    break;
+                }
+                if (exists(memoryId)) {
+                    keys.add(memoryId);
+                } else {
+                    index.remove(memoryId);
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Read memory index failed: {}", getShortKey(indexKey), e);
+        }
+        return keys;
+    }
+
+    private void indexMemory(String memoryId, long ttlSeconds) {
+        try {
+            String functionType = keyManager.getFunctionType(memoryId);
+            if ("unknown".equals(functionType)) {
+                return;
+            }
+            long indexTtl = Math.max(defaultTtlSeconds, ttlSeconds) + INDEX_TTL_PADDING_SECONDS;
+            addToIndex(keyManager.buildFunctionIndexKey(functionType), memoryId, indexTtl);
+
+            String userId = keyManager.getUserId(memoryId);
+            if (userId != null && !userId.trim().isEmpty()) {
+                addToIndex(keyManager.buildUserIndexKey(userId), memoryId, indexTtl);
+            }
+
+            Long shopId = keyManager.getShopSummaryShopId(memoryId);
+            if (shopId != null && shopId > 0) {
+                addToIndex(keyManager.buildShopSummaryIndexKey(shopId), memoryId, indexTtl);
+            }
+        } catch (Exception e) {
+            log.warn("Index memory failed: {}", getShortKey(memoryId), e);
+        }
+    }
+
+    private void addToIndex(String indexKey, String memoryId, long ttlSeconds) {
+        RSet<String> index = redissonClient.getSet(indexKey);
+        index.add(memoryId);
+        index.expire(ttlSeconds, TimeUnit.SECONDS);
+    }
+
+    private void removeMemoryIndexes(String memoryId) {
+        try {
+            String functionType = keyManager.getFunctionType(memoryId);
+            if (!"unknown".equals(functionType)) {
+                removeFromIndex(keyManager.buildFunctionIndexKey(functionType), memoryId);
+            }
+            String userId = keyManager.getUserId(memoryId);
+            if (userId != null && !userId.trim().isEmpty()) {
+                removeFromIndex(keyManager.buildUserIndexKey(userId), memoryId);
+            }
+            Long shopId = keyManager.getShopSummaryShopId(memoryId);
+            if (shopId != null && shopId > 0) {
+                removeFromIndex(keyManager.buildShopSummaryIndexKey(shopId), memoryId);
+            }
+        } catch (Exception e) {
+            log.warn("Remove memory indexes failed: {}", getShortKey(memoryId), e);
+        }
+    }
+
+    private void removeFromIndex(String indexKey, String memoryId) {
+        if (indexKey == null || indexKey.trim().isEmpty()) {
+            return;
+        }
+        try {
+            redissonClient.getSet(indexKey).remove(memoryId);
+        } catch (Exception e) {
+            log.debug("Remove memory index member failed: index={}, memory={}", getShortKey(indexKey), getShortKey(memoryId), e);
+        }
     }
 
     private int scanLimit() {

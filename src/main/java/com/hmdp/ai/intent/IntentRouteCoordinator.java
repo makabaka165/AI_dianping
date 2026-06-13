@@ -62,7 +62,7 @@ public class IntentRouteCoordinator {
         if (candidate == null) {
             return;
         }
-        Set<Long> trustedIds = trustedIds(message, explicitShopId, slotState);
+        Set<Long> trustedIds = trustedIds(candidate, message, explicitShopId, slotState);
         if (!isTrusted(candidate.getShopId(), trustedIds)) {
             candidate.setShopId(null);
         }
@@ -74,7 +74,10 @@ public class IntentRouteCoordinator {
         }
     }
 
-    private Set<Long> trustedIds(String message, Long explicitShopId, IntentSlotState slotState) {
+    private Set<Long> trustedIds(IntentRouteCandidate candidate,
+                                 String message,
+                                 Long explicitShopId,
+                                 IntentSlotState slotState) {
         Set<Long> ids = new HashSet<>();
         if (explicitShopId != null && explicitShopId > 0) {
             ids.add(explicitShopId);
@@ -86,10 +89,10 @@ public class IntentRouteCoordinator {
             addCapturedNumbers(ids, SHOP_ID_PREFIX.matcher(text));
             addCapturedNumbers(ids, SHOP_ID_SUFFIX.matcher(text));
         }
-        if (slotState != null) {
-            addIfPositive(ids, slotState.getShopId());
-            addIfPositive(ids, slotState.getShopId1());
-            addIfPositive(ids, slotState.getShopId2());
+        if (hasActivePending(slotState) && selectedLooksLikeContinuation(candidate, slotState.getPendingIntent())) {
+            addIfPositive(ids, slotState.getPendingShopId());
+            addIfPositive(ids, slotState.getPendingShopId1());
+            addIfPositive(ids, slotState.getPendingShopId2());
         }
         return ids;
     }
@@ -128,8 +131,7 @@ public class IntentRouteCoordinator {
     }
 
     private IntentRouteCandidate fillFromPendingOrMemory(IntentRouteCandidate selected, IntentSlotState slotState) {
-        if (slotState != null && slotState.getPendingIntent() != null
-                && !intentSlotMemoryService.pendingExpired(slotState)) {
+        if (hasActivePending(slotState)) {
             boolean continuation = selectedLooksLikeContinuation(selected, slotState.getPendingIntent());
             boolean sameIntent = selected.getIntent() == slotState.getPendingIntent()
                     || selected.getIntent() == ShopAIIntent.UNSUPPORTED
@@ -146,6 +148,12 @@ public class IntentRouteCoordinator {
             }
         }
         return fillFromMemory(selected, slotState);
+    }
+
+    private boolean hasActivePending(IntentSlotState slotState) {
+        return slotState != null
+                && slotState.getPendingIntent() != null
+                && !intentSlotMemoryService.pendingExpired(slotState);
     }
 
     private boolean selectedLooksLikeContinuation(IntentRouteCandidate selected, ShopAIIntent pendingIntent) {
@@ -225,18 +233,7 @@ public class IntentRouteCoordinator {
             }
             return selected;
         }
-        if (selected.getIntent() == ShopAIIntent.COMPARE && slotState.getIntent() == ShopAIIntent.COMPARE) {
-            if (selected.getShopId1() == null && slotState.getShopId1() != null) {
-                selected.setShopId1(slotState.getShopId1());
-                selected.setSource(IntentRouteSource.MEMORY);
-            }
-            if (selected.getShopId2() == null && slotState.getShopId2() != null) {
-                selected.setShopId2(slotState.getShopId2());
-                selected.setSource(IntentRouteSource.MEMORY);
-            }
-            if (selected.getAspect() == null && slotState.getAspect() != null) {
-                selected.setAspect(slotState.getAspect());
-            }
+        if (selected.getIntent() == ShopAIIntent.COMPARE) {
             return selected;
         }
         if (selected.getIntent() == ShopAIIntent.RECOMMEND && slotState.getIntent() == ShopAIIntent.RECOMMEND) {
@@ -251,24 +248,6 @@ public class IntentRouteCoordinator {
                 selected.setLimit(slotState.getLimit());
             }
             return selected;
-        }
-        if (selected.getShopId() == null && slotState.getShopId() != null) {
-            selected.setShopId(slotState.getShopId());
-            selected.setSource(IntentRouteSource.MEMORY);
-        }
-        if (selected.getShopId1() == null && slotState.getShopId1() != null) {
-            selected.setShopId1(slotState.getShopId1());
-            selected.setSource(IntentRouteSource.MEMORY);
-        }
-        if (selected.getShopId2() == null && slotState.getShopId2() != null) {
-            selected.setShopId2(slotState.getShopId2());
-            selected.setSource(IntentRouteSource.MEMORY);
-        }
-        if (selected.getAspect() == null && slotState.getAspect() != null) {
-            selected.setAspect(slotState.getAspect());
-        }
-        if (selected.getCategory() == null && slotState.getCategory() != null) {
-            selected.setCategory(slotState.getCategory());
         }
         return selected;
     }

@@ -1,6 +1,7 @@
 package com.hmdp.ai.workflow;
 
 import com.hmdp.ai.fallback.FallbackPolicy;
+import com.hmdp.ai.fallback.FallbackReason;
 import com.hmdp.ai.guard.GovernedGeneration;
 import com.hmdp.ai.guard.QualityCheck;
 import com.hmdp.ai.guard.QualityGuard;
@@ -235,10 +236,16 @@ public class ChatWorkflow {
         return Flux.concat(
                 Flux.just(metadataEvent(context, routing, context.getMemoryId(), prompt.getVersion())),
                 chunks,
-                Flux.defer(() -> Flux.just(auditEvent(context, routing, CHAT_ANALYSIS_TYPE, streamedText.toString()))),
-                Flux.just(doneEvent(context, routing, false, false, 0.7))
+                Flux.defer(() -> {
+                    AuditResult audit = audit(CHAT_ANALYSIS_TYPE, streamedText.toString());
+                    return Flux.just(
+                            auditEvent(context, routing, audit),
+                            doneEvent(context, routing, false, false, 0.7, audit)
+                    );
+                })
         ).onErrorResume(e -> {
-            String fallback = fallbackPolicy.fallbackChat(message, CHAT_ANALYSIS_TYPE).getMessage();
+            String fallback = fallbackPolicy.fallbackChat(message, CHAT_ANALYSIS_TYPE,
+                    FallbackReason.MODEL_UNAVAILABLE).getMessage();
             return Flux.just(
                     event("delta", ShopAIStreamEvent.builder()
                             .type("delta")
@@ -251,8 +258,10 @@ public class ChatWorkflow {
                             .routingConfidence(routing == null ? null : routing.getConfidence())
                             .degraded(true)
                             .confidence(0.35)
+                            .fallbackReason(FallbackReason.MODEL_UNAVAILABLE.name())
                             .build()),
-                    doneEvent(context, routing, true, false, 0.35)
+                    doneEvent(context, routing, true, false, 0.35, null,
+                            FallbackReason.MODEL_UNAVAILABLE.name())
             );
         });
     }
@@ -303,10 +312,16 @@ public class ChatWorkflow {
                         Flux.just(metadataEvent(context, routing, memoryId, plan.getPromptVersion()),
                                 evidenceEvent(context, routing, memoryId, plan.safeEvidence())),
                         chunks,
-                        Flux.defer(() -> Flux.just(auditEvent(context, routing, plan.getAnalysisType(), streamedText.toString()))),
-                        Flux.just(doneEvent(context, routing, false,
-                                Boolean.TRUE.equals(plan.getCacheHit()),
-                                plan.getConfidence()))
+                        Flux.defer(() -> {
+                            AuditResult audit = audit(plan.getAnalysisType(), streamedText.toString());
+                            return Flux.just(
+                                    auditEvent(context, routing, audit),
+                                    doneEvent(context, routing, false,
+                                            Boolean.TRUE.equals(plan.getCacheHit()),
+                                            plan.getConfidence(),
+                                            audit)
+                            );
+                        })
                 )
                 .filter(item -> item.data() != null)
                 .onErrorResume(e -> {
@@ -323,10 +338,13 @@ public class ChatWorkflow {
                                     .routingConfidence(routing == null ? null : routing.getConfidence())
                                     .degraded(true)
                                     .confidence(0.35)
+                                    .fallbackReason(FallbackReason.MODEL_UNAVAILABLE.name())
                                     .build()),
                             doneEvent(context, routing, true,
                                     Boolean.TRUE.equals(plan.getCacheHit()),
-                                    0.35)
+                                    0.35,
+                                    null,
+                                    FallbackReason.MODEL_UNAVAILABLE.name())
                     );
                 });
     }
@@ -436,6 +454,28 @@ public class ChatWorkflow {
                                                         boolean degraded,
                                                         boolean cacheHit,
                                                         Double confidence) {
+        return doneEvent(context, routing, degraded, cacheHit, confidence, null, null);
+    }
+
+    private ServerSentEvent<ShopAIStreamEvent> doneEvent(ShopAIRequestContext context,
+                                                        IntentRoutingResult routing,
+                                                        boolean degraded,
+                                                        boolean cacheHit,
+                                                        Double confidence,
+                                                        AuditResult audit) {
+        return doneEvent(context, routing, degraded, cacheHit, confidence, audit, null);
+    }
+
+    private ServerSentEvent<ShopAIStreamEvent> doneEvent(ShopAIRequestContext context,
+                                                        IntentRoutingResult routing,
+                                                        boolean degraded,
+                                                        boolean cacheHit,
+                                                        Double confidence,
+                                                        AuditResult audit,
+                                                        String fallbackReason) {
+        boolean auditRejected = audit != null && !audit.pass;
+        Double finalConfidence = auditRejected ? minConfidence(confidence, 0.35) : confidence;
+        String finalFallbackReason = auditRejected ? FallbackReason.QUALITY_REJECTED.name() : fallbackReason;
         return event("done", ShopAIStreamEvent.builder()
                 .type("done")
                 .traceId(context.getTraceId())
@@ -444,18 +484,18 @@ public class ChatWorkflow {
                 .intent(routing == null ? context.getIntent() : routing.getIntent())
                 .routingSource(routing == null ? null : routing.getSource())
                 .routingConfidence(routing == null ? null : routing.getConfidence())
-                .degraded(degraded)
+                .degraded(degraded || auditRejected)
                 .cacheHit(cacheHit)
-                .confidence(confidence)
+                .confidence(finalConfidence)
+                .auditStatus(audit == null ? null : audit.status)
+                .auditReason(audit == null ? null : audit.reason)
+                .fallbackReason(finalFallbackReason)
                 .build());
     }
 
     private ServerSentEvent<ShopAIStreamEvent> auditEvent(ShopAIRequestContext context,
                                                          IntentRoutingResult routing,
-                                                         String analysisType,
-                                                         String text) {
-        QualityCheck quality = qualityGuard.validateText(text, analysisType);
-        boolean pass = quality.pass();
+                                                         AuditResult audit) {
         return event("audit", ShopAIStreamEvent.builder()
                 .type("audit")
                 .traceId(context.getTraceId())
@@ -464,9 +504,22 @@ public class ChatWorkflow {
                 .intent(routing == null ? context.getIntent() : routing.getIntent())
                 .routingSource(routing == null ? null : routing.getSource())
                 .routingConfidence(routing == null ? null : routing.getConfidence())
-                .auditStatus(pass ? "PASS" : "REJECTED")
-                .auditReason(pass ? null : quality.getReason())
+                .auditStatus(audit.status)
+                .auditReason(audit.reason)
                 .build());
+    }
+
+    private AuditResult audit(String analysisType, String text) {
+        QualityCheck quality = qualityGuard.validateText(text, analysisType);
+        boolean pass = quality.pass();
+        return new AuditResult(pass, pass ? "PASS" : "REJECTED", pass ? null : quality.getReason());
+    }
+
+    private Double minConfidence(Double confidence, double max) {
+        if (confidence == null) {
+            return max;
+        }
+        return Math.min(confidence, max);
     }
 
     private ServerSentEvent<ShopAIStreamEvent> event(String event, ShopAIStreamEvent data) {
@@ -523,5 +576,17 @@ public class ChatWorkflow {
 
     private boolean isBlank(String value) {
         return value == null || value.trim().isEmpty();
+    }
+
+    private static class AuditResult {
+        private final boolean pass;
+        private final String status;
+        private final String reason;
+
+        private AuditResult(boolean pass, String status, String reason) {
+            this.pass = pass;
+            this.status = status;
+            this.reason = reason;
+        }
     }
 }

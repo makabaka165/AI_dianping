@@ -14,7 +14,9 @@ public class AIResultQualityService {
     private static final Pattern CLEARLY_UNSAFE = Pattern.compile(
             "(违法犯罪指导|规避监管|色情交易|赌博平台|暴力伤害教程|仇恨煽动)");
     private static final Pattern HALLUCINATION_RISK = Pattern.compile(
-            "(我保证|一定是|绝对最好|官方承诺|无需看商家规则)");
+            "(我保证|绝对最好|官方承诺|无需看商家规则)");
+    private static final Pattern TEMPLATE_LINE = Pattern.compile(
+            "(?m)^\\s*(希望以上信息对您有帮助|如有需要请继续提问|请告诉我更多细节)[。！!\\s]*$");
 
     public QualityCheckResult validateContent(String content) {
         QualityCheckResult result = new QualityCheckResult();
@@ -49,7 +51,7 @@ public class AIResultQualityService {
             return result;
         }
 
-        if (isTemplateContent(content)) {
+        if (isPureTemplateContent(content)) {
             result.setValid(false);
             result.setReason("内容过于模板化");
             return result;
@@ -65,7 +67,7 @@ public class AIResultQualityService {
         }
         String processed = content;
         processed = AI_SELF_REFERENCE.matcher(processed).replaceAll("");
-        processed = processed.replaceAll("(?m)^\\s*(希望以上信息对您有帮助|如有需要请继续提问|请告诉我更多细节)[。！!\\s]*$", "");
+        processed = TEMPLATE_LINE.matcher(processed).replaceAll("");
         processed = processed.replaceAll("\\n\\s*\\n", "\n\n");
         return processed.trim();
     }
@@ -74,19 +76,11 @@ public class AIResultQualityService {
         return CLEARLY_UNSAFE.matcher(content).find();
     }
 
-    private boolean isTemplateContent(String content) {
-        String[] templatePhrases = {
-                "希望以上信息对您有帮助",
-                "如有需要请继续提问",
-                "请告诉我更多细节"
-        };
-        String lowerContent = content.toLowerCase();
-        for (String phrase : templatePhrases) {
-            if (lowerContent.contains(phrase.toLowerCase())) {
-                return true;
-            }
-        }
-        return false;
+    private boolean isPureTemplateContent(String content) {
+        String normalized = content.replaceAll("[\\s。！!，,、.]+", "");
+        return "希望以上信息对您有帮助".equals(normalized)
+                || "如有需要请继续提问".equals(normalized)
+                || "请告诉我更多细节".equals(normalized);
     }
 
     public static class QualityCheckResult {

@@ -11,9 +11,40 @@ class AIResultQualityServiceTest {
     @Test
     void shouldNotRejectNormalBusinessTextContainingForbiddenWord() {
         AIResultQualityService.QualityCheckResult result =
-                service.validateContent("这家店整体环境安静，店内禁止吸烟，适合家庭聚餐。");
+                service.validateContent("店内禁止吸烟，环境整体不错，服务响应较快。");
 
         assertThat(result.isValid()).isTrue();
+    }
+
+    @Test
+    void shouldNotRejectBusinessAnswerContainingTemplateTailPhrase() {
+        AIResultQualityService.QualityCheckResult result =
+                service.validateContent("这家店服务比较稳定。如有需要请继续提问。");
+
+        assertThat(result.isValid()).isTrue();
+    }
+
+    @Test
+    void postProcessShouldRemoveStandaloneTemplateTailLine() {
+        String processed = service.postProcessContent("这家店服务比较稳定。\n如有需要请继续提问。");
+
+        assertThat(processed).isEqualTo("这家店服务比较稳定。");
+    }
+
+    @Test
+    void shouldRejectClearlyUnsafeText() {
+        AIResultQualityService.QualityCheckResult result =
+                service.validateContent("违法犯罪指导");
+
+        assertThat(result.isValid()).isFalse();
+    }
+
+    @Test
+    void shouldRejectOverclaimText() {
+        AIResultQualityService.QualityCheckResult result =
+                service.validateContent("我保证这家店绝对最好");
+
+        assertThat(result.isValid()).isFalse();
     }
 
     @Test

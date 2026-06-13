@@ -31,4 +31,5 @@ public class ShopAIStreamEvent {
     private Boolean cacheHit;
     private String auditStatus;
     private String auditReason;
+    private String fallbackReason;
 }

@@ -111,13 +111,16 @@ public class MemoryService {
         String pattern = "hmdp:memory:" + ChatMemoryKeyManager.SHOP_SUMMARY_PREFIX + ":" + shopId + ":*";
         int deleted = 0;
         try {
+            List<String> indexedKeys = chatMemoryStore.getIndexedShopSummaryMemoryIds(shopId);
+            if (!indexedKeys.isEmpty()) {
+                return chatMemoryStore.deleteMemoryKeys(indexedKeys);
+            }
+            log.debug("店铺总结记忆索引为空，回退 bounded scan, shopId={}", shopId);
             List<String> keys = redissonClient.getKeys()
                     .getKeysStreamByPattern(pattern, SCAN_BATCH_SIZE)
                     .limit(scanLimit())
                     .collect(Collectors.toList());
-            for (String key : keys) {
-                deleted += redissonClient.getKeys().unlink(key);
-            }
+            deleted += chatMemoryStore.deleteMemoryKeys(keys);
             return deleted;
         } catch (Exception e) {
             log.warn("清理店铺所有总结记忆失败, shopId={}", shopId, e);
@@ -131,6 +134,14 @@ public class MemoryService {
 
     public Map<String, Integer> clearAllUserMemory(String userId) {
         Map<String, Integer> result = new HashMap<>();
+        List<String> indexedKeys = chatMemoryStore.getIndexedMemoryIdsByUser(userId);
+        if (!indexedKeys.isEmpty()) {
+            int deleted = chatMemoryStore.deleteMemoryKeys(indexedKeys);
+            result.put("index:user:" + userId, deleted);
+            result.put("total", deleted);
+            return result;
+        }
+        log.debug("用户记忆索引为空，回退 bounded scan, userId={}", AiLogSanitizer.safe(userId, 64));
         String appName = "hmdp";
         String[] patterns = {
                 appName + ":memory:" + ChatMemoryKeyManager.SHOP_SUMMARY_PREFIX + ":*:" + userId,
@@ -146,9 +157,7 @@ public class MemoryService {
                     .getKeysStreamByPattern(pattern, SCAN_BATCH_SIZE)
                     .limit(scanLimit())
                     .collect(Collectors.toList());
-            for (String key : keys) {
-                count += redissonClient.getKeys().unlink(key);
-            }
+            count += chatMemoryStore.deleteMemoryKeys(keys);
             result.put(pattern, count);
             totalDeleted += count;
         }
