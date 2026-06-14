@@ -1,12 +1,10 @@
 package com.hmdp.ai.task;
 
 import com.hmdp.ai.infra.AiMetricsService;
-import com.hmdp.ai.retrieval.ShopReviewVectorIndexService;
 import com.hmdp.dto.ai.AiTask;
 import com.hmdp.dto.ai.AiTaskEvent;
 import com.hmdp.dto.ai.AiTaskStatus;
 import com.hmdp.dto.ai.AiTaskType;
-import com.hmdp.dto.ai.ShopRagRebuildResult;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
@@ -14,7 +12,8 @@ import org.springframework.stereotype.Component;
 import javax.annotation.PostConstruct;
 import javax.annotation.PreDestroy;
 import javax.annotation.Resource;
-import java.util.Map;
+import java.util.EnumMap;
+import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
@@ -31,13 +30,12 @@ public class AiTaskWorker {
     private AiTaskRepository repository;
 
     @Resource
-    private ShopReviewVectorIndexService shopReviewVectorIndexService;
-
-    @Resource
     private AiMetricsService aiMetricsService;
 
     @Resource
     private AiTaskEventPublisher eventPublisher;
+
+    private final EnumMap<AiTaskType, AiTaskHandler> handlers;
 
     @Value("${hmdp.ai.task.enabled:true}")
     private boolean enabled;
@@ -47,6 +45,21 @@ public class AiTaskWorker {
 
     private volatile boolean running;
     private ExecutorService executorService;
+
+    public AiTaskWorker(List<AiTaskHandler> handlers) {
+        this.handlers = new EnumMap<>(AiTaskType.class);
+        if (handlers != null) {
+            for (AiTaskHandler handler : handlers) {
+                if (handler == null || handler.type() == null) {
+                    continue;
+                }
+                AiTaskHandler previous = this.handlers.putIfAbsent(handler.type(), handler);
+                if (previous != null) {
+                    throw new IllegalStateException("Duplicate AI task handler type: " + handler.type());
+                }
+            }
+        }
+    }
 
     @PostConstruct
     public void start() {
@@ -84,10 +97,10 @@ public class AiTaskWorker {
             repository.update(task);
             publishEvent(task);
 
-            ShopRagRebuildResult result = dispatch(task);
+            Object result = dispatch(task);
             task.setResult(result);
             task.setStatus(AiTaskStatus.SUCCESS);
-        } catch (RuntimeException e) {
+        } catch (Exception e) {
             failed = true;
             task.setStatus(AiTaskStatus.FAILED);
             task.setErrorMessage(e.getMessage());
@@ -113,55 +126,17 @@ public class AiTaskWorker {
         }
     }
 
-    private ShopRagRebuildResult dispatch(AiTask task) {
-        Map<String, Object> params = task.getParams();
-        if (task.getType() == AiTaskType.RAG_REBUILD_ALL) {
-            return shopReviewVectorIndexService.rebuildAll(
-                    integerParam(params, "shopLimit"),
-                    integerParam(params, "perShopLimit"),
-                    (current, total) -> {
-                        task.setProgressCurrent(current);
-                        task.setProgressTotal(total);
-                        repository.update(task);
-                        publishEvent(task);
-                    });
+    private Object dispatch(AiTask task) throws Exception {
+        AiTaskHandler handler = handlers.get(task.getType());
+        if (handler == null) {
+            throw new IllegalArgumentException("Unsupported AI task type: " + task.getType());
         }
-        if (task.getType() == AiTaskType.RAG_REBUILD_SHOP) {
-            return shopReviewVectorIndexService.rebuildShop(
-                    longParam(params, "shopId"),
-                    integerParam(params, "limit"));
-        }
-        throw new IllegalArgumentException("Unsupported AI task type: " + task.getType());
-    }
-
-    private Integer integerParam(Map<String, Object> params, String key) {
-        Object value = params == null ? null : params.get(key);
-        if (value instanceof Number) {
-            return ((Number) value).intValue();
-        }
-        if (value == null) {
-            return null;
-        }
-        try {
-            return Integer.valueOf(value.toString());
-        } catch (NumberFormatException e) {
-            return null;
-        }
-    }
-
-    private Long longParam(Map<String, Object> params, String key) {
-        Object value = params == null ? null : params.get(key);
-        if (value instanceof Number) {
-            return ((Number) value).longValue();
-        }
-        if (value == null) {
-            return null;
-        }
-        try {
-            return Long.valueOf(value.toString());
-        } catch (NumberFormatException e) {
-            return null;
-        }
+        return handler.handle(task, (current, total) -> {
+            task.setProgressCurrent(current);
+            task.setProgressTotal(total);
+            repository.update(task);
+            publishEvent(task);
+        });
     }
 
     private void recordMetrics(long durationMillis, boolean failed) {

@@ -1,8 +1,6 @@
 package com.hmdp.ai.task;
 
 import com.hmdp.ai.infra.AiMetricsService;
-import com.hmdp.ai.retrieval.RebuildProgressListener;
-import com.hmdp.ai.retrieval.ShopReviewVectorIndexService;
 import com.hmdp.dto.ai.AiTask;
 import com.hmdp.dto.ai.AiTaskEvent;
 import com.hmdp.dto.ai.AiTaskStatus;
@@ -17,12 +15,14 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.anyLong;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.times;
@@ -39,29 +39,20 @@ class AiTaskWorkerTest {
     private AiTaskRepository repository;
 
     @Mock
-    private ShopReviewVectorIndexService vectorIndexService;
-
-    @Mock
     private AiMetricsService aiMetricsService;
 
     @Mock
     private AiTaskEventPublisher eventPublisher;
 
-    private AiTaskWorker worker;
-
     @BeforeEach
     void setUp() {
-        worker = new AiTaskWorker();
-        ReflectionTestUtils.setField(worker, "queue", queue);
-        ReflectionTestUtils.setField(worker, "repository", repository);
-        ReflectionTestUtils.setField(worker, "shopReviewVectorIndexService", vectorIndexService);
-        ReflectionTestUtils.setField(worker, "aiMetricsService", aiMetricsService);
-        ReflectionTestUtils.setField(worker, "eventPublisher", eventPublisher);
     }
 
     @Test
-    void processShouldMarkTaskSuccessAndStoreResult() {
+    void processShouldMarkTaskSuccessAndStoreResult() throws Exception {
         AiTask task = task(AiTaskType.RAG_REBUILD_SHOP, params("shopId", 7, "limit", 20));
+        AiTaskHandler handler = handler(AiTaskType.RAG_REBUILD_SHOP);
+        AiTaskWorker worker = workerWith(handler);
         ShopRagRebuildResult result = ShopRagRebuildResult.builder()
                 .shopId(7L)
                 .indexed(3)
@@ -71,7 +62,7 @@ class AiTaskWorkerTest {
                 .message("ok")
                 .build();
         when(repository.find("task-1")).thenReturn(Optional.of(task));
-        when(vectorIndexService.rebuildShop(7L, 20)).thenReturn(result);
+        when(handler.handle(eq(task), any(AiTaskProgressReporter.class))).thenReturn(result);
 
         worker.process("task-1");
 
@@ -88,11 +79,12 @@ class AiTaskWorkerTest {
     }
 
     @Test
-    void processShouldMarkTaskFailedWhenRebuildThrows() {
+    void processShouldMarkTaskFailedWhenHandlerThrows() throws Exception {
         AiTask task = task(AiTaskType.RAG_REBUILD_ALL, params("shopLimit", 10, "perShopLimit", 20));
+        AiTaskHandler handler = handler(AiTaskType.RAG_REBUILD_ALL);
+        AiTaskWorker worker = workerWith(handler);
         when(repository.find("task-1")).thenReturn(Optional.of(task));
-        when(vectorIndexService.rebuildAll(eq(10), eq(20), any(RebuildProgressListener.class)))
-                .thenThrow(new RuntimeException("boom"));
+        when(handler.handle(eq(task), any(AiTaskProgressReporter.class))).thenThrow(new RuntimeException("boom"));
 
         worker.process("task-1");
 
@@ -108,8 +100,10 @@ class AiTaskWorkerTest {
     }
 
     @Test
-    void processShouldPersistAndPublishProgressEventsForFullRebuild() {
+    void processShouldPersistAndPublishProgressEventsFromHandler() throws Exception {
         AiTask task = task(AiTaskType.RAG_REBUILD_ALL, params("shopLimit", 10, "perShopLimit", 20));
+        AiTaskHandler handler = handler(AiTaskType.RAG_REBUILD_ALL);
+        AiTaskWorker worker = workerWith(handler);
         ShopRagRebuildResult result = ShopRagRebuildResult.builder()
                 .indexed(6)
                 .skipped(0)
@@ -119,11 +113,11 @@ class AiTaskWorkerTest {
                 .build();
         when(repository.find("task-1")).thenReturn(Optional.of(task));
         doAnswer(invocation -> {
-            RebuildProgressListener listener = invocation.getArgument(2);
-            listener.onProgress(1, 2);
-            listener.onProgress(2, 2);
+            AiTaskProgressReporter reporter = invocation.getArgument(1);
+            reporter.report(1, 2);
+            reporter.report(2, 2);
             return result;
-        }).when(vectorIndexService).rebuildAll(eq(10), eq(20), any(RebuildProgressListener.class));
+        }).when(handler).handle(eq(task), any(AiTaskProgressReporter.class));
 
         worker.process("task-1");
 
@@ -140,6 +134,45 @@ class AiTaskWorkerTest {
         assertThat(events.getAllValues().get(1).getProgressTotal()).isEqualTo(2);
         assertThat(events.getAllValues().get(2).getProgressCurrent()).isEqualTo(2);
         assertThat(events.getAllValues().get(2).getProgressTotal()).isEqualTo(2);
+    }
+
+    @Test
+    void processShouldFailWhenHandlerMissing() {
+        AiTask task = task(AiTaskType.BATCH_SHOP_SUMMARY, params("shopLimit", 10));
+        AiTaskWorker worker = workerWith(handler(AiTaskType.RAG_REBUILD_SHOP));
+        when(repository.find("task-1")).thenReturn(Optional.of(task));
+
+        worker.process("task-1");
+
+        assertThat(task.getStatus()).isEqualTo(AiTaskStatus.FAILED);
+        assertThat(task.getErrorMessage()).contains("Unsupported AI task type");
+        verify(repository, times(2)).update(any(AiTask.class));
+        verify(repository).clearInflight("dedup-1");
+    }
+
+    @Test
+    void constructorShouldRejectDuplicateHandlerTypes() {
+        AiTaskHandler first = handler(AiTaskType.RAG_REBUILD_ALL);
+        AiTaskHandler second = handler(AiTaskType.RAG_REBUILD_ALL);
+
+        assertThatThrownBy(() -> new AiTaskWorker(List.of(first, second)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Duplicate AI task handler type");
+    }
+
+    private AiTaskHandler handler(AiTaskType type) {
+        AiTaskHandler handler = org.mockito.Mockito.mock(AiTaskHandler.class);
+        when(handler.type()).thenReturn(type);
+        return handler;
+    }
+
+    private AiTaskWorker workerWith(AiTaskHandler... handlers) {
+        AiTaskWorker worker = new AiTaskWorker(List.of(handlers));
+        ReflectionTestUtils.setField(worker, "queue", queue);
+        ReflectionTestUtils.setField(worker, "repository", repository);
+        ReflectionTestUtils.setField(worker, "aiMetricsService", aiMetricsService);
+        ReflectionTestUtils.setField(worker, "eventPublisher", eventPublisher);
+        return worker;
     }
 
     private AiTask task(AiTaskType type, Map<String, Object> params) {

@@ -58,6 +58,13 @@ hmdp:
       queue-key: ${HMDP_AI_TASK_QUEUE_KEY:hmdp:ai:task:queue}
       bucket-prefix: ${HMDP_AI_TASK_BUCKET_PREFIX:hmdp:ai:task:}
       stream-timeout-minutes: ${HMDP_AI_TASK_STREAM_TIMEOUT_MINUTES:10}
+      batch-summary:
+        default-shop-limit: ${HMDP_AI_TASK_BATCH_SUMMARY_DEFAULT_SHOP_LIMIT:200}
+      schedule:
+        batch-summary:
+          enabled: ${HMDP_AI_TASK_SCHEDULE_BATCH_SUMMARY_ENABLED:false}
+          cron: ${HMDP_AI_TASK_SCHEDULE_BATCH_SUMMARY_CRON:0 0 3 * * *}
+          shop-limit: ${HMDP_AI_TASK_SCHEDULE_BATCH_SUMMARY_SHOP_LIMIT:200}
   cors:
     allowed-origin-patterns: ${HMDP_CORS_ALLOWED_ORIGIN_PATTERNS:http://localhost:*,http://127.0.0.1:*}
   voucher:
