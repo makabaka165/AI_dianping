@@ -1,8 +1,10 @@
 package com.hmdp.ai.task;
 
 import com.hmdp.ai.infra.AiMetricsService;
+import com.hmdp.ai.retrieval.RebuildProgressListener;
 import com.hmdp.ai.retrieval.ShopReviewVectorIndexService;
 import com.hmdp.dto.ai.AiTask;
+import com.hmdp.dto.ai.AiTaskEvent;
 import com.hmdp.dto.ai.AiTaskStatus;
 import com.hmdp.dto.ai.AiTaskType;
 import com.hmdp.dto.ai.ShopRagRebuildResult;
@@ -20,7 +22,10 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -39,6 +44,9 @@ class AiTaskWorkerTest {
     @Mock
     private AiMetricsService aiMetricsService;
 
+    @Mock
+    private AiTaskEventPublisher eventPublisher;
+
     private AiTaskWorker worker;
 
     @BeforeEach
@@ -48,6 +56,7 @@ class AiTaskWorkerTest {
         ReflectionTestUtils.setField(worker, "repository", repository);
         ReflectionTestUtils.setField(worker, "shopReviewVectorIndexService", vectorIndexService);
         ReflectionTestUtils.setField(worker, "aiMetricsService", aiMetricsService);
+        ReflectionTestUtils.setField(worker, "eventPublisher", eventPublisher);
     }
 
     @Test
@@ -67,12 +76,13 @@ class AiTaskWorkerTest {
         worker.process("task-1");
 
         ArgumentCaptor<AiTask> updates = ArgumentCaptor.forClass(AiTask.class);
-        verify(repository, org.mockito.Mockito.times(2)).update(updates.capture());
+        verify(repository, times(2)).update(updates.capture());
         AiTask finalTask = updates.getAllValues().get(1);
         assertThat(finalTask.getStatus()).isEqualTo(AiTaskStatus.SUCCESS);
         assertThat(finalTask.getResult()).isSameAs(result);
         assertThat(finalTask.getErrorMessage()).isNull();
         verify(repository).clearInflight("dedup-1");
+        verify(eventPublisher, times(2)).publish(any(AiTaskEvent.class));
         verify(aiMetricsService).recordDuration(eq("ai_task"), anyLong(), eq(false));
         verify(aiMetricsService).increment("ai.task.count", "ai_task", false);
     }
@@ -81,18 +91,55 @@ class AiTaskWorkerTest {
     void processShouldMarkTaskFailedWhenRebuildThrows() {
         AiTask task = task(AiTaskType.RAG_REBUILD_ALL, params("shopLimit", 10, "perShopLimit", 20));
         when(repository.find("task-1")).thenReturn(Optional.of(task));
-        when(vectorIndexService.rebuildAll(10, 20)).thenThrow(new RuntimeException("boom"));
+        when(vectorIndexService.rebuildAll(eq(10), eq(20), any(RebuildProgressListener.class)))
+                .thenThrow(new RuntimeException("boom"));
 
         worker.process("task-1");
 
         ArgumentCaptor<AiTask> updates = ArgumentCaptor.forClass(AiTask.class);
-        verify(repository, org.mockito.Mockito.times(2)).update(updates.capture());
+        verify(repository, times(2)).update(updates.capture());
         AiTask finalTask = updates.getAllValues().get(1);
         assertThat(finalTask.getStatus()).isEqualTo(AiTaskStatus.FAILED);
         assertThat(finalTask.getErrorMessage()).isEqualTo("boom");
         verify(repository).clearInflight("dedup-1");
+        verify(eventPublisher, times(2)).publish(any(AiTaskEvent.class));
         verify(aiMetricsService).recordDuration(eq("ai_task"), anyLong(), eq(true));
         verify(aiMetricsService).increment("ai.task.count", "ai_task", true);
+    }
+
+    @Test
+    void processShouldPersistAndPublishProgressEventsForFullRebuild() {
+        AiTask task = task(AiTaskType.RAG_REBUILD_ALL, params("shopLimit", 10, "perShopLimit", 20));
+        ShopRagRebuildResult result = ShopRagRebuildResult.builder()
+                .indexed(6)
+                .skipped(0)
+                .failed(0)
+                .durationMs(12L)
+                .message("ok")
+                .build();
+        when(repository.find("task-1")).thenReturn(Optional.of(task));
+        doAnswer(invocation -> {
+            RebuildProgressListener listener = invocation.getArgument(2);
+            listener.onProgress(1, 2);
+            listener.onProgress(2, 2);
+            return result;
+        }).when(vectorIndexService).rebuildAll(eq(10), eq(20), any(RebuildProgressListener.class));
+
+        worker.process("task-1");
+
+        verify(repository, times(4)).update(any(AiTask.class));
+        assertThat(task.getStatus()).isEqualTo(AiTaskStatus.SUCCESS);
+        assertThat(task.getProgressCurrent()).isEqualTo(2);
+        assertThat(task.getProgressTotal()).isEqualTo(2);
+        ArgumentCaptor<AiTaskEvent> events = ArgumentCaptor.forClass(AiTaskEvent.class);
+        verify(eventPublisher, times(4)).publish(events.capture());
+        assertThat(events.getAllValues()).extracting(AiTaskEvent::getStatus)
+                .containsExactly(AiTaskStatus.RUNNING, AiTaskStatus.RUNNING,
+                        AiTaskStatus.RUNNING, AiTaskStatus.SUCCESS);
+        assertThat(events.getAllValues().get(1).getProgressCurrent()).isEqualTo(1);
+        assertThat(events.getAllValues().get(1).getProgressTotal()).isEqualTo(2);
+        assertThat(events.getAllValues().get(2).getProgressCurrent()).isEqualTo(2);
+        assertThat(events.getAllValues().get(2).getProgressTotal()).isEqualTo(2);
     }
 
     private AiTask task(AiTaskType type, Map<String, Object> params) {

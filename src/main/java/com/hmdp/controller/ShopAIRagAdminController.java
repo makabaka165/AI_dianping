@@ -2,8 +2,11 @@ package com.hmdp.controller;
 
 import cn.dev33.satoken.annotation.SaCheckPermission;
 import com.hmdp.ai.task.AiTaskService;
+import com.hmdp.ai.task.AiTaskStreamService;
 import com.hmdp.dto.Result;
 import com.hmdp.dto.ai.AiTask;
+import com.hmdp.dto.ai.AiTaskEvent;
+import com.hmdp.dto.ai.AiTaskStatus;
 import com.hmdp.dto.ai.AiTaskType;
 import com.hmdp.dto.ai.ShopRagRebuildResult;
 import com.hmdp.ai.application.ShopAICacheInvalidationService;
@@ -11,6 +14,8 @@ import com.hmdp.ai.retrieval.ShopReviewVectorIndexService;
 import com.hmdp.service.CurrentUserService;
 import com.hmdp.service.ShopStatsService;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.MediaType;
+import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -22,6 +27,7 @@ import javax.annotation.Resource;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
+import reactor.core.publisher.Flux;
 
 @RestController
 @RequestMapping("/api/shop-summary/admin/rag")
@@ -39,6 +45,9 @@ public class ShopAIRagAdminController {
 
     @Resource
     private AiTaskService aiTaskService;
+
+    @Resource
+    private AiTaskStreamService aiTaskStreamService;
 
     @Resource
     private CurrentUserService currentUserService;
@@ -129,6 +138,21 @@ public class ShopAIRagAdminController {
                 .orElseGet(() -> Result.fail("任务不存在"));
     }
 
+    @GetMapping(value = "/tasks/{taskId}/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    @SaCheckPermission("ai:rag:manage")
+    public Flux<ServerSentEvent<AiTaskEvent>> streamTask(@PathVariable String taskId) {
+        if (aiTaskService.get(taskId).isEmpty()) {
+            return Flux.just(toSse("error", AiTaskEvent.builder()
+                    .taskId(taskId)
+                    .status(AiTaskStatus.FAILED)
+                    .errorMessage("任务不存在")
+                    .timestampEpochMillis(System.currentTimeMillis())
+                    .build()));
+        }
+        return aiTaskStreamService.stream(taskId)
+                .map(event -> toSse(event.getStatus().name(), event));
+    }
+
     private String ownerUserId() {
         Long userId = currentUserService == null ? null : currentUserService.getCurrentUserId();
         return userId == null ? null : String.valueOf(userId);
@@ -138,5 +162,12 @@ public class ShopAIRagAdminController {
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("taskId", taskId);
         return data;
+    }
+
+    private ServerSentEvent<AiTaskEvent> toSse(String eventName, AiTaskEvent event) {
+        return ServerSentEvent.<AiTaskEvent>builder()
+                .event(eventName)
+                .data(event)
+                .build();
     }
 }

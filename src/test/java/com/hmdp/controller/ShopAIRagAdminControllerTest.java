@@ -3,7 +3,9 @@ package com.hmdp.controller;
 import cn.dev33.satoken.annotation.SaCheckPermission;
 import com.hmdp.ai.application.ShopAICacheInvalidationService;
 import com.hmdp.ai.task.AiTaskService;
+import com.hmdp.ai.task.AiTaskStreamService;
 import com.hmdp.dto.ai.AiTask;
+import com.hmdp.dto.ai.AiTaskEvent;
 import com.hmdp.dto.ai.AiTaskStatus;
 import com.hmdp.dto.ai.AiTaskType;
 import com.hmdp.dto.ai.ShopRagRebuildResult;
@@ -15,12 +17,15 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import reactor.core.publisher.Flux;
 
 import java.lang.reflect.Method;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -50,6 +55,9 @@ class ShopAIRagAdminControllerTest {
     private AiTaskService aiTaskService;
 
     @Mock
+    private AiTaskStreamService aiTaskStreamService;
+
+    @Mock
     private CurrentUserService currentUserService;
 
     private MockMvc mockMvc;
@@ -61,6 +69,7 @@ class ShopAIRagAdminControllerTest {
         ReflectionTestUtils.setField(controller, "shopAICacheInvalidationService", cacheInvalidationService);
         ReflectionTestUtils.setField(controller, "shopStatsService", shopStatsService);
         ReflectionTestUtils.setField(controller, "aiTaskService", aiTaskService);
+        ReflectionTestUtils.setField(controller, "aiTaskStreamService", aiTaskStreamService);
         ReflectionTestUtils.setField(controller, "currentUserService", currentUserService);
         mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
     }
@@ -188,6 +197,51 @@ class ShopAIRagAdminControllerTest {
     }
 
     @Test
+    void streamTaskShouldReturnTaskEventsWhenExists() {
+        AiTask task = AiTask.builder()
+                .taskId("task-1")
+                .type(AiTaskType.RAG_REBUILD_ALL)
+                .status(AiTaskStatus.RUNNING)
+                .build();
+        AiTaskEvent event = AiTaskEvent.builder()
+                .taskId("task-1")
+                .status(AiTaskStatus.SUCCESS)
+                .progressCurrent(2)
+                .progressTotal(2)
+                .timestampEpochMillis(123L)
+                .build();
+        when(aiTaskService.get("task-1")).thenReturn(Optional.of(task));
+        when(aiTaskStreamService.stream("task-1")).thenReturn(Flux.just(event));
+
+        List<ServerSentEvent<AiTaskEvent>> events = new java.util.ArrayList<>();
+        new ShopAIRagAdminController();
+        ShopAIRagAdminController controller = new ShopAIRagAdminController();
+        ReflectionTestUtils.setField(controller, "aiTaskService", aiTaskService);
+        ReflectionTestUtils.setField(controller, "aiTaskStreamService", aiTaskStreamService);
+
+        controller.streamTask("task-1").subscribe(events::add);
+
+        assertThat(events).hasSize(1);
+        assertThat(events.get(0).event()).isEqualTo("SUCCESS");
+        assertThat(events.get(0).data()).isSameAs(event);
+    }
+
+    @Test
+    void streamTaskShouldReturnErrorEventWhenMissing() {
+        when(aiTaskService.get("missing")).thenReturn(Optional.empty());
+        ShopAIRagAdminController controller = new ShopAIRagAdminController();
+        ReflectionTestUtils.setField(controller, "aiTaskService", aiTaskService);
+
+        ServerSentEvent<AiTaskEvent> event = controller.streamTask("missing").blockFirst();
+
+        assertThat(event).isNotNull();
+        assertThat(event.event()).isEqualTo("error");
+        assertThat(event.data().getTaskId()).isEqualTo("missing");
+        assertThat(event.data().getStatus()).isEqualTo(AiTaskStatus.FAILED);
+        assertThat(event.data().getErrorMessage()).isEqualTo("任务不存在");
+    }
+
+    @Test
     void endpointsShouldRequireRagManagePermission() throws Exception {
         Method rebuildShop = ShopAIRagAdminController.class.getMethod("rebuildShop", Long.class, Integer.class);
         Method compactShop = ShopAIRagAdminController.class.getMethod("compactShop", Long.class, Integer.class);
@@ -195,6 +249,7 @@ class ShopAIRagAdminControllerTest {
         Method submitRebuildAllTask = ShopAIRagAdminController.class.getMethod("submitRebuildAllTask", Integer.class, Integer.class);
         Method submitRebuildShopTask = ShopAIRagAdminController.class.getMethod("submitRebuildShopTask", Long.class, Integer.class);
         Method getTask = ShopAIRagAdminController.class.getMethod("getTask", String.class);
+        Method streamTask = ShopAIRagAdminController.class.getMethod("streamTask", String.class);
 
         assertThat(rebuildShop.getAnnotation(SaCheckPermission.class).value()).containsExactly("ai:rag:manage");
         assertThat(compactShop.getAnnotation(SaCheckPermission.class).value()).containsExactly("ai:rag:manage");
@@ -202,6 +257,7 @@ class ShopAIRagAdminControllerTest {
         assertThat(submitRebuildAllTask.getAnnotation(SaCheckPermission.class).value()).containsExactly("ai:rag:manage");
         assertThat(submitRebuildShopTask.getAnnotation(SaCheckPermission.class).value()).containsExactly("ai:rag:manage");
         assertThat(getTask.getAnnotation(SaCheckPermission.class).value()).containsExactly("ai:rag:manage");
+        assertThat(streamTask.getAnnotation(SaCheckPermission.class).value()).containsExactly("ai:rag:manage");
     }
 
     private ShopRagRebuildResult result(Long shopId) {

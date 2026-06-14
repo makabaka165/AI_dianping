@@ -57,6 +57,7 @@ hmdp:
       result-ttl-hours: ${HMDP_AI_TASK_RESULT_TTL_HOURS:24}
       queue-key: ${HMDP_AI_TASK_QUEUE_KEY:hmdp:ai:task:queue}
       bucket-prefix: ${HMDP_AI_TASK_BUCKET_PREFIX:hmdp:ai:task:}
+      stream-timeout-minutes: ${HMDP_AI_TASK_STREAM_TIMEOUT_MINUTES:10}
   cors:
     allowed-origin-patterns: ${HMDP_CORS_ALLOWED_ORIGIN_PATTERNS:http://localhost:*,http://127.0.0.1:*}
   voucher:

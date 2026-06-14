@@ -111,21 +111,33 @@ public class ShopReviewVectorIndexService {
     }
 
     public ShopRagRebuildResult rebuildAll(Integer shopLimit, Integer perShopLimit) {
+        return rebuildAll(shopLimit, perShopLimit, (current, total) -> {
+        });
+    }
+
+    public ShopRagRebuildResult rebuildAll(Integer shopLimit, Integer perShopLimit,
+                                           RebuildProgressListener listener) {
         long start = System.currentTimeMillis();
         if (!available()) {
             return result(null, 0, 0, 0, start, "RAG review index disabled or unavailable");
         }
         int safeShopLimit = normalizeLimit(shopLimit, backfillPageSize);
         List<Long> shopIds = reviewDataPort.findActiveShopIdsForRag(safeShopLimit);
+        int total = shopIds == null ? 0 : shopIds.size();
+        RebuildProgressListener safeListener = listener == null ? (current, count) -> {
+        } : listener;
         int indexed = 0;
         int skipped = 0;
         int failed = 0;
         if (shopIds != null) {
+            int current = 0;
             for (Long shopId : shopIds) {
                 ShopRagRebuildResult item = rebuildShop(shopId, perShopLimit);
                 indexed += safe(item.getIndexed());
                 skipped += safe(item.getSkipped());
                 failed += safe(item.getFailed());
+                current++;
+                safeListener.onProgress(current, total);
             }
         }
         ShopRagRebuildResult result = result(null, indexed, skipped, failed, start,

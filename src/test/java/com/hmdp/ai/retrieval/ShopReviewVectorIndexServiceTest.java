@@ -119,6 +119,38 @@ class ShopReviewVectorIndexServiceTest {
     }
 
     @Test
+    void rebuildAllWithListenerShouldReportProgressAfterEachShop() {
+        ReviewDoc first = activeBlog(1L, "服务稳定");
+        ReviewDoc second = activeBlog(2L, "环境不错");
+        second.setShopId(20L);
+        when(reviewDataPort.findActiveShopIdsForRag(2)).thenReturn(List.of(10L, 20L));
+        when(reviewDataPort.findActiveReviewsForRag(10L, 3)).thenReturn(List.of(first));
+        when(reviewDataPort.findActiveReviewsForRag(20L, 3)).thenReturn(List.of(second));
+        when(embeddingModel.embed(anyString())).thenReturn(Response.from(Embedding.from(new float[]{0.1f, 0.2f})));
+        when(embeddingStore.add(any(Embedding.class), any(TextSegment.class))).thenReturn("embedding");
+        java.util.List<String> progress = new java.util.ArrayList<>();
+
+        ShopRagRebuildResult result = service.rebuildAll(2, 3,
+                (current, total) -> progress.add(current + "/" + total));
+
+        assertThat(result.getIndexed()).isEqualTo(2);
+        assertThat(progress).containsExactly("1/2", "2/2");
+    }
+
+    @Test
+    void rebuildAllOldSignatureShouldStillWork() {
+        ReviewDoc blog = activeBlog(1L, "服务稳定");
+        when(reviewDataPort.findActiveShopIdsForRag(1)).thenReturn(List.of(10L));
+        when(reviewDataPort.findActiveReviewsForRag(10L, 3)).thenReturn(List.of(blog));
+        when(embeddingModel.embed(anyString())).thenReturn(Response.from(Embedding.from(new float[]{0.1f, 0.2f})));
+        when(embeddingStore.add(any(Embedding.class), any(TextSegment.class))).thenReturn("embedding");
+
+        ShopRagRebuildResult result = service.rebuildAll(1, 3);
+
+        assertThat(result.getIndexed()).isEqualTo(1);
+    }
+
+    @Test
     void compactShopShouldRefreshVectorsAndDiscloseDeletionLimitation() {
         ReviewDoc blog = activeBlog(1L, "服务稳定，适合聚餐");
         when(reviewDataPort.findActiveReviewsForRag(10L, 3)).thenReturn(List.of(blog));

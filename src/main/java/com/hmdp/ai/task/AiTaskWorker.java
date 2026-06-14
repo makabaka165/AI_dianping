@@ -3,6 +3,7 @@ package com.hmdp.ai.task;
 import com.hmdp.ai.infra.AiMetricsService;
 import com.hmdp.ai.retrieval.ShopReviewVectorIndexService;
 import com.hmdp.dto.ai.AiTask;
+import com.hmdp.dto.ai.AiTaskEvent;
 import com.hmdp.dto.ai.AiTaskStatus;
 import com.hmdp.dto.ai.AiTaskType;
 import com.hmdp.dto.ai.ShopRagRebuildResult;
@@ -34,6 +35,9 @@ public class AiTaskWorker {
 
     @Resource
     private AiMetricsService aiMetricsService;
+
+    @Resource
+    private AiTaskEventPublisher eventPublisher;
 
     @Value("${hmdp.ai.task.enabled:true}")
     private boolean enabled;
@@ -78,6 +82,7 @@ public class AiTaskWorker {
             task.setStatus(AiTaskStatus.RUNNING);
             task.setErrorMessage(null);
             repository.update(task);
+            publishEvent(task);
 
             ShopRagRebuildResult result = dispatch(task);
             task.setResult(result);
@@ -90,6 +95,7 @@ public class AiTaskWorker {
         } finally {
             repository.update(task);
             repository.clearInflight(task.getDedupKey());
+            publishEvent(task);
             recordMetrics(System.currentTimeMillis() - start, failed);
         }
     }
@@ -112,7 +118,13 @@ public class AiTaskWorker {
         if (task.getType() == AiTaskType.RAG_REBUILD_ALL) {
             return shopReviewVectorIndexService.rebuildAll(
                     integerParam(params, "shopLimit"),
-                    integerParam(params, "perShopLimit"));
+                    integerParam(params, "perShopLimit"),
+                    (current, total) -> {
+                        task.setProgressCurrent(current);
+                        task.setProgressTotal(total);
+                        repository.update(task);
+                        publishEvent(task);
+                    });
         }
         if (task.getType() == AiTaskType.RAG_REBUILD_SHOP) {
             return shopReviewVectorIndexService.rebuildShop(
@@ -156,6 +168,19 @@ public class AiTaskWorker {
         if (aiMetricsService != null) {
             aiMetricsService.recordDuration("ai_task", durationMillis, failed);
             aiMetricsService.increment("ai.task.count", "ai_task", failed);
+        }
+    }
+
+    private void publishEvent(AiTask task) {
+        if (eventPublisher != null && task != null) {
+            eventPublisher.publish(AiTaskEvent.builder()
+                    .taskId(task.getTaskId())
+                    .status(task.getStatus())
+                    .progressCurrent(task.getProgressCurrent())
+                    .progressTotal(task.getProgressTotal())
+                    .errorMessage(task.getErrorMessage())
+                    .timestampEpochMillis(System.currentTimeMillis())
+                    .build());
         }
     }
 
