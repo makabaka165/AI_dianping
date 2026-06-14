@@ -11,7 +11,6 @@ import dev.langchain4j.data.document.DocumentSplitter;
 import dev.langchain4j.data.document.parser.apache.pdfbox.ApachePdfBoxDocumentParser;
 import dev.langchain4j.data.document.splitter.DocumentSplitters;
 import dev.langchain4j.data.segment.TextSegment;
-import dev.langchain4j.memory.ChatMemory;
 import dev.langchain4j.memory.chat.ChatMemoryProvider;
 import dev.langchain4j.memory.chat.MessageWindowChatMemory;
 import dev.langchain4j.model.chat.ChatLanguageModel;
@@ -131,7 +130,10 @@ public class CommonAIConfig {
     @Autowired
     private ApplicationContext applicationContext;
 
-    private final AtomicBoolean platformPolicyImportAttempted = new AtomicBoolean(false);
+    private static final long IMPORT_RETRY_COOLDOWN_MS = 5 * 60_000L;
+
+    private final AtomicBoolean platformPolicyImported = new AtomicBoolean(false);
+    private volatile long platformPolicyNextRetryAt = 0L;
 
     // ========== Redis配置 ==========
 
@@ -286,10 +288,10 @@ public class CommonAIConfig {
 
 
     /**
-     * ???? Redis ?????????? FAQ ?????????????????? RAG ???
+     * 创建 Redis 向量存储。平台政策 FAQ 与店铺评论使用独立索引，避免不同 RAG 场景相互污染。
      */
     private RedisEmbeddingStore buildRedisEmbeddingStore(String indexName, int dimension) {
-        log.info("??? RedisEmbeddingStore - RAG?? - ??: {}, ??: {}, ??: {}, ??: {}",
+        log.info("创建 RedisEmbeddingStore - RAG存储 - 主机: {}, 端口: {}, 索引: {}, 维度: {}",
                 redisHost, redisPort, indexName, dimension);
 
         RedisEmbeddingStore store = RedisEmbeddingStore.builder()
@@ -298,21 +300,21 @@ public class CommonAIConfig {
                 .indexName(indexName)
                 .dimension(dimension)
                 .build();
-        log.info("RedisEmbeddingStore ????, index={}", indexName);
+        log.info("RedisEmbeddingStore 创建完成, index={}", indexName);
         return store;
     }
 
     @Bean("platformPolicyInMemoryEmbeddingStore")
     @ConditionalOnProperty(value = "rag.enabled", havingValue = "true", matchIfMissing = false)
     public InMemoryEmbeddingStore<TextSegment> platformPolicyInMemoryEmbeddingStore() {
-        log.info("??????? InMemoryEmbeddingStore - ????");
+        log.info("初始化平台政策 InMemoryEmbeddingStore - 内存回退");
         return new InMemoryEmbeddingStore<>();
     }
 
     @Bean("shopReviewInMemoryEmbeddingStore")
     @ConditionalOnProperty(value = "rag.enabled", havingValue = "true", matchIfMissing = false)
     public InMemoryEmbeddingStore<TextSegment> shopReviewInMemoryEmbeddingStore() {
-        log.info("??????? InMemoryEmbeddingStore - ????");
+        log.info("初始化店铺评论 InMemoryEmbeddingStore - 内存回退");
         return new InMemoryEmbeddingStore<>();
     }
 
@@ -320,10 +322,9 @@ public class CommonAIConfig {
     @ConditionalOnProperty(value = "rag.enabled", havingValue = "true")
     public EmbeddingStore<TextSegment> platformPolicyEmbeddingStore(
             @Qualifier("platformPolicyInMemoryEmbeddingStore")
-            InMemoryEmbeddingStore<TextSegment> platformPolicyInMemoryEmbeddingStore,
-            EmbeddingModel embeddingModel) {
+            InMemoryEmbeddingStore<TextSegment> platformPolicyInMemoryEmbeddingStore) {
 
-        log.info("??????????...");
+        log.info("初始化平台政策向量存储...");
         try {
             RedisEmbeddingStore redisEmbeddingStore = buildRedisEmbeddingStore(platformPolicyIndexName, platformPolicyDimension);
             if (autoImportData) {
@@ -350,7 +351,7 @@ public class CommonAIConfig {
             @Qualifier("shopReviewInMemoryEmbeddingStore")
             InMemoryEmbeddingStore<TextSegment> shopReviewInMemoryEmbeddingStore) {
 
-        log.info("??????????...");
+        log.info("初始化店铺评论向量存储...");
         try {
             return buildRedisEmbeddingStore(reviewIndexName, reviewDimension);
         } catch (Exception e) {
@@ -373,7 +374,7 @@ public class CommonAIConfig {
             EmbeddingModel embeddingModel,
             DocumentQualityAssessor documentQualityAssessor) {
 
-        log.info("??????? ContentRetriever?????: 0.5, ?????: 5");
+        log.info("初始化平台政策 ContentRetriever，最小分数: 0.5, 最大结果数: 5");
         ContentRetriever delegate = QualityBasedContentRetriever.builder()
                 .embeddingStore(platformPolicyEmbeddingStore)
                 .embeddingModel(embeddingModel)
@@ -390,7 +391,7 @@ public class CommonAIConfig {
     @Bean("platformPolicyContentRetriever")
     @ConditionalOnProperty(value = "rag.enabled", havingValue = "false", matchIfMissing = true)
     public ContentRetriever noopPlatformPolicyContentRetriever() {
-        log.info("rag.enabled=false, ???????? ContentRetriever");
+        log.info("rag.enabled=false, 使用空平台政策 ContentRetriever");
         return query -> Collections.emptyList();
     }
 
@@ -442,16 +443,16 @@ public class CommonAIConfig {
     /**
      * 初始化向量存储数据。Embedding API 抖动只告警，不阻塞应用启动。
      */
-    private void initializeVectorStore(EmbeddingStore<TextSegment> embeddingStore, 
-                                      EmbeddingModel embeddingModel,
-                                      DocumentQualityAssessor documentQualityAssessor) {
+    private boolean initializeVectorStore(EmbeddingStore<TextSegment> embeddingStore,
+                                          EmbeddingModel embeddingModel,
+                                          DocumentQualityAssessor documentQualityAssessor) {
         try {
             // 1. 加载文档
             List<Document> documents = loadDocuments();
 
             if (documents.isEmpty()) {
                 log.warn("未找到任何文档用于初始化向量数据库");
-                return;
+                return false;
             }
 
             // 记录加载的文档内容用于调试
@@ -497,23 +498,32 @@ public class CommonAIConfig {
             }
 
             log.info("✅ 成功将 {} 个文档导入向量数据库！", documents.size());
+            return true;
 
         } catch (Exception e) {
             log.warn("Platform policy vector import skipped because embedding service is unavailable or import failed: {}",
                     e.getMessage(), e);
+            return false;
         }
     }
 
     private void initializePlatformPolicyStoreIfNeeded(EmbeddingStore<TextSegment> embeddingStore,
                                                        EmbeddingModel embeddingModel,
                                                        DocumentQualityAssessor documentQualityAssessor) {
-        if (!autoImportData) {
+        if (!autoImportData || platformPolicyImported.get()) {
             return;
         }
-        if (!platformPolicyImportAttempted.compareAndSet(false, true)) {
-            return;
+        synchronized (this) {
+            long now = System.currentTimeMillis();
+            if (platformPolicyImported.get() || now < platformPolicyNextRetryAt) {
+                return;
+            }
+            if (initializeVectorStore(embeddingStore, embeddingModel, documentQualityAssessor)) {
+                platformPolicyImported.set(true);
+            } else {
+                platformPolicyNextRetryAt = now + IMPORT_RETRY_COOLDOWN_MS;
+            }
         }
-        initializeVectorStore(embeddingStore, embeddingModel, documentQualityAssessor);
     }
 
 

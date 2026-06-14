@@ -54,7 +54,7 @@
 | `VoucherController` | `POST /voucher` | `voucher:create:own OR voucher:manage` |
 | `VoucherController` | `POST /voucher/seckill` | `voucher:create:own OR voucher:manage` |
 | `ShopSummaryController` | `/api/shop-summary/ai/**` | `@SaCheckPermission("ai:chat")` |
-| `ShopSummaryController` | `GET /api/shop-summary/{shopId}` | `@SaCheckPermission("ai:chat")` |
+| `ShopSummaryController` | `GET /api/shop-summary/{shopId}` | `@SaCheckPermission("ai:chat")`，计配额 |
 | `ShopSummaryController` | `POST /api/shop-summary/{shopId}/with-memory` | `@SaCheckPermission("ai:chat")` |
 | `ShopSummaryController` | `GET /api/shop-summary/{shopId}/quality` | `@SaCheckPermission("ai:chat")`，无写记忆副作用 |
 | `ShopSummaryController` | `POST /api/shop-summary/{shopId}/quality/with-memory` | `@SaCheckPermission("ai:chat")`，显式写 summary memory |

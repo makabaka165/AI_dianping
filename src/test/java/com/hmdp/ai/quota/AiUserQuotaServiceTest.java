@@ -11,6 +11,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.concurrent.TimeUnit;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -62,5 +63,17 @@ class AiUserQuotaServiceTest {
         assertThatThrownBy(() -> service.checkAndConsume("u1", "chat"))
                 .isInstanceOf(AiQuotaExceededException.class)
                 .hasMessageContaining("频繁");
+    }
+
+    @Test
+    void shouldMarkFailClosedQuotaInfraError() {
+        when(minuteCounter.incrementAndGet()).thenReturn(1L);
+        when(dayCounter.incrementAndGet()).thenThrow(new IllegalStateException("redis down"));
+
+        assertThatThrownBy(() -> service.checkAndConsume("u1", "chat"))
+                .isInstanceOfSatisfying(AiQuotaExceededException.class, e -> {
+                    assertThat(e.isInfraError()).isTrue();
+                    assertThat(e).hasMessage("AI 配额校验暂不可用");
+                });
     }
 }

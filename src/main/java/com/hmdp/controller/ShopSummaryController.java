@@ -62,7 +62,7 @@ public class ShopSummaryController {
                     getCurrentUserId(), sessionId, message, request.getShopId(), "/api/shop-summary/ai/chat");
             return Result.ok(resultData);
         } catch (AiQuotaExceededException e) {
-            return Result.fail(ErrorCode.RATE_LIMITED, e.getMessage());
+            return quotaFailure(e);
         } catch (Exception e) {
             log.error("智能对话失败 - sessionId={}, message={}", sessionId, AiLogSanitizer.safe(message), e);
             return Result.fail("对话失败，请稍后重试");
@@ -83,7 +83,7 @@ public class ShopSummaryController {
                     request.getShopId(),
                     "/api/shop-summary/ai/chat/stream");
         } catch (AiQuotaExceededException e) {
-            return Flux.just(streamError(e.getMessage(), ErrorCode.RATE_LIMITED.getCode()));
+            return Flux.just(streamError(e.getMessage(), quotaErrorCode(e).getCode()));
         }
     }
 
@@ -95,7 +95,7 @@ public class ShopSummaryController {
                     getCurrentUserId(), shopId, false, "/api/shop-summary/{shopId}");
             return Result.ok(summary);
         } catch (AiQuotaExceededException e) {
-            return Result.fail(ErrorCode.RATE_LIMITED, e.getMessage());
+            return quotaFailure(e);
         } catch (Exception e) {
             log.error("生成店铺总结失败, shopId={}", shopId, e);
             return Result.fail("生成总结失败，请稍后重试");
@@ -110,7 +110,7 @@ public class ShopSummaryController {
                     getCurrentUserId(), shopId, true, "/api/shop-summary/{shopId}/with-memory");
             return Result.ok(summary);
         } catch (AiQuotaExceededException e) {
-            return Result.fail(ErrorCode.RATE_LIMITED, e.getMessage());
+            return quotaFailure(e);
         } catch (Exception e) {
             log.error("生成带记忆的店铺总结失败, shopId={}", shopId, e);
             return Result.fail("生成总结失败，请稍后重试");
@@ -128,7 +128,7 @@ public class ShopSummaryController {
                     getCurrentUserId(), shopId, minLiked, limit, false, "/api/shop-summary/{shopId}/quality");
             return Result.ok(summary);
         } catch (AiQuotaExceededException e) {
-            return Result.fail(ErrorCode.RATE_LIMITED, e.getMessage());
+            return quotaFailure(e);
         } catch (Exception e) {
             log.error("生成高质量评价总结失败, shopId={}", shopId, e);
             return Result.fail("生成总结失败，请稍后重试");
@@ -146,7 +146,7 @@ public class ShopSummaryController {
                     getCurrentUserId(), shopId, minLiked, limit, true, "/api/shop-summary/{shopId}/quality/with-memory");
             return Result.ok(summary);
         } catch (AiQuotaExceededException e) {
-            return Result.fail(ErrorCode.RATE_LIMITED, e.getMessage());
+            return quotaFailure(e);
         } catch (Exception e) {
             log.error("生成高质量评价总结失败, shopId={}", shopId, e);
             return Result.fail("生成总结失败，请稍后重试");
@@ -168,7 +168,7 @@ public class ShopSummaryController {
                     "/api/shop-summary/{shopId}/ask");
             return Result.ok(resultData);
         } catch (AiQuotaExceededException e) {
-            return Result.fail(ErrorCode.RATE_LIMITED, e.getMessage());
+            return quotaFailure(e);
         } catch (Exception e) {
             log.error("店铺问答失败, shopId={}", shopId, e);
             return Result.fail("问答失败，请稍后重试");
@@ -191,7 +191,7 @@ public class ShopSummaryController {
                     "/api/shop-summary/compare");
             return Result.ok(resultData);
         } catch (AiQuotaExceededException e) {
-            return Result.fail(ErrorCode.RATE_LIMITED, e.getMessage());
+            return quotaFailure(e);
         } catch (Exception e) {
             log.error("店铺对比失败", e);
             return Result.fail("对比分析失败，请稍后重试");
@@ -214,7 +214,7 @@ public class ShopSummaryController {
                     "/api/shop-summary/recommend");
             return Result.ok(resultData);
         } catch (AiQuotaExceededException e) {
-            return Result.fail(ErrorCode.RATE_LIMITED, e.getMessage());
+            return quotaFailure(e);
         } catch (Exception e) {
             log.error("推荐失败, preference={}", AiLogSanitizer.safe(request == null ? null : request.getUserPreference()), e);
             return Result.fail("推荐失败，请稍后重试");
@@ -374,6 +374,14 @@ public class ShopSummaryController {
         }
         resultData.put("timestamp", System.currentTimeMillis());
         return resultData;
+    }
+
+    private Result quotaFailure(AiQuotaExceededException e) {
+        return Result.fail(quotaErrorCode(e), e.getMessage());
+    }
+
+    private ErrorCode quotaErrorCode(AiQuotaExceededException e) {
+        return e.isInfraError() ? ErrorCode.SERVICE_UNAVAILABLE : ErrorCode.RATE_LIMITED;
     }
 
     private ServerSentEvent<ShopAIStreamEvent> streamError(String message) {

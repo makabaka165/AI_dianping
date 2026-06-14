@@ -63,7 +63,7 @@ public class AiUserQuotaService {
                 log.warn("AI quota check failed open, userId={}, operation={}", safeUserId, operation, e);
                 return;
             }
-            throw new AiQuotaExceededException("AI 配额校验暂不可用，请稍后再试", e);
+            throw AiQuotaExceededException.infra("AI 配额校验暂不可用", e);
         }
     }
 
