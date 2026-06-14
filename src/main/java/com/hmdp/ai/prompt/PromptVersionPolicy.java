@@ -1,6 +1,6 @@
 package com.hmdp.ai.prompt;
 
-import com.hmdp.ai.intent.ShopAIIntent;
+import com.hmdp.dto.ai.ShopAIIntent;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 

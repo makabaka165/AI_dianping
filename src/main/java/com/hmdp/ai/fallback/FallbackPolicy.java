@@ -6,9 +6,8 @@ import com.hmdp.dto.ai.ShopCompareResult;
 import com.hmdp.dto.ai.ShopQAResult;
 import com.hmdp.dto.ai.ShopRecommendResult;
 import com.hmdp.dto.ai.ShopRecommendationItem;
-import com.hmdp.entity.Shop;
-import com.hmdp.service.AiMetricsService;
-import com.hmdp.service.impl.AIFallbackService;
+import com.hmdp.dto.ai.ShopView;
+import com.hmdp.ai.infra.AiMetricsService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -91,7 +90,7 @@ public class FallbackPolicy {
 
     public ShopRecommendResult fallbackRecommend(String userPreference,
                                                  String category,
-                                                 List<Shop> candidates,
+                                                 List<ShopView> candidates,
                                                  int limit,
                                                  String analysisType) {
         return fallbackRecommend(userPreference, category, candidates, limit, analysisType, FallbackReason.MODEL_UNAVAILABLE);
@@ -99,7 +98,7 @@ public class FallbackPolicy {
 
     public ShopRecommendResult fallbackRecommend(String userPreference,
                                                  String category,
-                                                 List<Shop> candidates,
+                                                 List<ShopView> candidates,
                                                  int limit,
                                                  String analysisType,
                                                  FallbackReason reason) {

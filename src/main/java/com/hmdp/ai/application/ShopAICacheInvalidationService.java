@@ -1,8 +1,7 @@
 package com.hmdp.ai.application;
 
 import com.hmdp.ai.memory.MemoryService;
-import com.hmdp.service.AiResultCacheService;
-import com.hmdp.service.ShopStatsService;
+import com.hmdp.ai.infra.AiResultCacheService;
 import com.hmdp.utils.LocalCacheManager;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -17,9 +16,6 @@ public class ShopAICacheInvalidationService {
     private LocalCacheManager localCacheManager;
 
     @Resource
-    private ShopStatsService shopStatsService;
-
-    @Resource
     private AiResultCacheService aiResultCacheService;
 
     @Resource
@@ -31,7 +27,6 @@ public class ShopAICacheInvalidationService {
         }
         log.info("清除店铺{}相关AI缓存", shopId);
         localCacheManager.removeShopRelatedCaches(shopId);
-        shopStatsService.evictShopStatsCache(shopId);
         aiResultCacheService.evictShop(shopId);
         memoryService.clearAllShopSummaryMemory(shopId);
     }

@@ -1,7 +1,7 @@
 package com.hmdp.ai.model;
 
-import com.hmdp.service.AiMetricsService;
-import com.hmdp.service.AiTokenEstimator;
+import com.hmdp.ai.infra.AiMetricsService;
+import com.hmdp.ai.infra.AiTokenEstimator;
 import org.springframework.stereotype.Component;
 
 import javax.annotation.Resource;

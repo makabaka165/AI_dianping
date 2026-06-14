@@ -4,7 +4,8 @@ import cn.dev33.satoken.annotation.SaCheckPermission;
 import com.hmdp.dto.Result;
 import com.hmdp.dto.ai.ShopRagRebuildResult;
 import com.hmdp.ai.application.ShopAICacheInvalidationService;
-import com.hmdp.service.ShopReviewVectorIndexService;
+import com.hmdp.ai.retrieval.ShopReviewVectorIndexService;
+import com.hmdp.service.ShopStatsService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -24,6 +25,9 @@ public class ShopAIRagAdminController {
 
     @Resource
     private ShopAICacheInvalidationService shopAICacheInvalidationService;
+
+    @Resource
+    private ShopStatsService shopStatsService;
 
     @PostMapping("/shops/{shopId}/rebuild")
     @SaCheckPermission("ai:rag:manage")
@@ -45,6 +49,9 @@ public class ShopAIRagAdminController {
         try {
             if (shopAICacheInvalidationService != null) {
                 shopAICacheInvalidationService.clearShopRelatedCaches(shopId);
+            }
+            if (shopStatsService != null) {
+                shopStatsService.evictShopStatsCache(shopId);
             }
             ShopRagRebuildResult result = shopReviewVectorIndexService.compactShop(shopId, limit);
             return Result.ok(result);

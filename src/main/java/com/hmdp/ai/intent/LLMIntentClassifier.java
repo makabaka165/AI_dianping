@@ -2,6 +2,10 @@ package com.hmdp.ai.intent;
 
 import com.hmdp.ai.model.ModelGateway;
 import com.hmdp.ai.prompt.PromptTemplateRegistry;
+import com.hmdp.dto.ai.IntentRouteCandidate;
+import com.hmdp.dto.ai.IntentRouteSource;
+import com.hmdp.dto.ai.IntentSlotState;
+import com.hmdp.dto.ai.ShopAIIntent;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 

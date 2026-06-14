@@ -1,16 +1,14 @@
 package com.hmdp.ai.model;
 
-import com.hmdp.ai.intent.IntentRouteCandidate;
+import com.hmdp.dto.ai.IntentRouteCandidate;
+import com.hmdp.ai.port.AiModelServicePort;
 import com.hmdp.dto.ai.EvidenceItem;
 import com.hmdp.dto.ai.ShopAIAnalysisResult;
 import com.hmdp.dto.ai.ShopAnalysisContext;
 import com.hmdp.dto.ai.ShopCompareResult;
 import com.hmdp.dto.ai.ShopQAResult;
 import com.hmdp.dto.ai.ShopRecommendResult;
-import com.hmdp.entity.Shop;
-import com.hmdp.service.ai.ShopAIService;
-import com.hmdp.service.ai.ShopFreeChatAIService;
-import com.hmdp.service.ai.ShopRepairAIService;
+import com.hmdp.dto.ai.ShopView;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Flux;
@@ -25,13 +23,7 @@ public class ModelGateway {
     public static final String DEFAULT_MODEL_NAME = "configured-chat-model";
 
     @Resource
-    private ShopAIService shopAIService;
-
-    @Resource
-    private ShopFreeChatAIService shopFreeChatAIService;
-
-    @Resource
-    private ShopRepairAIService shopRepairAIService;
+    private AiModelServicePort aiModelServicePort;
 
     @Resource
     private ModelResilienceExecutor resilienceExecutor;
@@ -56,7 +48,7 @@ public class ModelGateway {
 
     public ShopAIAnalysisResult generateStructuredSummary(String prompt, ShopAnalysisContext context) throws Exception {
         String json = executeText("generateStructuredAnalysis", prompt,
-                () -> shopAIService.generateStructuredAnalysis(prompt));
+                () -> modelService().generateStructuredAnalysis(prompt));
         try {
             return parser().parseStructuredAnalysis(json);
         } catch (Exception e) {
@@ -70,7 +62,7 @@ public class ModelGateway {
         String repairPrompt = repairPrompt(prompt, qualityReason,
                 "请重新输出严格 JSON，字段必须包含 summary、sentiment、keywords、pros、cons、confidence、evidenceIds。");
         String json = executeText("generateStructuredAnalysis.repair", repairPrompt,
-                () -> shopRepairAIService.generateStructuredAnalysis(repairPrompt));
+                () -> modelService().repairStructuredAnalysis(repairPrompt));
         return parser().parseStructuredAnalysis(json);
     }
 
@@ -80,7 +72,7 @@ public class ModelGateway {
                                                  String question,
                                                  List<EvidenceItem> evidence) {
         String json = executeTextUnchecked("ask:analyzeShopData", prompt,
-                () -> shopAIService.analyzeShopData(memoryId, prompt));
+                () -> modelService().analyzeShopData(memoryId, prompt));
         try {
             return parser().parseQA(json, shopId, question);
         } catch (Exception e) {
@@ -96,7 +88,7 @@ public class ModelGateway {
         String repairPrompt = repairPrompt(prompt, qualityReason,
                 "请重新输出严格 JSON，字段必须包含 shopId、question、answer、evidenceIds、insufficientEvidence。");
         String json = executeTextUnchecked("ask:analyzeShopData.repair", repairPrompt,
-                () -> shopRepairAIService.analyzeShopData(memoryId, repairPrompt));
+                () -> modelService().repairAnalyzeShopData(memoryId, repairPrompt));
         return parser().parseQA(json, shopId, question);
     }
 
@@ -107,7 +99,7 @@ public class ModelGateway {
                                                          String aspect,
                                                          List<EvidenceItem> evidence) {
         String json = executeTextUnchecked("compare:analyzeShopData", prompt,
-                () -> shopAIService.analyzeShopData(memoryId, prompt));
+                () -> modelService().analyzeShopData(memoryId, prompt));
         try {
             return parser().parseCompare(json, shopId1, shopId2, aspect);
         } catch (Exception e) {
@@ -125,7 +117,7 @@ public class ModelGateway {
         String repairPrompt = repairPrompt(prompt, qualityReason,
                 "请重新输出严格 JSON，字段必须包含 shopId1、shopId2、aspect、conclusion、winnerByAspect、shop1Score、shop2Score、shop1Pros、shop2Pros、riskNotes、evidenceIds。");
         String json = executeTextUnchecked("compare:analyzeShopData.repair", repairPrompt,
-                () -> shopRepairAIService.analyzeShopData(memoryId, repairPrompt));
+                () -> modelService().repairAnalyzeShopData(memoryId, repairPrompt));
         return parser().parseCompare(json, shopId1, shopId2, aspect);
     }
 
@@ -133,10 +125,10 @@ public class ModelGateway {
                                                                 String prompt,
                                                                 String userPreference,
                                                                 String category,
-                                                                List<Shop> candidates,
+                                                                List<ShopView> candidates,
                                                                 List<EvidenceItem> evidence) {
         String json = executeTextUnchecked("recommend:analyzeShopData", prompt,
-                () -> shopAIService.analyzeShopData(memoryId, prompt));
+                () -> modelService().analyzeShopData(memoryId, prompt));
         try {
             return parser().parseRecommend(json, userPreference, category, candidates);
         } catch (Exception e) {
@@ -149,47 +141,47 @@ public class ModelGateway {
                                                               String prompt,
                                                               String userPreference,
                                                               String category,
-                                                              List<Shop> candidates,
+                                                              List<ShopView> candidates,
                                                               String qualityReason) {
         String repairPrompt = repairPrompt(prompt, qualityReason,
                 "请重新输出严格 JSON，字段必须包含 userPreference、category、message、items，items 内包含 rank、shopId、shopName、reason、suitableFor、uncertainty、evidenceIds、confidence。");
         String json = executeTextUnchecked("recommend:analyzeShopData.repair", repairPrompt,
-                () -> shopRepairAIService.analyzeShopData(memoryId, repairPrompt));
+                () -> modelService().repairAnalyzeShopData(memoryId, repairPrompt));
         return parser().parseRecommend(json, userPreference, category, candidates);
     }
 
     public String generateFreeChat(String memoryId, String prompt) {
         return executeTextUnchecked("freeChat", prompt,
-                () -> shopFreeChatAIService.chat(memoryId, prompt));
+                () -> modelService().chat(memoryId, prompt));
     }
 
     public String repairFreeChat(String memoryId, String prompt, String qualityReason) {
         String repairPrompt = repairPrompt(prompt, qualityReason,
                 "请重新生成一个简洁、安全、只说明能力范围或追问必要参数的回答。");
         return executeTextUnchecked("freeChat.repair", repairPrompt,
-                () -> shopRepairAIService.chat(memoryId, repairPrompt));
+                () -> modelService().repairChat(memoryId, repairPrompt));
     }
 
     public IntentRouteCandidate classifyIntent(String prompt) throws Exception {
         String json = executeText("classifyIntent", prompt,
-                () -> shopAIService.classifyIntent(prompt));
+                () -> modelService().classifyIntent(prompt));
         return parser().parseIntent(json);
     }
 
     public Flux<String> streamChat(String memoryId, String message) {
-        return executor().decorateStream(shopFreeChatAIService.chatStream(memoryId, message));
+        return executor().decorateStream(modelService().freeChatStream(memoryId, message));
     }
 
     public Flux<String> streamAnswer(String memoryId, String prompt) {
-        return executor().decorateStream(shopAIService.chatStream(memoryId, prompt));
+        return executor().decorateStream(modelService().chatStream(memoryId, prompt));
     }
 
     public Flux<String> streamComparison(String memoryId, String prompt) {
-        return executor().decorateStream(shopAIService.chatStream(memoryId, prompt));
+        return executor().decorateStream(modelService().chatStream(memoryId, prompt));
     }
 
     public Flux<String> streamRecommendation(String memoryId, String prompt) {
-        return executor().decorateStream(shopAIService.chatStream(memoryId, prompt));
+        return executor().decorateStream(modelService().chatStream(memoryId, prompt));
     }
 
     private <T> T execute(String operation, Callable<T> callable) throws Exception {
@@ -258,5 +250,9 @@ public class ModelGateway {
             modelMetricsRecorder = new ModelMetricsRecorder();
         }
         return modelMetricsRecorder;
+    }
+
+    private AiModelServicePort modelService() {
+        return aiModelServicePort;
     }
 }

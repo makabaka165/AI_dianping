@@ -2,10 +2,10 @@ package com.hmdp.ai.application;
 
 import com.hmdp.ai.memory.MemoryService;
 import com.hmdp.ai.orchestration.ShopAIOrchestrator;
-import com.hmdp.ai.orchestration.ShopAIRequestContext;
+import com.hmdp.dto.ai.ShopAIRequestContext;
 import com.hmdp.ai.quota.AiUserQuotaService;
 import com.hmdp.ai.workflow.request.ChatWorkflowRequest;
-import com.hmdp.config.ChatMemoryKeyManager;
+import com.hmdp.ai.memory.ChatMemoryKeyManager;
 import com.hmdp.dto.ai.ShopAIStreamEvent;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;

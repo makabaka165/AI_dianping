@@ -1,7 +1,4 @@
 package com.hmdp.dto.ai;
-
-import com.hmdp.ai.intent.IntentRouteSource;
-import com.hmdp.ai.intent.ShopAIIntent;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -26,7 +23,7 @@ public class ShopAIResponse {
     private Boolean degraded;
     private Boolean cacheHit;
     private String fallbackReason;
-    private com.hmdp.entity.ShopSummaryResult summary;
+    private com.hmdp.dto.ai.ShopSummaryResult summary;
     private ShopQAResult qa;
     private ShopCompareResult compare;
     private ShopRecommendResult recommend;

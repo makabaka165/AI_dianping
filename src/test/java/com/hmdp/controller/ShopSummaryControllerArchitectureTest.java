@@ -9,7 +9,7 @@ import com.hmdp.ai.workflow.RecommendWorkflow;
 import com.hmdp.ai.workflow.SummaryWorkflow;
 import com.hmdp.dto.ai.ShopAIResponse;
 import com.hmdp.service.CurrentUserService;
-import com.hmdp.service.ShopReviewVectorIndexService;
+import com.hmdp.ai.retrieval.ShopReviewVectorIndexService;
 import com.hmdp.service.ai.ShopAIService;
 import com.hmdp.service.ai.ShopFreeChatAIService;
 import com.hmdp.service.ai.ShopRepairAIService;

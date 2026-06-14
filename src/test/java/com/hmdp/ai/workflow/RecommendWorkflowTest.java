@@ -7,17 +7,17 @@ import com.hmdp.ai.guard.QualityDecision;
 import com.hmdp.ai.guard.QualityGuard;
 import com.hmdp.ai.memory.MemoryService;
 import com.hmdp.ai.model.ModelGateway;
-import com.hmdp.ai.orchestration.ShopAIRequestContext;
+import com.hmdp.dto.ai.ShopAIRequestContext;
+import com.hmdp.ai.port.ShopDataPort;
 import com.hmdp.ai.prompt.PromptTemplateRender;
 import com.hmdp.ai.prompt.PromptTemplateRegistry;
 import com.hmdp.ai.workflow.request.RecommendWorkflowRequest;
 import com.hmdp.dto.ai.ShopAIResponse;
 import com.hmdp.dto.ai.ShopRecommendResult;
 import com.hmdp.dto.ai.ShopRecommendationItem;
-import com.hmdp.entity.Shop;
-import com.hmdp.mapper.ShopMapper;
-import com.hmdp.service.AiMetricsService;
-import com.hmdp.service.ShopReviewEvidenceRetriever;
+import com.hmdp.dto.ai.ShopView;
+import com.hmdp.ai.infra.AiMetricsService;
+import com.hmdp.ai.retrieval.ShopReviewEvidenceRetriever;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -44,7 +44,7 @@ import static org.mockito.Mockito.when;
 class RecommendWorkflowTest {
 
     @Mock
-    private ShopMapper shopMapper;
+    private ShopDataPort shopDataPort;
     @Mock
     private ShopReviewEvidenceRetriever evidenceRetriever;
     @Mock
@@ -65,7 +65,7 @@ class RecommendWorkflowTest {
     @BeforeEach
     void setUp() {
         workflow = new RecommendWorkflow();
-        ReflectionTestUtils.setField(workflow, "shopMapper", shopMapper);
+        ReflectionTestUtils.setField(workflow, "shopDataPort", shopDataPort);
         ReflectionTestUtils.setField(workflow, "evidenceRetriever", evidenceRetriever);
         ReflectionTestUtils.setField(workflow, "promptTemplateRegistry", promptTemplateRegistry);
         ReflectionTestUtils.setField(workflow, "memoryService", memoryService);
@@ -83,14 +83,15 @@ class RecommendWorkflowTest {
                 .sessionId("s1")
                 .traceId("t1")
                 .build();
-        Shop shop = new Shop()
-                .setId(1L)
-                .setName("约会餐厅")
-                .setArea("商圈")
-                .setAvgPrice(80L)
-                .setSold(100)
-                .setComments(30)
-                .setScore(45);
+        ShopView shop = ShopView.builder()
+                .id(1L)
+                .name("约会餐厅")
+                .area("商圈")
+                .avgPrice(80L)
+                .sold(100)
+                .comments(30)
+                .score(45)
+                .build();
         ShopRecommendResult bad = ShopRecommendResult.builder()
                 .userPreference("适合约会")
                 .category("餐厅")
@@ -110,7 +111,7 @@ class RecommendWorkflowTest {
                         .build()))
                 .build();
         when(memoryService.shopRecommendKey("u1")).thenReturn("recommend-memory");
-        when(shopMapper.selectRecommendCandidates("餐厅", 1)).thenReturn(List.of(shop));
+        when(shopDataPort.findRecommendCandidates("餐厅", 1)).thenReturn(List.of(shop));
         when(evidenceRetriever.retrieve(1L, "适合约会", "餐厅", 2)).thenReturn(Collections.emptyList());
         when(promptTemplateRegistry.renderRecommend(any(ShopAIRequestContext.class), eq("适合约会"), eq("餐厅"), eq(1), anyString()))
                 .thenReturn(PromptTemplateRender.builder()

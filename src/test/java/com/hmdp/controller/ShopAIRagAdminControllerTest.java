@@ -3,7 +3,8 @@ package com.hmdp.controller;
 import cn.dev33.satoken.annotation.SaCheckPermission;
 import com.hmdp.ai.application.ShopAICacheInvalidationService;
 import com.hmdp.dto.ai.ShopRagRebuildResult;
-import com.hmdp.service.ShopReviewVectorIndexService;
+import com.hmdp.ai.retrieval.ShopReviewVectorIndexService;
+import com.hmdp.service.ShopStatsService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -31,6 +32,9 @@ class ShopAIRagAdminControllerTest {
     @Mock
     private ShopAICacheInvalidationService cacheInvalidationService;
 
+    @Mock
+    private ShopStatsService shopStatsService;
+
     private MockMvc mockMvc;
 
     @BeforeEach
@@ -38,6 +42,7 @@ class ShopAIRagAdminControllerTest {
         ShopAIRagAdminController controller = new ShopAIRagAdminController();
         ReflectionTestUtils.setField(controller, "shopReviewVectorIndexService", vectorIndexService);
         ReflectionTestUtils.setField(controller, "shopAICacheInvalidationService", cacheInvalidationService);
+        ReflectionTestUtils.setField(controller, "shopStatsService", shopStatsService);
         mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
     }
 
@@ -88,6 +93,7 @@ class ShopAIRagAdminControllerTest {
                 .andExpect(jsonPath("$.data.message").value(org.hamcrest.Matchers.containsString("does not support precise old vector deletion")));
 
         verify(cacheInvalidationService).clearShopRelatedCaches(7L);
+        verify(shopStatsService).evictShopStatsCache(7L);
         verify(vectorIndexService).compactShop(7L, 20);
     }
 
@@ -101,6 +107,9 @@ class ShopAIRagAdminControllerTest {
                 .andExpect(jsonPath("$.data.shopId").value(7))
                 .andExpect(jsonPath("$.data.indexed").value(0))
                 .andExpect(jsonPath("$.data.message").value(org.hamcrest.Matchers.containsString("unavailable")));
+
+        verify(cacheInvalidationService).clearShopRelatedCaches(7L);
+        verify(shopStatsService).evictShopStatsCache(7L);
     }
 
     @Test

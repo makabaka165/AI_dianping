@@ -1,6 +1,5 @@
 package com.hmdp.ai.orchestration;
 
-import com.hmdp.ai.intent.ShopAIIntent;
 import com.hmdp.ai.workflow.ChatWorkflow;
 import com.hmdp.ai.workflow.CompareWorkflow;
 import com.hmdp.ai.workflow.QAWorkflow;
@@ -14,9 +13,11 @@ import com.hmdp.ai.workflow.request.QualitySummaryWorkflowRequest;
 import com.hmdp.ai.workflow.request.RecommendWorkflowRequest;
 import com.hmdp.ai.workflow.request.SummaryWorkflowRequest;
 import com.hmdp.dto.ai.ShopAIResponse;
+import com.hmdp.dto.ai.ShopAIRequestContext;
 import com.hmdp.dto.ai.ShopAIStreamEvent;
-import com.hmdp.entity.ShopSummaryResult;
-import com.hmdp.service.AiMetricsService;
+import com.hmdp.dto.ai.ShopAIIntent;
+import com.hmdp.dto.ai.ShopSummaryResult;
+import com.hmdp.ai.infra.AiMetricsService;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;

@@ -2,16 +2,16 @@ package com.hmdp.ai.model;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.hmdp.ai.intent.IntentRouteCandidate;
-import com.hmdp.ai.intent.IntentRouteSource;
-import com.hmdp.ai.intent.ShopAIIntent;
+import com.hmdp.dto.ai.IntentRouteCandidate;
+import com.hmdp.dto.ai.IntentRouteSource;
+import com.hmdp.dto.ai.ShopAIIntent;
 import com.hmdp.dto.ai.EvidenceItem;
 import com.hmdp.dto.ai.ShopAIAnalysisResult;
 import com.hmdp.dto.ai.ShopCompareResult;
 import com.hmdp.dto.ai.ShopQAResult;
 import com.hmdp.dto.ai.ShopRecommendResult;
 import com.hmdp.dto.ai.ShopRecommendationItem;
-import com.hmdp.entity.Shop;
+import com.hmdp.dto.ai.ShopView;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -80,17 +80,17 @@ public class StructuredOutputParser {
     public ShopRecommendResult parseRecommend(String json,
                                               String userPreference,
                                               String category,
-                                              List<Shop> candidates) {
+                                              List<ShopView> candidates) {
         JsonNode root = readRoot(json);
-        Map<Long, Shop> candidateMap = candidates == null ? Collections.emptyMap() : candidates.stream()
+        Map<Long, ShopView> candidateMap = candidates == null ? Collections.emptyMap() : candidates.stream()
                 .filter(shop -> shop != null && shop.getId() != null)
-                .collect(Collectors.toMap(Shop::getId, Function.identity(), (a, b) -> a));
+                .collect(Collectors.toMap(ShopView::getId, Function.identity(), (a, b) -> a));
         List<ShopRecommendationItem> items = new ArrayList<>();
         JsonNode itemNode = root.path("items");
         if (itemNode.isArray()) {
             for (JsonNode item : itemNode) {
                 Long shopId = readLong(item.path("shopId"), null);
-                Shop shop = shopId == null ? null : candidateMap.get(shopId);
+                ShopView shop = shopId == null ? null : candidateMap.get(shopId);
                 items.add(ShopRecommendationItem.builder()
                         .rank(readInteger(item.path("rank"), items.size() + 1))
                         .shopId(shopId)

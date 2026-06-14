@@ -1,8 +1,7 @@
 package com.hmdp.ai.fallback;
 
 import com.hmdp.dto.ai.ShopAIAnalysisResult;
-import com.hmdp.service.AiMetricsService;
-import com.hmdp.service.impl.AIFallbackService;
+import com.hmdp.ai.infra.AiMetricsService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;

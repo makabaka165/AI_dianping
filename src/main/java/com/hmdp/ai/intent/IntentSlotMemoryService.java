@@ -1,6 +1,9 @@
 package com.hmdp.ai.intent;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.hmdp.dto.ai.IntentRouteCandidate;
+import com.hmdp.dto.ai.IntentSlotState;
+import com.hmdp.dto.ai.ShopAIIntent;
 import lombok.extern.slf4j.Slf4j;
 import org.redisson.api.RBucket;
 import org.redisson.api.RedissonClient;

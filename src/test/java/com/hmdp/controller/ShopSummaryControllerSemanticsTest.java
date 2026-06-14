@@ -1,8 +1,8 @@
 package com.hmdp.controller;
 
 import com.hmdp.ai.application.ShopAIApplicationService;
-import com.hmdp.config.ChatMemoryKeyManager;
-import com.hmdp.entity.ShopSummaryResult;
+import com.hmdp.ai.memory.ChatMemoryKeyManager;
+import com.hmdp.dto.ai.ShopSummaryResult;
 import com.hmdp.service.CurrentUserService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;

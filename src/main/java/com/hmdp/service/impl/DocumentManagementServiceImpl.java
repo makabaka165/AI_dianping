@@ -2,6 +2,7 @@ package com.hmdp.service.impl;
 
 import com.hmdp.entity.DocumentMetadata;
 import com.hmdp.entity.DocumentStatus;
+import com.hmdp.ai.infra.DocumentQualityAssessor;
 import com.hmdp.service.DocumentManagementService;
 import dev.langchain4j.data.document.Document;
 import dev.langchain4j.data.segment.TextSegment;

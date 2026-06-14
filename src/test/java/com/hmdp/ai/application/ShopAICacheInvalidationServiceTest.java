@@ -1,8 +1,7 @@
 package com.hmdp.ai.application;
 
 import com.hmdp.ai.memory.MemoryService;
-import com.hmdp.service.AiResultCacheService;
-import com.hmdp.service.ShopStatsService;
+import com.hmdp.ai.infra.AiResultCacheService;
 import com.hmdp.utils.LocalCacheManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -21,9 +20,6 @@ class ShopAICacheInvalidationServiceTest {
     private LocalCacheManager localCacheManager;
 
     @Mock
-    private ShopStatsService shopStatsService;
-
-    @Mock
     private AiResultCacheService aiResultCacheService;
 
     @Mock
@@ -35,7 +31,6 @@ class ShopAICacheInvalidationServiceTest {
     void setUp() {
         service = new ShopAICacheInvalidationService();
         ReflectionTestUtils.setField(service, "localCacheManager", localCacheManager);
-        ReflectionTestUtils.setField(service, "shopStatsService", shopStatsService);
         ReflectionTestUtils.setField(service, "aiResultCacheService", aiResultCacheService);
         ReflectionTestUtils.setField(service, "memoryService", memoryService);
     }
@@ -45,7 +40,6 @@ class ShopAICacheInvalidationServiceTest {
         service.clearShopRelatedCaches(7L);
 
         verify(localCacheManager).removeShopRelatedCaches(7L);
-        verify(shopStatsService).evictShopStatsCache(7L);
         verify(aiResultCacheService).evictShop(7L);
         verify(memoryService).clearAllShopSummaryMemory(7L);
     }
@@ -55,7 +49,6 @@ class ShopAICacheInvalidationServiceTest {
         service.clearShopRelatedCaches(0L);
 
         verify(localCacheManager, never()).removeShopRelatedCaches(0L);
-        verify(shopStatsService, never()).evictShopStatsCache(0L);
         verify(aiResultCacheService, never()).evictShop(0L);
         verify(memoryService, never()).clearAllShopSummaryMemory(0L);
     }

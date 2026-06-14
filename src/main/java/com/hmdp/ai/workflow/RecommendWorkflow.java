@@ -5,7 +5,8 @@ import com.hmdp.ai.guard.GovernedGeneration;
 import com.hmdp.ai.guard.QualityGuard;
 import com.hmdp.ai.memory.MemoryService;
 import com.hmdp.ai.model.ModelGateway;
-import com.hmdp.ai.orchestration.ShopAIRequestContext;
+import com.hmdp.dto.ai.ShopAIRequestContext;
+import com.hmdp.ai.port.ShopDataPort;
 import com.hmdp.ai.prompt.PromptTemplateRender;
 import com.hmdp.ai.prompt.PromptTemplateRegistry;
 import com.hmdp.ai.workflow.request.RecommendWorkflowRequest;
@@ -14,10 +15,9 @@ import com.hmdp.dto.ai.EvidenceType;
 import com.hmdp.dto.ai.ShopAIResponse;
 import com.hmdp.dto.ai.ShopProfileSnapshot;
 import com.hmdp.dto.ai.ShopRecommendResult;
-import com.hmdp.entity.Shop;
-import com.hmdp.mapper.ShopMapper;
-import com.hmdp.service.AiMetricsService;
-import com.hmdp.service.ShopReviewEvidenceRetriever;
+import com.hmdp.dto.ai.ShopView;
+import com.hmdp.ai.infra.AiMetricsService;
+import com.hmdp.ai.retrieval.ShopReviewEvidenceRetriever;
 import org.springframework.stereotype.Component;
 
 import javax.annotation.Resource;
@@ -36,7 +36,7 @@ public class RecommendWorkflow {
     private static final int SHOP_FIELD_LIMIT = 120;
 
     @Resource
-    private ShopMapper shopMapper;
+    private ShopDataPort shopDataPort;
 
     @Resource
     private ShopReviewEvidenceRetriever evidenceRetriever;
@@ -70,7 +70,7 @@ public class RecommendWorkflow {
         int safeLimit = normalizeLimit(request.getLimit(), 5);
         String memoryId = memoryService.shopRecommendKey(context.getUserId());
         context.setMemoryId(memoryId);
-        List<Shop> candidates = shopMapper.selectRecommendCandidates(request.getCategory(), safeLimit);
+        List<ShopView> candidates = shopDataPort.findRecommendCandidates(request.getCategory(), safeLimit);
         if (candidates == null || candidates.isEmpty()) {
             ShopRecommendResult recommend = ShopRecommendResult.builder()
                     .userPreference(request.getUserPreference())
@@ -91,7 +91,7 @@ public class RecommendWorkflow {
                 candidateBlock(candidates) + evidenceBlock(evidence));
         Set<Long> candidateShopIds = candidates.stream()
                 .filter(shop -> shop != null && shop.getId() != null)
-                .map(Shop::getId)
+                .map(ShopView::getId)
                 .collect(Collectors.toSet());
         GovernedGeneration.GovernedResult<ShopRecommendResult> generated = governedGeneration.runWithReason(
                 () -> modelGateway.generateStructuredRecommendation(memoryId, prompt.getContent(), request.getUserPreference(),
@@ -119,7 +119,7 @@ public class RecommendWorkflow {
         int safeLimit = normalizeLimit(request.getLimit(), 5);
         String memoryId = memoryService.shopRecommendKey(context.getUserId());
         context.setMemoryId(memoryId);
-        List<Shop> candidates = shopMapper.selectRecommendCandidates(request.getCategory(), safeLimit);
+        List<ShopView> candidates = shopDataPort.findRecommendCandidates(request.getCategory(), safeLimit);
         if (candidates == null || candidates.isEmpty()) {
             return StreamWorkflowPlan.builder()
                     .analysisType(ANALYSIS_TYPE)
@@ -151,12 +151,12 @@ public class RecommendWorkflow {
                 .build();
     }
 
-    private List<EvidenceItem> recommendationEvidence(List<Shop> candidates, String preference, String category) {
+    private List<EvidenceItem> recommendationEvidence(List<ShopView> candidates, String preference, String category) {
         List<EvidenceItem> evidence = new ArrayList<>();
         if (candidates == null) {
             return evidence;
         }
-        for (Shop shop : candidates) {
+        for (ShopView shop : candidates) {
             if (shop == null || shop.getId() == null) {
                 continue;
             }
@@ -172,7 +172,7 @@ public class RecommendWorkflow {
         return evidence;
     }
 
-    private EvidenceItem profileEvidence(Shop shop) {
+    private EvidenceItem profileEvidence(ShopView shop) {
         ShopProfileSnapshot profile = ShopProfileSnapshot.from(shop);
         String snippet = "shopId=" + shop.getId()
                 + ", name=" + truncate(shop.getName(), SHOP_FIELD_LIMIT)
@@ -215,9 +215,9 @@ public class RecommendWorkflow {
         return builder.toString();
     }
 
-    private String candidateBlock(List<Shop> candidates) {
+    private String candidateBlock(List<ShopView> candidates) {
         StringBuilder builder = new StringBuilder("候选店铺:\n");
-        for (Shop shop : candidates) {
+        for (ShopView shop : candidates) {
             builder.append("- 店铺ID=").append(shop.getId())
                     .append(", 名称=").append(truncate(shop.getName(), SHOP_FIELD_LIMIT))
                     .append(", 商圈=").append(truncate(shop.getArea(), SHOP_FIELD_LIMIT))

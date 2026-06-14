@@ -1,7 +1,4 @@
 package com.hmdp.dto.ai;
-
-import com.hmdp.ai.intent.IntentRouteSource;
-import com.hmdp.ai.intent.ShopAIIntent;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;

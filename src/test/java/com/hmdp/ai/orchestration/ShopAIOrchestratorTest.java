@@ -1,6 +1,7 @@
 package com.hmdp.ai.orchestration;
 
-import com.hmdp.ai.intent.ShopAIIntent;
+import com.hmdp.dto.ai.ShopAIIntent;
+import com.hmdp.dto.ai.ShopAIRequestContext;
 import com.hmdp.ai.workflow.ChatWorkflow;
 import com.hmdp.ai.workflow.CompareWorkflow;
 import com.hmdp.ai.workflow.QAWorkflow;
@@ -12,7 +13,7 @@ import com.hmdp.ai.workflow.request.QualitySummaryWorkflowRequest;
 import com.hmdp.ai.workflow.request.SummaryWorkflowRequest;
 import com.hmdp.dto.ai.ShopAIResponse;
 import com.hmdp.dto.ai.ShopQAResult;
-import com.hmdp.entity.ShopSummaryResult;
+import com.hmdp.dto.ai.ShopSummaryResult;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;

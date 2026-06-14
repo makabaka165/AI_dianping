@@ -1,22 +1,22 @@
 package com.hmdp.ai.workflow;
 
 import com.hmdp.ai.intent.IntentRouteCoordinator;
-import com.hmdp.ai.intent.IntentRouteSource;
-import com.hmdp.ai.intent.IntentRoutingResult;
-import com.hmdp.ai.intent.ShopAIIntent;
+import com.hmdp.dto.ai.IntentRouteSource;
+import com.hmdp.dto.ai.IntentRoutingResult;
+import com.hmdp.dto.ai.ShopAIIntent;
 import com.hmdp.ai.fallback.FallbackPolicy;
 import com.hmdp.ai.guard.QualityCheck;
 import com.hmdp.ai.guard.QualityDecision;
 import com.hmdp.ai.guard.QualityGuard;
 import com.hmdp.ai.memory.MemoryService;
 import com.hmdp.ai.model.ModelGateway;
-import com.hmdp.ai.orchestration.ShopAIRequestContext;
+import com.hmdp.dto.ai.ShopAIRequestContext;
 import com.hmdp.ai.prompt.PromptTemplateRegistry;
 import com.hmdp.ai.workflow.request.ChatWorkflowRequest;
 import com.hmdp.ai.workflow.request.QAWorkflowRequest;
 import com.hmdp.dto.ai.ShopAIResponse;
 import com.hmdp.dto.ai.ShopAIStreamEvent;
-import com.hmdp.entity.ShopSummaryResult;
+import com.hmdp.dto.ai.ShopSummaryResult;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;

@@ -1,11 +1,11 @@
 package com.hmdp.ai.memory;
 
-import com.hmdp.config.ChatMemoryKeyManager;
+import com.hmdp.ai.memory.ChatMemoryKeyManager;
 import com.hmdp.dto.ai.EvidenceItem;
 import com.hmdp.dto.ai.ShopAnalysisContext;
-import com.hmdp.entity.ShopSummaryResult;
-import com.hmdp.repository.RedissonChatMemoryStore;
-import com.hmdp.utils.AiLogSanitizer;
+import com.hmdp.dto.ai.ShopSummaryResult;
+import com.hmdp.ai.memory.RedissonChatMemoryStore;
+import com.hmdp.ai.infra.AiLogSanitizer;
 import com.hmdp.utils.LocalCacheManager;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;

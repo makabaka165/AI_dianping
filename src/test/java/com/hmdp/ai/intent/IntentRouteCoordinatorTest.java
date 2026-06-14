@@ -1,6 +1,11 @@
 package com.hmdp.ai.intent;
 
-import com.hmdp.ai.orchestration.ShopAIRequestContext;
+import com.hmdp.dto.ai.IntentRouteCandidate;
+import com.hmdp.dto.ai.IntentRouteSource;
+import com.hmdp.dto.ai.IntentRoutingResult;
+import com.hmdp.dto.ai.IntentSlotState;
+import com.hmdp.dto.ai.ShopAIIntent;
+import com.hmdp.dto.ai.ShopAIRequestContext;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;

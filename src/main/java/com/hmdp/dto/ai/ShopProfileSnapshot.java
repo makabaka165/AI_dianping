@@ -1,6 +1,4 @@
 package com.hmdp.dto.ai;
-
-import com.hmdp.entity.Shop;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -21,20 +19,20 @@ public class ShopProfileSnapshot {
     private Integer score;
     private String openHours;
 
-    public static ShopProfileSnapshot from(Shop shop) {
-        if (shop == null) {
+    public static ShopProfileSnapshot from(ShopView shopView) {
+        if (shopView == null) {
             return null;
         }
         return ShopProfileSnapshot.builder()
-                .shopId(shop.getId())
-                .name(shop.getName())
-                .typeId(shop.getTypeId())
-                .area(shop.getArea())
-                .avgPrice(shop.getAvgPrice())
-                .sold(shop.getSold())
-                .comments(shop.getComments())
-                .score(shop.getScore())
-                .openHours(shop.getOpenHours())
+                .shopId(shopView.getId())
+                .name(shopView.getName())
+                .typeId(shopView.getTypeId())
+                .area(shopView.getArea())
+                .avgPrice(shopView.getAvgPrice())
+                .sold(shopView.getSold())
+                .comments(shopView.getComments())
+                .score(shopView.getScore())
+                .openHours(shopView.getOpenHours())
                 .build();
     }
 }

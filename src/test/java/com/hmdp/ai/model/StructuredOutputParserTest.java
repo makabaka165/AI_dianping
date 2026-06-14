@@ -3,7 +3,7 @@ package com.hmdp.ai.model;
 import com.hmdp.dto.ai.ShopAIAnalysisResult;
 import com.hmdp.dto.ai.ShopCompareResult;
 import com.hmdp.dto.ai.ShopRecommendResult;
-import com.hmdp.entity.Shop;
+import com.hmdp.dto.ai.ShopView;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -37,7 +37,7 @@ class StructuredOutputParserTest {
         ShopRecommendResult recommend = parser.parseRecommend(
                 "{\"userPreference\":\"约会\",\"category\":\"餐厅\",\"message\":\"推荐\","
                         + "\"items\":[{\"rank\":1,\"shopId\":3,\"reason\":\"安静\",\"evidenceIds\":[\"shop_profile:3\"]}]}",
-                "约会", "餐厅", List.of(new Shop().setId(3L).setName("店铺C")));
+                "约会", "餐厅", List.of(ShopView.builder().id(3L).name("店铺C").build()));
         assertThat(recommend.getItems()).hasSize(1);
         assertThat(recommend.getItems().get(0).getShopName()).isEqualTo("店铺C");
     }

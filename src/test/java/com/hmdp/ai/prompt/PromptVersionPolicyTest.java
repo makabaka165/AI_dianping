@@ -1,6 +1,6 @@
 package com.hmdp.ai.prompt;
 
-import com.hmdp.ai.intent.ShopAIIntent;
+import com.hmdp.dto.ai.ShopAIIntent;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
 

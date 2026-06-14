@@ -1,5 +1,8 @@
 package com.hmdp.ai.intent;
 
+import com.hmdp.dto.ai.IntentRouteCandidate;
+import com.hmdp.dto.ai.IntentRouteSource;
+import com.hmdp.dto.ai.ShopAIIntent;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;

@@ -1,9 +1,9 @@
 package com.hmdp.ai.prompt;
 
-import com.hmdp.ai.intent.IntentRouteCandidate;
-import com.hmdp.ai.intent.IntentSlotState;
-import com.hmdp.ai.intent.ShopAIIntent;
-import com.hmdp.ai.orchestration.ShopAIRequestContext;
+import com.hmdp.dto.ai.IntentRouteCandidate;
+import com.hmdp.dto.ai.IntentSlotState;
+import com.hmdp.dto.ai.ShopAIIntent;
+import com.hmdp.dto.ai.ShopAIRequestContext;
 import com.hmdp.dto.ai.ShopAnalysisContext;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;

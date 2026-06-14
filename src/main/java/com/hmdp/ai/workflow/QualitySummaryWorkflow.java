@@ -5,7 +5,9 @@ import com.hmdp.ai.guard.GovernedGeneration;
 import com.hmdp.ai.guard.QualityGuard;
 import com.hmdp.ai.memory.MemoryService;
 import com.hmdp.ai.model.ModelGateway;
-import com.hmdp.ai.orchestration.ShopAIRequestContext;
+import com.hmdp.dto.ai.ShopAIRequestContext;
+import com.hmdp.ai.port.ReviewDataPort;
+import com.hmdp.ai.port.ShopDataPort;
 import com.hmdp.ai.prompt.EvidencePromptSerializer;
 import com.hmdp.ai.prompt.PromptTemplateRender;
 import com.hmdp.ai.prompt.PromptTemplateRegistry;
@@ -13,16 +15,14 @@ import com.hmdp.ai.workflow.request.QualitySummaryWorkflowRequest;
 import com.hmdp.ai.workflow.request.SummaryWorkflowRequest;
 import com.hmdp.dto.ai.EvidenceItem;
 import com.hmdp.dto.ai.EvidenceType;
+import com.hmdp.dto.ai.ReviewDoc;
 import com.hmdp.dto.ai.ShopAIAnalysisResult;
 import com.hmdp.dto.ai.ShopAnalysisContext;
 import com.hmdp.dto.ai.ShopProfileSnapshot;
-import com.hmdp.entity.Blog;
-import com.hmdp.entity.Shop;
-import com.hmdp.entity.ShopSummaryResult;
-import com.hmdp.mapper.BlogMapper;
-import com.hmdp.mapper.ShopMapper;
-import com.hmdp.service.AiMetricsService;
-import com.hmdp.service.AiResultCacheService;
+import com.hmdp.dto.ai.ShopView;
+import com.hmdp.dto.ai.ShopSummaryResult;
+import com.hmdp.ai.infra.AiMetricsService;
+import com.hmdp.ai.infra.AiResultCacheService;
 import com.hmdp.utils.LocalCacheManager;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -42,10 +42,10 @@ public class QualitySummaryWorkflow {
     private static final String ANALYSIS_TYPE = "quality_summary";
 
     @Resource
-    private BlogMapper blogMapper;
+    private ReviewDataPort reviewDataPort;
 
     @Resource
-    private ShopMapper shopMapper;
+    private ShopDataPort shopDataPort;
 
     @Resource
     private SummaryWorkflow summaryWorkflow;
@@ -88,7 +88,7 @@ public class QualitySummaryWorkflow {
         }
         int minLiked = request.getMinLiked() == null ? 5 : Math.max(0, request.getMinLiked());
         int limit = normalizeLimit(request.getLimit(), 10);
-        List<Blog> blogs = blogMapper.selectQualityBlogsByShopId(shopId, minLiked, limit);
+        List<ReviewDoc> blogs = reviewDataPort.findQualityReviews(shopId, minLiked, limit);
         if (blogs == null || blogs.isEmpty()) {
             return summaryWorkflow.execute(requestContext, SummaryWorkflowRequest.builder()
                     .shopId(shopId)
@@ -174,13 +174,13 @@ public class QualitySummaryWorkflow {
         return generated.getValue();
     }
 
-    private ShopAnalysisContext buildContext(Long shopId, List<Blog> blogs) {
+    private ShopAnalysisContext buildContext(Long shopId, List<ReviewDoc> blogs) {
         LocalDateTime latest = blogs.stream()
-                .map(Blog::getCreateTime)
+                .map(ReviewDoc::getCreateTime)
                 .filter(time -> time != null)
                 .max(Comparator.naturalOrder())
                 .orElse(null);
-        Shop shop = shopMapper.selectById(shopId);
+        ShopView shop = shopDataPort.getShop(shopId);
         ShopProfileSnapshot profile = ShopProfileSnapshot.from(shop);
         List<EvidenceItem> evidence = blogs.stream()
                 .map(blog -> EvidenceItem.builder()
