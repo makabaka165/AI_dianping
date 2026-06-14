@@ -2,8 +2,13 @@ package com.hmdp.controller;
 
 import cn.dev33.satoken.annotation.SaCheckPermission;
 import com.hmdp.ai.application.ShopAICacheInvalidationService;
+import com.hmdp.ai.task.AiTaskService;
+import com.hmdp.dto.ai.AiTask;
+import com.hmdp.dto.ai.AiTaskStatus;
+import com.hmdp.dto.ai.AiTaskType;
 import com.hmdp.dto.ai.ShopRagRebuildResult;
 import com.hmdp.ai.retrieval.ShopReviewVectorIndexService;
+import com.hmdp.service.CurrentUserService;
 import com.hmdp.service.ShopStatsService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -15,10 +20,16 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 import java.lang.reflect.Method;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -35,6 +46,12 @@ class ShopAIRagAdminControllerTest {
     @Mock
     private ShopStatsService shopStatsService;
 
+    @Mock
+    private AiTaskService aiTaskService;
+
+    @Mock
+    private CurrentUserService currentUserService;
+
     private MockMvc mockMvc;
 
     @BeforeEach
@@ -43,6 +60,8 @@ class ShopAIRagAdminControllerTest {
         ReflectionTestUtils.setField(controller, "shopReviewVectorIndexService", vectorIndexService);
         ReflectionTestUtils.setField(controller, "shopAICacheInvalidationService", cacheInvalidationService);
         ReflectionTestUtils.setField(controller, "shopStatsService", shopStatsService);
+        ReflectionTestUtils.setField(controller, "aiTaskService", aiTaskService);
+        ReflectionTestUtils.setField(controller, "currentUserService", currentUserService);
         mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
     }
 
@@ -113,14 +132,76 @@ class ShopAIRagAdminControllerTest {
     }
 
     @Test
+    void submitRebuildAllTaskShouldReturnTaskId() throws Exception {
+        when(currentUserService.getCurrentUserId()).thenReturn(99L);
+        when(aiTaskService.submit(eq(AiTaskType.RAG_REBUILD_ALL), anyMap(), eq("99"))).thenReturn("task-all");
+
+        mockMvc.perform(post("/api/shop-summary/admin/rag/tasks/rebuild")
+                        .param("shopLimit", "10")
+                        .param("perShopLimit", "20"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.taskId").value("task-all"));
+
+        verify(aiTaskService).submit(eq(AiTaskType.RAG_REBUILD_ALL), anyMap(), eq("99"));
+    }
+
+    @Test
+    void submitRebuildShopTaskShouldReturnTaskId() throws Exception {
+        when(currentUserService.getCurrentUserId()).thenReturn(99L);
+        when(aiTaskService.submit(eq(AiTaskType.RAG_REBUILD_SHOP), anyMap(), eq("99"))).thenReturn("task-shop");
+
+        mockMvc.perform(post("/api/shop-summary/admin/rag/tasks/shops/7/rebuild")
+                        .param("limit", "20"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.taskId").value("task-shop"));
+
+        verify(aiTaskService).submit(eq(AiTaskType.RAG_REBUILD_SHOP), anyMap(), eq("99"));
+    }
+
+    @Test
+    void getTaskShouldReturnTaskWhenExists() throws Exception {
+        AiTask task = AiTask.builder()
+                .taskId("task-1")
+                .type(AiTaskType.RAG_REBUILD_ALL)
+                .status(AiTaskStatus.SUCCESS)
+                .params(new LinkedHashMap<>())
+                .build();
+        when(aiTaskService.get("task-1")).thenReturn(Optional.of(task));
+
+        mockMvc.perform(get("/api/shop-summary/admin/rag/tasks/task-1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.taskId").value("task-1"))
+                .andExpect(jsonPath("$.data.status").value("SUCCESS"));
+    }
+
+    @Test
+    void getTaskShouldReturnFailWhenMissing() throws Exception {
+        when(aiTaskService.get("missing")).thenReturn(Optional.empty());
+
+        mockMvc.perform(get("/api/shop-summary/admin/rag/tasks/missing"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.errorMsg").value("任务不存在"));
+    }
+
+    @Test
     void endpointsShouldRequireRagManagePermission() throws Exception {
         Method rebuildShop = ShopAIRagAdminController.class.getMethod("rebuildShop", Long.class, Integer.class);
         Method compactShop = ShopAIRagAdminController.class.getMethod("compactShop", Long.class, Integer.class);
         Method rebuildAll = ShopAIRagAdminController.class.getMethod("rebuildAll", Integer.class, Integer.class);
+        Method submitRebuildAllTask = ShopAIRagAdminController.class.getMethod("submitRebuildAllTask", Integer.class, Integer.class);
+        Method submitRebuildShopTask = ShopAIRagAdminController.class.getMethod("submitRebuildShopTask", Long.class, Integer.class);
+        Method getTask = ShopAIRagAdminController.class.getMethod("getTask", String.class);
 
         assertThat(rebuildShop.getAnnotation(SaCheckPermission.class).value()).containsExactly("ai:rag:manage");
         assertThat(compactShop.getAnnotation(SaCheckPermission.class).value()).containsExactly("ai:rag:manage");
         assertThat(rebuildAll.getAnnotation(SaCheckPermission.class).value()).containsExactly("ai:rag:manage");
+        assertThat(submitRebuildAllTask.getAnnotation(SaCheckPermission.class).value()).containsExactly("ai:rag:manage");
+        assertThat(submitRebuildShopTask.getAnnotation(SaCheckPermission.class).value()).containsExactly("ai:rag:manage");
+        assertThat(getTask.getAnnotation(SaCheckPermission.class).value()).containsExactly("ai:rag:manage");
     }
 
     private ShopRagRebuildResult result(Long shopId) {

@@ -1,12 +1,17 @@
 package com.hmdp.controller;
 
 import cn.dev33.satoken.annotation.SaCheckPermission;
+import com.hmdp.ai.task.AiTaskService;
 import com.hmdp.dto.Result;
+import com.hmdp.dto.ai.AiTask;
+import com.hmdp.dto.ai.AiTaskType;
 import com.hmdp.dto.ai.ShopRagRebuildResult;
 import com.hmdp.ai.application.ShopAICacheInvalidationService;
 import com.hmdp.ai.retrieval.ShopReviewVectorIndexService;
+import com.hmdp.service.CurrentUserService;
 import com.hmdp.service.ShopStatsService;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -14,6 +19,9 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import javax.annotation.Resource;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.Optional;
 
 @RestController
 @RequestMapping("/api/shop-summary/admin/rag")
@@ -28,6 +36,12 @@ public class ShopAIRagAdminController {
 
     @Resource
     private ShopStatsService shopStatsService;
+
+    @Resource
+    private AiTaskService aiTaskService;
+
+    @Resource
+    private CurrentUserService currentUserService;
 
     @PostMapping("/shops/{shopId}/rebuild")
     @SaCheckPermission("ai:rag:manage")
@@ -73,5 +87,56 @@ public class ShopAIRagAdminController {
             log.error("全量重建评价 RAG 索引失败", e);
             return Result.fail("全量重建评价 RAG 索引失败");
         }
+    }
+
+    @PostMapping("/tasks/rebuild")
+    @SaCheckPermission("ai:rag:manage")
+    public Result submitRebuildAllTask(@RequestParam(value = "shopLimit", required = false) Integer shopLimit,
+                                       @RequestParam(value = "perShopLimit", required = false) Integer perShopLimit) {
+        try {
+            Map<String, Object> params = new LinkedHashMap<>();
+            params.put("shopLimit", shopLimit);
+            params.put("perShopLimit", perShopLimit);
+            String taskId = aiTaskService.submit(AiTaskType.RAG_REBUILD_ALL, params, ownerUserId());
+            return Result.ok(taskIdData(taskId));
+        } catch (RuntimeException e) {
+            log.error("Submit full RAG rebuild task failed", e);
+            return Result.fail("提交全量 RAG 重建任务失败");
+        }
+    }
+
+    @PostMapping("/tasks/shops/{shopId}/rebuild")
+    @SaCheckPermission("ai:rag:manage")
+    public Result submitRebuildShopTask(@PathVariable Long shopId,
+                                        @RequestParam(value = "limit", required = false) Integer limit) {
+        try {
+            Map<String, Object> params = new LinkedHashMap<>();
+            params.put("shopId", shopId);
+            params.put("limit", limit);
+            String taskId = aiTaskService.submit(AiTaskType.RAG_REBUILD_SHOP, params, ownerUserId());
+            return Result.ok(taskIdData(taskId));
+        } catch (RuntimeException e) {
+            log.error("Submit shop RAG rebuild task failed, shopId={}", shopId, e);
+            return Result.fail("提交店铺 RAG 重建任务失败");
+        }
+    }
+
+    @GetMapping("/tasks/{taskId}")
+    @SaCheckPermission("ai:rag:manage")
+    public Result getTask(@PathVariable String taskId) {
+        Optional<AiTask> task = aiTaskService.get(taskId);
+        return task.map(Result::ok)
+                .orElseGet(() -> Result.fail("任务不存在"));
+    }
+
+    private String ownerUserId() {
+        Long userId = currentUserService == null ? null : currentUserService.getCurrentUserId();
+        return userId == null ? null : String.valueOf(userId);
+    }
+
+    private Map<String, Object> taskIdData(String taskId) {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("taskId", taskId);
+        return data;
     }
 }

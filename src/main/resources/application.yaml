@@ -51,6 +51,12 @@ hmdp:
         qa: shop-qa-v3
         compare: shop-compare-v3
         recommend: shop-recommend-v3
+    task:
+      enabled: ${HMDP_AI_TASK_ENABLED:true}
+      worker-threads: ${HMDP_AI_TASK_WORKER_THREADS:2}
+      result-ttl-hours: ${HMDP_AI_TASK_RESULT_TTL_HOURS:24}
+      queue-key: ${HMDP_AI_TASK_QUEUE_KEY:hmdp:ai:task:queue}
+      bucket-prefix: ${HMDP_AI_TASK_BUCKET_PREFIX:hmdp:ai:task:}
   cors:
     allowed-origin-patterns: ${HMDP_CORS_ALLOWED_ORIGIN_PATTERNS:http://localhost:*,http://127.0.0.1:*}
   voucher:
