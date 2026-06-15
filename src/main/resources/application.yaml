@@ -1,4 +1,15 @@
 hmdp:
+  redis:
+    redisson:
+      host: ${HMDP_REDIS_HOST:${spring.redis.host:127.0.0.1}}
+      port: ${HMDP_REDIS_PORT:${spring.redis.port:6379}}
+      password: ${HMDP_REDIS_PASSWORD:${spring.redis.password:}}
+      database: ${HMDP_REDIS_DATABASE:${spring.redis.database:0}}
+      ssl: ${HMDP_REDIS_SSL:false}
+      timeout-millis: ${HMDP_REDIS_TIMEOUT_MILLIS:3000}
+      connect-timeout-millis: ${HMDP_REDIS_CONNECT_TIMEOUT_MILLIS:3000}
+      retry-attempts: ${HMDP_REDIS_RETRY_ATTEMPTS:3}
+      retry-interval-millis: ${HMDP_REDIS_RETRY_INTERVAL_MILLIS:1500}
   cache:
     ttl-jitter-minutes: 5
     mutex:
@@ -101,6 +112,7 @@ spring:
   redis:
     host: 127.0.0.1
     port: 6379
+    database: 0
     lettuce:
       pool:
         max-active: 10

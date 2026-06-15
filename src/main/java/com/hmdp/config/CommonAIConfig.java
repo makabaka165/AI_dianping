@@ -4,19 +4,28 @@ import lombok.extern.slf4j.Slf4j;
 import org.redisson.Redisson;
 import org.redisson.api.RedissonClient;
 import org.redisson.config.Config;
+import org.redisson.config.SingleServerConfig;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.data.redis.RedisProperties;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.util.StringUtils;
 import org.springframework.web.client.RestTemplate;
 
-import javax.annotation.PostConstruct;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Proxy;
 import java.util.Collections;
 
 @Configuration
 @Slf4j
+@EnableConfigurationProperties(RedissonProperties.class)
 public class CommonAIConfig {
+
+    private static final String DEFAULT_REDIS_HOST = "127.0.0.1";
+    private static final int DEFAULT_REDIS_PORT = 6379;
+    private static final int DEFAULT_REDIS_DATABASE = 0;
 
     @Value("${hmdp.ai.redis-health-check:true}")
     private boolean redisHealthCheckEnabled;
@@ -25,12 +34,14 @@ public class CommonAIConfig {
     private boolean redissonFallbackEnabled;
 
     @Bean
-    public RedissonClient redissonClient() {
-        log.info("Initializing shared RedissonClient");
-        Config config = new Config();
-        config.useSingleServer().setAddress("redis://127.0.0.1:6379");
+    public RedissonClient redissonClient(RedissonProperties redissonProperties,
+                                         RedisProperties redisProperties) {
+        ResolvedRedissonProperties resolved = resolveRedissonProperties(redissonProperties, redisProperties);
+        log.info("Initializing shared RedissonClient, address={}, database={}",
+                resolved.maskedAddress(), resolved.database);
+        Config config = buildRedissonConfig(resolved);
         try {
-            return Redisson.create(config);
+            return createRedissonClient(config);
         } catch (RuntimeException e) {
             if (!redissonFallbackEnabled) {
                 throw e;
@@ -38,6 +49,25 @@ public class CommonAIConfig {
             log.warn("RedissonClient create failed, using no-op fallback because hmdp.ai.redisson-fallback=true", e);
             return noOpProxy(RedissonClient.class);
         }
+    }
+
+    Config buildRedissonConfig(ResolvedRedissonProperties resolved) {
+        Config config = new Config();
+        SingleServerConfig serverConfig = config.useSingleServer()
+                .setAddress(resolved.address())
+                .setDatabase(resolved.database)
+                .setTimeout(resolved.timeoutMillis)
+                .setConnectTimeout(resolved.connectTimeoutMillis)
+                .setRetryAttempts(resolved.retryAttempts)
+                .setRetryInterval(resolved.retryIntervalMillis);
+        if (StringUtils.hasText(resolved.password)) {
+            serverConfig.setPassword(resolved.password);
+        }
+        return config;
+    }
+
+    protected RedissonClient createRedissonClient(Config config) {
+        return Redisson.create(config);
     }
 
     @SuppressWarnings("unchecked")
@@ -93,19 +123,107 @@ public class CommonAIConfig {
         return new RestTemplate();
     }
 
-    @PostConstruct
-    public void validateRedisConnections() {
+    @Bean
+    public Object validateRedisConnections(ObjectProvider<RedissonClient> redissonClientProvider) {
         if (!redisHealthCheckEnabled) {
             log.info("skip Redis connection validation because hmdp.ai.redis-health-check=false");
-            return;
+            return new Object();
         }
         log.info("Validating Redis connection");
         try {
-            redissonClient().getBucket("health-check-session").set("ok");
-            log.info("Redis (6379) connection is healthy");
+            redissonClientProvider.getObject().getBucket("health-check-session").set("ok");
+            log.info("Redis connection is healthy");
         } catch (Exception e) {
-            log.error("Redis (6379) connection validation failed", e);
+            log.error("Redis connection validation failed", e);
         }
         log.info("Redis connection validation completed");
+        return new Object();
+    }
+
+    ResolvedRedissonProperties resolveRedissonProperties(RedissonProperties redissonProperties,
+                                                         RedisProperties redisProperties) {
+        String host = firstText(redissonProperties.getHost(), redisProperties.getHost(), DEFAULT_REDIS_HOST);
+        int port = firstPositive(redissonProperties.getPort(), redisProperties.getPort(), DEFAULT_REDIS_PORT);
+        String password = firstText(redissonProperties.getPassword(), redisProperties.getPassword(), null);
+        int database = firstNonNegative(redissonProperties.getDatabase(), redisProperties.getDatabase(), DEFAULT_REDIS_DATABASE);
+        boolean ssl = Boolean.TRUE.equals(redissonProperties.getSsl());
+        int timeoutMillis = positiveOrDefault(redissonProperties.getTimeoutMillis(), 3000);
+        int connectTimeoutMillis = positiveOrDefault(redissonProperties.getConnectTimeoutMillis(), 3000);
+        int retryAttempts = nonNegativeOrDefault(redissonProperties.getRetryAttempts(), 3);
+        int retryIntervalMillis = positiveOrDefault(redissonProperties.getRetryIntervalMillis(), 1500);
+        return new ResolvedRedissonProperties(host, port, password, database, ssl,
+                timeoutMillis, connectTimeoutMillis, retryAttempts, retryIntervalMillis);
+    }
+
+    private String firstText(String primary, String secondary, String fallback) {
+        if (StringUtils.hasText(primary)) {
+            return primary;
+        }
+        if (StringUtils.hasText(secondary)) {
+            return secondary;
+        }
+        return fallback;
+    }
+
+    private int firstPositive(Integer primary, int secondary, int fallback) {
+        if (primary != null && primary > 0) {
+            return primary;
+        }
+        if (secondary > 0) {
+            return secondary;
+        }
+        return fallback;
+    }
+
+    private int firstNonNegative(Integer primary, int secondary, int fallback) {
+        if (primary != null && primary >= 0) {
+            return primary;
+        }
+        if (secondary >= 0) {
+            return secondary;
+        }
+        return fallback;
+    }
+
+    private int positiveOrDefault(Integer value, int fallback) {
+        return value == null || value <= 0 ? fallback : value;
+    }
+
+    private int nonNegativeOrDefault(Integer value, int fallback) {
+        return value == null || value < 0 ? fallback : value;
+    }
+
+    static class ResolvedRedissonProperties {
+        private final String host;
+        private final int port;
+        private final String password;
+        private final int database;
+        private final boolean ssl;
+        private final int timeoutMillis;
+        private final int connectTimeoutMillis;
+        private final int retryAttempts;
+        private final int retryIntervalMillis;
+
+        private ResolvedRedissonProperties(String host, int port, String password, int database, boolean ssl,
+                                           int timeoutMillis, int connectTimeoutMillis,
+                                           int retryAttempts, int retryIntervalMillis) {
+            this.host = host;
+            this.port = port;
+            this.password = password;
+            this.database = database;
+            this.ssl = ssl;
+            this.timeoutMillis = timeoutMillis;
+            this.connectTimeoutMillis = connectTimeoutMillis;
+            this.retryAttempts = retryAttempts;
+            this.retryIntervalMillis = retryIntervalMillis;
+        }
+
+        private String address() {
+            return (ssl ? "rediss://" : "redis://") + host + ":" + port;
+        }
+
+        private String maskedAddress() {
+            return address();
+        }
     }
 }

@@ -4,12 +4,14 @@ import lombok.Data;
 
 import javax.validation.constraints.NotBlank;
 import javax.validation.constraints.NotNull;
+import javax.validation.constraints.Positive;
 import javax.validation.constraints.Size;
 
 @Data
 public class BlogCreateRequest {
 
     @NotNull(message = "shopId is required")
+    @Positive(message = "shopId must be greater than 0")
     private Long shopId;
 
     @NotBlank(message = "title is required")

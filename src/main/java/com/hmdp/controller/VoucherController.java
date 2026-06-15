@@ -4,8 +4,10 @@ package com.hmdp.controller;
 import cn.dev33.satoken.annotation.SaCheckPermission;
 import cn.dev33.satoken.annotation.SaMode;
 import com.hmdp.dto.Result;
-import com.hmdp.entity.Voucher;
+import com.hmdp.dto.SeckillVoucherCreateDTO;
+import com.hmdp.dto.VoucherCreateDTO;
 import com.hmdp.service.IVoucherService;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
 import javax.annotation.Resource;
@@ -26,26 +28,24 @@ public class VoucherController {
 
     /**
      * 新增秒杀券
-     * @param voucher 优惠券信息，包含秒杀信息
+     * @param request 优惠券信息，包含秒杀信息
      * @return 优惠券id
      */
     @PostMapping("seckill")
     @SaCheckPermission(value = {"voucher:create:own", "voucher:manage"}, mode = SaMode.OR)
-    public Result addSeckillVoucher(@RequestBody Voucher voucher) {
-        voucherService.addSeckillVoucher(voucher);
-        return Result.ok(voucher.getId());
+    public Result addSeckillVoucher(@RequestBody @Validated SeckillVoucherCreateDTO request) {
+        return voucherService.addSeckillVoucher(request);
     }
 
     /**
      * 新增普通券
-     * @param voucher 优惠券信息
+     * @param request 优惠券信息
      * @return 优惠券id
      */
     @PostMapping
     @SaCheckPermission(value = {"voucher:create:own", "voucher:manage"}, mode = SaMode.OR)
-    public Result addVoucher(@RequestBody Voucher voucher) {
-        voucherService.save(voucher);
-        return Result.ok(voucher.getId());
+    public Result addVoucher(@RequestBody @Validated VoucherCreateDTO request) {
+        return voucherService.addVoucher(request);
     }
 
 

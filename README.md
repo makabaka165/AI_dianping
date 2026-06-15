@@ -165,7 +165,9 @@ SSE 流式接口继续保留 `delta.text` 事件；其中的 `evidence` 事件�
 git clone https://github.com/makabaka165/AI_dianping.git
 cd AI_dianping
 
-# 初始化数据库：执行 src/main/resources/db/hmdp.sql
+# 初始化数据库：先导入 `src/main/resources/db/hmdp.sql` 作为 demo baseline 数据。
+# 启动应用时 Flyway 会自动执行 `src/main/resources/db/migration`，补齐当前 schema。
+# 不要只导入 `hmdp.sql` 后关闭 Flyway，否则可能缺少当前代码依赖的字段、索引或权限表。
 export DASHSCOPE_API_KEY=your_dashscope_api_key
 
 docker run -d -p 6379:6379 redis:7
@@ -195,6 +197,17 @@ rag:
     fallback-to-memory: false
 
 hmdp:
+  redis:
+    redisson:
+      host: ${HMDP_REDIS_HOST:${spring.redis.host:127.0.0.1}}
+      port: ${HMDP_REDIS_PORT:${spring.redis.port:6379}}
+      password: ${HMDP_REDIS_PASSWORD:${spring.redis.password:}}
+      database: ${HMDP_REDIS_DATABASE:${spring.redis.database:0}}
+      ssl: ${HMDP_REDIS_SSL:false}
+      timeout-millis: ${HMDP_REDIS_TIMEOUT_MILLIS:3000}
+      connect-timeout-millis: ${HMDP_REDIS_CONNECT_TIMEOUT_MILLIS:3000}
+      retry-attempts: ${HMDP_REDIS_RETRY_ATTEMPTS:3}
+      retry-interval-millis: ${HMDP_REDIS_RETRY_INTERVAL_MILLIS:1500}
   ai:
     quota:
       enabled: true
@@ -223,6 +236,14 @@ sa-token:
   active-timeout: 7200
   is-share: false
 ```
+
+Database initialization: `hmdp.sql` is retained as the demo baseline with sample data, while Flyway migrations are the current schema alignment path. For a new local/demo environment, first import `src/main/resources/db/hmdp.sql`, then start the application or run Flyway migrate so `src/main/resources/db/migration` can finish schema alignment. `spring.flyway.baseline-on-migrate=true` is kept so an existing non-empty schema created from `hmdp.sql` can be brought under Flyway management on first application startup. Do not disable Flyway after importing `hmdp.sql`.
+
+Flyway production guidance: local/demo environments may let the application run Flyway migrations automatically. For real production, prefer running Flyway migrate in CI/CD before releasing the application instead of relying on application startup to change the database. Once a migration has run in production, do not edit it casually; add a new migration for follow-up schema fixes. If a checksum mismatch appears because an old migration was made idempotent, local/dev may use `flyway repair`; staging should back up and confirm semantic equivalence before repair; production should not repair blindly, and should usually restore the original migration plus add a new patch migration.
+
+Redis configuration: business cache, Spring Redis, Redisson, distributed locks, Redis Stream, AI memory, quota, and delayed tasks use the same business Redis on `6379` by default. Production should explicitly set `HMDP_REDIS_HOST`, `HMDP_REDIS_PORT`, `HMDP_REDIS_PASSWORD`, `HMDP_REDIS_DATABASE`, and `HMDP_REDIS_SSL`, keep Spring Redis and Redisson pointed at that same business Redis, keep `hmdp.ai.redisson-fallback=false`, and never log the Redis password.
+
+RAG Redis configuration: vector retrieval uses a separate Redis Stack instance through `rag.redis.host` and `rag.redis.port`, with default port `6380`. Keep RAG Redis Stack separate from the business Redis/Redisson configuration. Keep `rag.review.dimension` aligned with the embedding model dimension; the current value is `1024`. Production should keep `rag.redis.fallback-to-memory=false` to avoid inconsistent in-memory vector indexes across instances.
 
 Security defaults: forwarded IP and device fingerprint headers are not trusted unless explicitly enabled; mock SMS code exposure is disabled by default. Keep `HMDP_SMS_MOCK_ENABLED=false`, `hmdp.security.device-fingerprint.trust-client-header=false`, and `SA_TOKEN_IS_SHARE=false` in production. Enable forwarded headers only behind real trusted reverse proxies, and set `trusted-proxies` to explicit proxy egress IPs, never `*`, broad CIDRs, or user networks. The `prod`/`production` profile fails startup when mock SMS is enabled, client device fingerprint headers are trusted, Sa-Token token sharing is enabled, or forwarded headers are enabled with empty/wildcard trusted proxies. Defaults are `SA_TOKEN_TIMEOUT=604800`, `SA_TOKEN_ACTIVE_TIMEOUT=7200`, `SA_TOKEN_IS_CONCURRENT=true`, and blog image owner TTL 7 days. For admin or merchant accounts, use shorter session timeouts where possible.
 

@@ -14,5 +14,17 @@ CREATE TABLE IF NOT EXISTS `sys_merchant_shop` (
   KEY `idx_sys_merchant_shop_merchant_user_id` (`merchant_user_id`) USING BTREE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Merchant shop ownership';
 
-ALTER TABLE `sys_login_log`
-  ADD COLUMN `action` varchar(32) DEFAULT NULL COMMENT 'login/logout/register' AFTER `login_type`;
+SET @col_exists := (
+    SELECT COUNT(*)
+    FROM information_schema.columns
+    WHERE table_schema = DATABASE()
+      AND table_name = 'sys_login_log'
+      AND column_name = 'action'
+);
+SET @sql := IF(@col_exists = 0,
+    'ALTER TABLE sys_login_log ADD COLUMN action varchar(32) DEFAULT NULL COMMENT ''login/logout/register'' AFTER login_type',
+    'SELECT 1'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;

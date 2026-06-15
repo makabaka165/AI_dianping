@@ -5,6 +5,7 @@ import cn.hutool.core.util.StrUtil;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.hmdp.common.ErrorCode;
 import com.hmdp.config.BlogProperties;
 import com.hmdp.dto.BlogCreateRequest;
 import com.hmdp.dto.BlogDetailVO;
@@ -21,6 +22,7 @@ import com.hmdp.event.BlogLikeChangedEvent;
 import com.hmdp.event.BlogPublishedEvent;
 import com.hmdp.mapper.BlogLikeMapper;
 import com.hmdp.mapper.BlogMapper;
+import com.hmdp.mapper.ShopMapper;
 import com.hmdp.service.BlogImageOwnershipService;
 import com.hmdp.service.CurrentUserService;
 import com.hmdp.service.IBlogService;
@@ -87,6 +89,9 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
 
     @Resource
     private BlogImageOwnershipService blogImageOwnershipService;
+
+    @Resource
+    private ShopMapper shopMapper;
 
     @Override
     public Result queryHotBlog(Integer current) {
@@ -214,6 +219,13 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
     @Override
     @Transactional
     public Result saveBlog(BlogCreateRequest request) {
+        if (request == null || isInvalidId(request.getShopId())) {
+            return Result.fail(ErrorCode.PARAM_ERROR, "shopId must be greater than 0");
+        }
+        if (!existsActiveShop(request.getShopId())) {
+            return Result.fail(ErrorCode.SHOP_NOT_FOUND, "shop does not exist");
+        }
+
         Long currentUserId = currentUserService.requireCurrentUserId();
         LocalDateTime now = LocalDateTime.now();
         Blog blog = new Blog()
@@ -240,6 +252,12 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
         ));
         blogImageOwnershipService.refreshOwnerTtlForUserImages(request.getImages(), currentUserId);
         return Result.ok(blog.getId());
+    }
+
+    private boolean existsActiveShop(Long shopId) {
+        Integer count = shopMapper.selectCount(new QueryWrapper<com.hmdp.entity.Shop>()
+                .eq("id", shopId));
+        return count != null && count > 0;
     }
 
     @Override

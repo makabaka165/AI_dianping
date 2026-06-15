@@ -1,11 +1,49 @@
 -- Shop and category enterprise follow-up changes.
 
-ALTER TABLE `tb_shop`
-  ADD COLUMN `version` int NOT NULL DEFAULT 0 COMMENT 'Optimistic lock version' AFTER `open_hours`;
+SET @col_exists := (
+    SELECT COUNT(*)
+    FROM information_schema.columns
+    WHERE table_schema = DATABASE()
+      AND table_name = 'tb_shop'
+      AND column_name = 'version'
+);
+SET @sql := IF(@col_exists = 0,
+    'ALTER TABLE tb_shop ADD COLUMN version int NOT NULL DEFAULT 0 COMMENT ''Optimistic lock version'' AFTER open_hours',
+    'SELECT 1'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
 
-ALTER TABLE `tb_shop_type`
-  ADD COLUMN `status` tinyint(1) NOT NULL DEFAULT 1 COMMENT '1 enabled, 0 disabled' AFTER `sort`,
-  ADD KEY `idx_tb_shop_type_status_sort` (`status`, `sort`) USING BTREE;
+SET @col_exists := (
+    SELECT COUNT(*)
+    FROM information_schema.columns
+    WHERE table_schema = DATABASE()
+      AND table_name = 'tb_shop_type'
+      AND column_name = 'status'
+);
+SET @sql := IF(@col_exists = 0,
+    'ALTER TABLE tb_shop_type ADD COLUMN status tinyint(1) NOT NULL DEFAULT 1 COMMENT ''1 enabled, 0 disabled'' AFTER sort',
+    'SELECT 1'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @idx_exists := (
+    SELECT COUNT(*)
+    FROM information_schema.statistics
+    WHERE table_schema = DATABASE()
+      AND table_name = 'tb_shop_type'
+      AND index_name = 'idx_tb_shop_type_status_sort'
+);
+SET @sql := IF(@idx_exists = 0,
+    'ALTER TABLE tb_shop_type ADD KEY idx_tb_shop_type_status_sort (status, sort) USING BTREE',
+    'SELECT 1'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
 
 INSERT INTO `sys_permission` (`permission_code`, `permission_name`, `status`, `remark`) VALUES
 ('shop:create:own', 'Create own shop', 1, 'Merchant shop permission'),
