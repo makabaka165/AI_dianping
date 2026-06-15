@@ -3,7 +3,12 @@ package com.hmdp.controller;
 import cn.dev33.satoken.annotation.SaCheckLogin;
 import cn.hutool.core.io.FileUtil;
 import cn.hutool.core.util.StrUtil;
+import com.hmdp.common.ErrorCode;
 import com.hmdp.dto.Result;
+import com.hmdp.service.BlogImageOwnershipService;
+import com.hmdp.service.CurrentUserService;
+import com.hmdp.utils.BlogImagePathUtils;
+import com.hmdp.utils.ImageTypeValidator;
 import com.hmdp.utils.SystemConstants;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -19,6 +24,8 @@ import java.util.Locale;
 import java.util.Set;
 import java.util.UUID;
 
+import javax.annotation.Resource;
+
 @Slf4j
 @RestController
 @RequestMapping("upload")
@@ -26,6 +33,12 @@ public class UploadController {
 
     private static final long MAX_BLOG_IMAGE_SIZE = 5L * 1024L * 1024L;
     private static final Set<String> ALLOWED_IMAGE_SUFFIXES = Set.of("jpg", "jpeg", "png", "webp");
+
+    @Resource
+    private CurrentUserService currentUserService;
+
+    @Resource
+    private BlogImageOwnershipService blogImageOwnershipService;
 
     @PostMapping("blog")
     @SaCheckLogin
@@ -36,6 +49,7 @@ public class UploadController {
         FileUtil.mkdir(target.getParentFile());
         try {
             image.transferTo(target);
+            blogImageOwnershipService.registerOwner(relativeName, currentUserService.requireCurrentUserId());
             String publicName = "/" + relativeName;
             log.debug("blog image uploaded, file={}", publicName);
             return Result.ok(publicName);
@@ -47,11 +61,17 @@ public class UploadController {
     @DeleteMapping("blog")
     @SaCheckLogin
     public Result deleteBlogImg(@RequestParam("name") String filename) {
-        File file = resolveBlogImageFile(filename);
+        String relativeName = normalizeBlogImageName(filename);
+        Long currentUserId = currentUserService.requireCurrentUserId();
+        File file = resolveBlogImageFile(relativeName);
         if (!file.isFile()) {
             return Result.ok();
         }
+        if (!blogImageOwnershipService.canDelete(relativeName, currentUserId)) {
+            return Result.fail(ErrorCode.FORBIDDEN, "no permission to delete this image");
+        }
         FileUtil.del(file);
+        blogImageOwnershipService.clearOwner(relativeName);
         return Result.ok();
     }
 
@@ -66,6 +86,7 @@ public class UploadController {
         if (!ALLOWED_IMAGE_SUFFIXES.contains(suffix)) {
             throw new IllegalArgumentException("image type only supports jpg, jpeg, png and webp");
         }
+        ImageTypeValidator.validateMagicBytes(image, suffix);
     }
 
     private String createNewFileName(String originalFilename) {
@@ -99,19 +120,6 @@ public class UploadController {
     }
 
     private String normalizeBlogImageName(String filename) {
-        if (StrUtil.isBlank(filename)) {
-            throw new IllegalArgumentException("image filename is required");
-        }
-        String normalized = filename.replace('\\', '/');
-        while (normalized.startsWith("/")) {
-            normalized = normalized.substring(1);
-        }
-        if (normalized.startsWith("imgs/")) {
-            normalized = normalized.substring("imgs/".length());
-        }
-        if (!normalized.startsWith("blogs/") || normalized.contains("../")) {
-            throw new IllegalArgumentException("image filename is invalid");
-        }
-        return normalized;
+        return BlogImagePathUtils.normalizeBlogImageName(filename);
     }
 }

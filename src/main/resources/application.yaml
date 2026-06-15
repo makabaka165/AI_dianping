@@ -19,6 +19,19 @@ hmdp:
     feed-fetch-multiplier: 2
     feed-inbox-max-size: 1000
     large-author-fans-threshold: 10000
+  security:
+    forwarded-headers:
+      enabled: false
+      trusted-proxies: 127.0.0.1,::1
+    device-fingerprint:
+      trust-client-header: false
+  sms:
+    mock:
+      enabled: ${HMDP_SMS_MOCK_ENABLED:false}
+    log-code: false
+  upload:
+    blog-image:
+      owner-ttl-days: 7
   ai:
     redis-health-check: true
     redisson-fallback: false
@@ -107,10 +120,10 @@ mybatis-plus:
 sa-token:
   token-name: authorization
   token-prefix: Bearer
-  timeout: 2592000
-  active-timeout: -1
-  is-concurrent: true
-  is-share: true
+  timeout: ${SA_TOKEN_TIMEOUT:604800}
+  active-timeout: ${SA_TOKEN_ACTIVE_TIMEOUT:7200}
+  is-concurrent: ${SA_TOKEN_IS_CONCURRENT:true}
+  is-share: ${SA_TOKEN_IS_SHARE:false}
   token-style: uuid
   is-log: true
 

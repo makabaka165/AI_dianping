@@ -21,6 +21,7 @@ import com.hmdp.event.BlogLikeChangedEvent;
 import com.hmdp.event.BlogPublishedEvent;
 import com.hmdp.mapper.BlogLikeMapper;
 import com.hmdp.mapper.BlogMapper;
+import com.hmdp.service.BlogImageOwnershipService;
 import com.hmdp.service.CurrentUserService;
 import com.hmdp.service.IBlogService;
 import com.hmdp.service.IFollowService;
@@ -83,6 +84,9 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
 
     @Resource
     private BlogProperties blogProperties;
+
+    @Resource
+    private BlogImageOwnershipService blogImageOwnershipService;
 
     @Override
     public Result queryHotBlog(Integer current) {
@@ -234,6 +238,7 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
                 currentUserId,
                 toEpochMilli(now)
         ));
+        blogImageOwnershipService.refreshOwnerTtlForUserImages(request.getImages(), currentUserId);
         return Result.ok(blog.getId());
     }
 

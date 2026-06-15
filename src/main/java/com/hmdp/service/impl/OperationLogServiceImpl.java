@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.hmdp.entity.OperationLog;
 import com.hmdp.mapper.OperationLogMapper;
+import com.hmdp.security.RequestContextResolver;
 import com.hmdp.service.CurrentUserService;
 import com.hmdp.service.IOperationLogService;
 import com.hmdp.utils.RequestContextUtils;
@@ -25,6 +26,9 @@ public class OperationLogServiceImpl implements IOperationLogService {
     @Resource
     private CurrentUserService currentUserService;
 
+    @Resource
+    private RequestContextResolver requestContextResolver;
+
     @Override
     public void record(String module, String operation, String targetType, String targetId,
                        String detail, boolean success, String failReason) {
@@ -38,7 +42,7 @@ public class OperationLogServiceImpl implements IOperationLogService {
                 .setDetail(StrUtil.maxLength(detail, 1000))
                 .setSuccess(success ? 1 : 0)
                 .setFailReason(StrUtil.maxLength(failReason, 255))
-                .setIp(RequestContextUtils.getClientIp(request))
+                .setIp(requestContextResolver.getClientIp(request))
                 .setUserAgent(RequestContextUtils.getUserAgent(request))
                 .setOperationTime(LocalDateTime.now());
         try {

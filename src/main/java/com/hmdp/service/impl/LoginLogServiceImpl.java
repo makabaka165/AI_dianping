@@ -3,6 +3,7 @@ package com.hmdp.service.impl;
 import cn.hutool.core.util.StrUtil;
 import com.hmdp.entity.LoginLog;
 import com.hmdp.mapper.LoginLogMapper;
+import com.hmdp.security.RequestContextResolver;
 import com.hmdp.service.ILoginLogService;
 import com.hmdp.utils.RequestContextUtils;
 import lombok.extern.slf4j.Slf4j;
@@ -22,6 +23,9 @@ public class LoginLogServiceImpl implements ILoginLogService {
 
     @Resource
     private LoginLogMapper loginLogMapper;
+
+    @Resource
+    private RequestContextResolver requestContextResolver;
 
     @Override
     public void recordLogin(Long userId, String phone, boolean success, String failReason, String tokenId) {
@@ -65,7 +69,7 @@ public class LoginLogServiceImpl implements ILoginLogService {
                 .setPhone(phone)
                 .setSuccess(success)
                 .setFailReason(failReason)
-                .setIp(RequestContextUtils.getClientIp(request))
+                .setIp(requestContextResolver.getClientIp(request))
                 .setUserAgent(RequestContextUtils.getUserAgent(request))
                 .setTokenId(StrUtil.maxLength(tokenId, 128))
                 .setRiskLevel(0)

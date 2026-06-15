@@ -205,7 +205,26 @@ hmdp:
       canary:
         enabled: false
         ratio: 0
+  security:
+    forwarded-headers:
+      enabled: false
+      trusted-proxies: 127.0.0.1,::1
+    device-fingerprint:
+      trust-client-header: false
+  sms:
+    mock:
+      enabled: false
+  upload:
+    blog-image:
+      owner-ttl-days: 7
+
+sa-token:
+  timeout: 604800
+  active-timeout: 7200
+  is-share: false
 ```
+
+Security defaults: forwarded IP and device fingerprint headers are not trusted unless explicitly enabled; mock SMS code exposure is disabled by default. Keep `HMDP_SMS_MOCK_ENABLED=false`, `hmdp.security.device-fingerprint.trust-client-header=false`, and `SA_TOKEN_IS_SHARE=false` in production. Enable forwarded headers only behind real trusted reverse proxies, and set `trusted-proxies` to explicit proxy egress IPs, never `*`, broad CIDRs, or user networks. The `prod`/`production` profile fails startup when mock SMS is enabled, client device fingerprint headers are trusted, Sa-Token token sharing is enabled, or forwarded headers are enabled with empty/wildcard trusted proxies. Defaults are `SA_TOKEN_TIMEOUT=604800`, `SA_TOKEN_ACTIVE_TIMEOUT=7200`, `SA_TOKEN_IS_CONCURRENT=true`, and blog image owner TTL 7 days. For admin or merchant accounts, use shorter session timeouts where possible.
 
 ## 测试
 

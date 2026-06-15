@@ -23,33 +23,33 @@ public final class RequestContextUtils {
         if (request == null) {
             return "unknown";
         }
-        String forwardedFor = request.getHeader("X-Forwarded-For");
-        if (StrUtil.isNotBlank(forwardedFor) && !"unknown".equalsIgnoreCase(forwardedFor)) {
-            return StrUtil.maxLength(forwardedFor.split(",")[0].trim(), 64);
+        try {
+            return cleanValue(request.getRemoteAddr(), 64, "unknown");
+        } catch (RuntimeException e) {
+            return "unknown";
         }
-        String realIp = request.getHeader("X-Real-IP");
-        if (StrUtil.isNotBlank(realIp) && !"unknown".equalsIgnoreCase(realIp)) {
-            return StrUtil.maxLength(realIp, 64);
-        }
-        return StrUtil.maxLength(request.getRemoteAddr(), 64);
     }
 
     public static String getUserAgent(HttpServletRequest request) {
-        return request == null ? null : StrUtil.maxLength(request.getHeader("User-Agent"), 512);
+        return request == null ? null : cleanValue(request.getHeader("User-Agent"), 512, null);
     }
 
     public static String getDeviceFingerprint(HttpServletRequest request) {
         if (request == null) {
             return "unknown";
         }
-        String header = request.getHeader("X-Device-Fingerprint");
-        if (StrUtil.isBlank(header)) {
-            header = request.getHeader("Device-Fingerprint");
-        }
-        if (StrUtil.isNotBlank(header)) {
-            return StrUtil.maxLength(header.trim(), 128);
-        }
         String raw = getClientIp(request) + "|" + StrUtil.nullToEmpty(getUserAgent(request));
         return DigestUtil.sha256Hex(raw).substring(0, 64);
+    }
+
+    private static String cleanValue(String value, int maxLength, String defaultValue) {
+        if (StrUtil.isBlank(value)) {
+            return defaultValue;
+        }
+        String cleaned = value.replaceAll("[\\r\\n\\t\\x00]", "").trim();
+        if (StrUtil.isBlank(cleaned) || "unknown".equalsIgnoreCase(cleaned)) {
+            return defaultValue;
+        }
+        return StrUtil.maxLength(cleaned, maxLength);
     }
 }

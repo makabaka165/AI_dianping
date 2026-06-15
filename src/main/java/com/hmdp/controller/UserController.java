@@ -4,6 +4,7 @@ package com.hmdp.controller;
 import cn.dev33.satoken.annotation.SaCheckLogin;
 import cn.hutool.core.bean.BeanUtil;
 import com.hmdp.dto.LoginFormDTO;
+import com.hmdp.dto.PublicUserInfoVO;
 import com.hmdp.dto.Result;
 import com.hmdp.dto.UserDTO;
 import com.hmdp.entity.User;
@@ -85,10 +86,9 @@ public class UserController {
             // 没有详情，应该是第一次查看详情
             return Result.ok();
         }
-        info.setCreateTime(null);
-        info.setUpdateTime(null);
+        PublicUserInfoVO publicInfo = BeanUtil.copyProperties(info, PublicUserInfoVO.class);
         // 返回
-        return Result.ok(info);
+        return Result.ok(publicInfo);
     }
 
     // 将这个方法移到最后，避免与/login等固定路径冲突

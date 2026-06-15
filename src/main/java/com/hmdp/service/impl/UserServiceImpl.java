@@ -9,10 +9,13 @@ import com.hmdp.dto.LoginFormDTO;
 import com.hmdp.dto.Result;
 import com.hmdp.entity.User;
 import com.hmdp.mapper.UserMapper;
+import com.hmdp.security.RequestContextResolver;
 import com.hmdp.service.CurrentUserService;
 import com.hmdp.service.ILoginLogService;
 import com.hmdp.service.IPermissionService;
 import com.hmdp.service.IUserService;
+import com.hmdp.service.sms.SmsCodeSender;
+import com.hmdp.service.sms.SmsSendResult;
 import com.hmdp.utils.RegexUtils;
 import com.hmdp.utils.RequestContextUtils;
 import com.hmdp.utils.UserHolder;
@@ -30,7 +33,9 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 import static com.hmdp.utils.RedisConstants.*;
@@ -81,16 +86,22 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
     @Resource
     private CurrentUserService currentUserService;
 
+    @Resource
+    private RequestContextResolver requestContextResolver;
+
+    @Resource
+    private SmsCodeSender smsCodeSender;
+
     @Override
     public Result sendCode(String phone, HttpSession session, HttpServletRequest request) {
-        String deviceFingerprint = RequestContextUtils.getDeviceFingerprint(request);
+        String deviceFingerprint = requestContextResolver.getDeviceFingerprint(request);
         if (RegexUtils.isPhoneInvalid(phone)) {
             loginLogService.recordLogin(null, phone, false, "invalid phone when sending code", null,
                     deviceFingerprint, RISK_LOW, 0);
             return Result.fail(ErrorCode.PARAM_ERROR, "invalid phone");
         }
 
-        Result rateLimitResult = checkSendCodeRateLimit(phone, RequestContextUtils.getClientIp(request));
+        Result rateLimitResult = checkSendCodeRateLimit(phone, requestContextResolver.getClientIp(request));
         if (rateLimitResult != null) {
             loginLogService.recordLogin(null, phone, false, "send code rate limited: " + rateLimitResult.getErrorMsg(),
                     null, deviceFingerprint, RISK_MEDIUM, 0);
@@ -99,7 +110,14 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
 
         String code = RandomUtil.randomNumbers(6);
         stringRedisTemplate.opsForValue().set(LOGIN_CODE_KEY + phone, code, LOGIN_CODE_TTL, TimeUnit.MINUTES);
-        log.debug("sms verify code generated, phone={}, code={}", phone, code);
+        SmsSendResult sendResult = smsCodeSender.sendLoginCode(phone, code);
+        if (sendResult.isExposeCode()) {
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("mock", sendResult.isMock());
+            data.put("verifyCode", sendResult.getCodeForDebug());
+            data.put("message", sendResult.getMessage());
+            return Result.ok(data);
+        }
         return Result.ok();
     }
 
@@ -107,7 +125,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
     public Result login(LoginFormDTO loginForm, HttpSession session) {
         String phone = loginForm.getPhone();
         HttpServletRequest request = RequestContextUtils.currentRequest();
-        String deviceFingerprint = RequestContextUtils.getDeviceFingerprint(request);
+        String deviceFingerprint = requestContextResolver.getDeviceFingerprint(request);
 
         if (RegexUtils.isPhoneInvalid(phone)) {
             loginLogService.recordLogin(null, phone, false, "invalid phone", null, deviceFingerprint, RISK_LOW, 0);
