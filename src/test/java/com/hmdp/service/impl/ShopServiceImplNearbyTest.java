@@ -30,6 +30,7 @@ import static com.hmdp.utils.RedisConstants.SHOP_GEO_KEY;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -215,6 +216,94 @@ class ShopServiceImplNearbyTest {
     }
 
     @Test
+    void filteredGeoQueryShouldExpandWindowUntilFullPageIsCollected() {
+        ReflectionTestUtils.setField(shopService, "nearbyInitialFetchMultiplier", 1);
+        ReflectionTestUtils.setField(shopService, "nearbyFetchGrowthFactor", 2);
+        ReflectionTestUtils.setField(shopService, "nearbyMaxScanSize", 40);
+        when(stringRedisTemplate.opsForGeo()).thenReturn(geoOperations);
+        when(geoOperations.search(eq(SHOP_GEO_KEY + 1), any(GeoReference.class), any(Distance.class), any()))
+                .thenReturn(
+                        geoResults(geoRange(1, 6)),
+                        geoResults(geoRange(1, 12))
+                );
+        shopService.setDbShops(List.of(
+                shop(1L, 1L, 40, 10, "other-1", "A", 50L, "00:00-24:00"),
+                shop(2L, 1L, 40, 10, "other-2", "A", 50L, "00:00-24:00"),
+                shop(3L, 1L, 40, 10, "target-3", "A", 50L, "00:00-24:00"),
+                shop(4L, 1L, 40, 10, "target-4", "A", 50L, "00:00-24:00"),
+                shop(5L, 1L, 40, 10, "other-5", "A", 50L, "00:00-24:00"),
+                shop(6L, 1L, 40, 10, "other-6", "A", 50L, "00:00-24:00"),
+                shop(7L, 1L, 40, 10, "target-7", "A", 50L, "00:00-24:00"),
+                shop(8L, 1L, 40, 10, "target-8", "A", 50L, "00:00-24:00"),
+                shop(9L, 1L, 40, 10, "target-9", "A", 50L, "00:00-24:00"),
+                shop(10L, 1L, 40, 10, "target-10", "A", 50L, "00:00-24:00"),
+                shop(11L, 1L, 40, 10, "other-11", "A", 50L, "00:00-24:00"),
+                shop(12L, 1L, 40, 10, "other-12", "A", 50L, "00:00-24:00")
+        ));
+
+        Result result = shopService.queryShopByType(1, 1, 120.15, 30.31, null, null,
+                "distance", "target", null, null, null, null, false, true);
+
+        PageResult<NearbyShopVO> page = dataAsPage(result);
+        assertThat(page.getList()).extracting(NearbyShopVO::getId).containsExactly(3L, 4L, 7L, 8L, 9L);
+        assertThat(page.getHasMore()).isTrue();
+        Map<?, ?> cursor = (Map<?, ?>) page.getCursor();
+        assertThat(cursor.get("lastDistance")).isEqualTo(900D);
+        assertThat(cursor.get("lastId")).isEqualTo(9L);
+        verify(geoOperations, times(2)).search(eq(SHOP_GEO_KEY + 1), any(GeoReference.class), any(Distance.class), any());
+    }
+
+    @Test
+    void filteredGeoQueryShouldStopAtMaxScanAndReturnPartialPage() {
+        ReflectionTestUtils.setField(shopService, "nearbyInitialFetchMultiplier", 1);
+        ReflectionTestUtils.setField(shopService, "nearbyFetchGrowthFactor", 2);
+        ReflectionTestUtils.setField(shopService, "nearbyMaxScanSize", 8);
+        when(stringRedisTemplate.opsForGeo()).thenReturn(geoOperations);
+        when(geoOperations.search(eq(SHOP_GEO_KEY + 1), any(GeoReference.class), any(Distance.class), any()))
+                .thenReturn(
+                        geoResults(geoRange(1, 6)),
+                        geoResults(geoRange(1, 8))
+                );
+        shopService.setDbShops(List.of(
+                shop(1L, 1L, 40, 10, "target-1", "A", 50L, "00:00-24:00"),
+                shop(2L, 1L, 40, 10, "other-2", "A", 50L, "00:00-24:00"),
+                shop(3L, 1L, 40, 10, "target-3", "A", 50L, "00:00-24:00"),
+                shop(4L, 1L, 40, 10, "other-4", "A", 50L, "00:00-24:00"),
+                shop(5L, 1L, 40, 10, "other-5", "A", 50L, "00:00-24:00"),
+                shop(6L, 1L, 40, 10, "other-6", "A", 50L, "00:00-24:00"),
+                shop(7L, 1L, 40, 10, "target-7", "A", 50L, "00:00-24:00"),
+                shop(8L, 1L, 40, 10, "other-8", "A", 50L, "00:00-24:00")
+        ));
+
+        Result result = shopService.queryShopByType(1, 1, 120.15, 30.31, null, null,
+                "distance", "target", null, null, null, null, false, true);
+
+        PageResult<NearbyShopVO> page = dataAsPage(result);
+        assertThat(page.getList()).extracting(NearbyShopVO::getId).containsExactly(1L, 3L, 7L);
+        assertThat(page.getHasMore()).isFalse();
+        verify(geoOperations, times(2)).search(eq(SHOP_GEO_KEY + 1), any(GeoReference.class), any(Distance.class), any());
+    }
+
+    @Test
+    void geoQueryWithoutFiltersShouldKeepSingleFetchBehavior() {
+        ReflectionTestUtils.setField(shopService, "nearbyInitialFetchMultiplier", 1);
+        when(stringRedisTemplate.opsForGeo()).thenReturn(geoOperations);
+        when(geoOperations.search(eq(SHOP_GEO_KEY + 1), any(GeoReference.class), any(Distance.class), any()))
+                .thenReturn(geoResults(geoRange(1, 6)));
+        shopService.setDbShops(List.of(
+                shop(1L, 1L, 40, 10), shop(2L, 1L, 40, 10), shop(3L, 1L, 40, 10),
+                shop(4L, 1L, 40, 10), shop(5L, 1L, 40, 10), shop(6L, 1L, 40, 10)
+        ));
+
+        Result result = query(1, 1, 120.15, 30.31, null, null, "distance");
+
+        PageResult<NearbyShopVO> page = dataAsPage(result);
+        assertThat(page.getList()).extracting(NearbyShopVO::getId).containsExactly(1L, 2L, 3L, 4L, 5L);
+        assertThat(page.getHasMore()).isTrue();
+        verify(geoOperations, times(1)).search(eq(SHOP_GEO_KEY + 1), any(GeoReference.class), any(Distance.class), any());
+    }
+
+    @Test
     void geoQueryShouldReturnPageResult() {
         when(stringRedisTemplate.opsForGeo()).thenReturn(geoOperations);
         when(geoOperations.search(eq(SHOP_GEO_KEY + 1), any(GeoReference.class), any(Distance.class), any()))
@@ -273,6 +362,14 @@ class ShopServiceImplNearbyTest {
     private GeoResults<RedisGeoCommands.GeoLocation<String>> geoResults(
             List<GeoResult<RedisGeoCommands.GeoLocation<String>>> results) {
         return new GeoResults<>(results);
+    }
+
+    private List<GeoResult<RedisGeoCommands.GeoLocation<String>>> geoRange(int startInclusive, int endInclusive) {
+        List<GeoResult<RedisGeoCommands.GeoLocation<String>>> results = new ArrayList<>();
+        for (int i = startInclusive; i <= endInclusive; i++) {
+            results.add(geo(String.valueOf(i), i * 100D));
+        }
+        return results;
     }
 
     private Shop shop(Long id, Long typeId, Integer score, Integer sold) {

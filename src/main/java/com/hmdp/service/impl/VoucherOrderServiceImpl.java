@@ -105,19 +105,23 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     private IVoucherOrderService voucherOrderService;
 
     private final String consumerName = buildConsumerName();
-    private final ExecutorService executor = Executors.newSingleThreadExecutor(r -> {
-        Thread t = new Thread(r, "voucher-order-handler");
-        t.setDaemon(true);
-        return t;
-    });
-    private final ExecutorService closeOrderExecutor = Executors.newSingleThreadExecutor(r -> {
-        Thread t = new Thread(r, "voucher-order-close-handler");
-        t.setDaemon(true);
-        return t;
-    });
+    private ExecutorService executor;
+    private ExecutorService closeOrderExecutor;
 
     private RBlockingDeque<Long> orderCloseBlockingDeque;
     private RDelayedQueue<Long> orderCloseDelayedQueue;
+
+    @Value("${hmdp.voucher.order.worker-threads:2}")
+    private int workerThreads = 2;
+
+    @Value("${hmdp.voucher.order.close-worker-threads:1}")
+    private int closeWorkerThreads = 1;
+
+    @Value("${hmdp.voucher.order.stream-required:true}")
+    private boolean streamRequired = true;
+
+    @Value("${hmdp.voucher.order.stream-health-check-enabled:true}")
+    private boolean streamHealthCheckEnabled = true;
 
     @Value("${hmdp.voucher.order.pay-timeout-minutes:15}")
     private long orderPayTimeoutMinutes = DEFAULT_ORDER_PAY_TIMEOUT_MINUTES;
@@ -126,11 +130,19 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     private int expiredOrderScanLimit = DEFAULT_EXPIRED_ORDER_SCAN_LIMIT;
 
     private volatile boolean running = false;
+    private volatile boolean streamReady = false;
 
     @Override
     public Result seckillVoucher(Long voucherId) {
         if (voucherId == null || voucherId <= 0) {
             return Result.fail("优惠券ID无效");
+        }
+        if (streamRequired && !isOrderStreamReady()) {
+            log.warn("秒杀订单Stream未就绪，拒绝接单，voucherId={}, health={}", voucherId, getOrderConsumerHealth());
+            return Result.fail("订单服务暂不可用，请稍后重试");
+        }
+        if (!streamRequired && !isOrderStreamReady()) {
+            log.warn("秒杀订单Stream未就绪但stream-required=false，继续执行Lua存在订单消息丢失风险，voucherId={}", voucherId);
         }
         try {
             Long userId = currentUserService.requireCurrentUserId();
@@ -296,9 +308,16 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         }
         initializeCloseOrderQueue();
         running = true;
-        executor.submit(new VoucherOrderHandler());
-        closeOrderExecutor.submit(new VoucherOrderCloseHandler());
-        log.info("优惠券订单处理服务启动成功，consumer={}", consumerName);
+        executor = createExecutor("voucher-order-handler", effectiveWorkerThreads());
+        closeOrderExecutor = createExecutor("voucher-order-close-handler", effectiveCloseWorkerThreads());
+        for (int i = 0; i < effectiveWorkerThreads(); i++) {
+            submitConsumerLoop(executor, new VoucherOrderHandler(i + 1));
+        }
+        for (int i = 0; i < effectiveCloseWorkerThreads(); i++) {
+            submitConsumerLoop(closeOrderExecutor, new VoucherOrderCloseHandler(i + 1));
+        }
+        log.info("优惠券订单处理服务启动成功，consumer={}, workerThreads={}, closeWorkerThreads={}",
+                consumerName, effectiveWorkerThreads(), effectiveCloseWorkerThreads());
     }
 
     @PreDestroy
@@ -324,25 +343,63 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         }
     }
 
+    @Scheduled(fixedDelayString = "${hmdp.voucher.order.stream-health-check-fixed-delay-millis:30000}",
+            initialDelayString = "${hmdp.voucher.order.stream-health-check-initial-delay-millis:30000}")
+    public void refreshOrderStreamHealth() {
+        if (!streamHealthCheckEnabled) {
+            return;
+        }
+        try {
+            boolean ready = verifyStreamAndGroup() || initializeStreamAndGroup();
+            streamReady = ready;
+            if (!ready) {
+                log.warn("秒杀订单Stream健康检查失败，health={}", getOrderConsumerHealth());
+            }
+        } catch (Exception e) {
+            streamReady = false;
+            log.warn("秒杀订单Stream健康检查异常", e);
+        }
+    }
+
     protected boolean initializeStreamAndGroup() {
         int maxRetries = 3;
         for (int i = 0; i < maxRetries; i++) {
             try {
                 ensureStreamExists();
                 ensureGroupExists();
+                streamReady = true;
                 return true;
             } catch (Exception e) {
+                streamReady = false;
                 log.error("初始化Redis Stream失败，第{}次尝试", i + 1, e);
                 if (i < maxRetries - 1) {
                     sleep(Duration.ofSeconds(2));
                 }
             }
         }
+        streamReady = false;
         return false;
     }
 
     protected boolean verifyStreamAndGroup() {
-        return streamExists() && groupExists();
+        boolean ready = streamExists() && groupExists();
+        streamReady = ready;
+        return ready;
+    }
+
+    public boolean isOrderStreamReady() {
+        return streamReady;
+    }
+
+    public Map<String, Object> getOrderConsumerHealth() {
+        Map<String, Object> health = new LinkedHashMap<>();
+        health.put("streamReady", streamReady);
+        health.put("streamRequired", streamRequired);
+        health.put("workerThreads", effectiveWorkerThreads());
+        health.put("closeWorkerThreads", effectiveCloseWorkerThreads());
+        health.put("running", running);
+        health.put("consumerName", consumerName);
+        return health;
     }
 
     protected void handleCurrentPendingList() {
@@ -543,6 +600,30 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         return expiredOrderScanLimit <= 0 ? DEFAULT_EXPIRED_ORDER_SCAN_LIMIT : expiredOrderScanLimit;
     }
 
+    private int effectiveWorkerThreads() {
+        return boundedThreadCount(workerThreads);
+    }
+
+    private int effectiveCloseWorkerThreads() {
+        return boundedThreadCount(closeWorkerThreads);
+    }
+
+    private int boundedThreadCount(int configured) {
+        return Math.min(16, Math.max(1, configured));
+    }
+
+    protected ExecutorService createExecutor(String threadNamePrefix, int threads) {
+        return Executors.newFixedThreadPool(threads, r -> {
+            Thread t = new Thread(r, threadNamePrefix + "-" + UUID.randomUUID().toString().substring(0, 8));
+            t.setDaemon(true);
+            return t;
+        });
+    }
+
+    protected void submitConsumerLoop(ExecutorService targetExecutor, Runnable task) {
+        targetExecutor.submit(task);
+    }
+
     protected void writeDeadLetter(MapRecord<String, Object, Object> record, String reason) {
         Map<String, String> deadLetter = new LinkedHashMap<>();
         deadLetter.put("_originalStream", STREAM_KEY);
@@ -715,6 +796,9 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     }
 
     private void shutdownExecutor(ExecutorService targetExecutor, String name) {
+        if (targetExecutor == null) {
+            return;
+        }
         try {
             targetExecutor.shutdown();
             if (!targetExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
@@ -728,9 +812,15 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     }
 
     private class VoucherOrderHandler implements Runnable {
+        private final int index;
+
+        private VoucherOrderHandler(int index) {
+            this.index = index;
+        }
+
         @Override
         public void run() {
-            log.info("订单处理线程启动，consumer={}", consumerName);
+            log.info("订单处理线程启动，consumer={}, index={}", consumerName, index);
             while (running) {
                 try {
                     if (!verifyStreamAndGroup() && !initializeStreamAndGroup()) {
@@ -745,14 +835,20 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
                     sleep(Duration.ofSeconds(5));
                 }
             }
-            log.info("订单处理线程已停止，consumer={}", consumerName);
+            log.info("订单处理线程已停止，consumer={}, index={}", consumerName, index);
         }
     }
 
     private class VoucherOrderCloseHandler implements Runnable {
+        private final int index;
+
+        private VoucherOrderCloseHandler(int index) {
+            this.index = index;
+        }
+
         @Override
         public void run() {
-            log.info("订单超时关闭线程启动，consumer={}", consumerName);
+            log.info("订单超时关闭线程启动，consumer={}, index={}", consumerName, index);
             while (running) {
                 try {
                     Long orderId = pollOrderCloseTask(ORDER_CLOSE_POLL_TIMEOUT);
@@ -774,7 +870,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
                     sleep(Duration.ofSeconds(2));
                 }
             }
-            log.info("订单超时关闭线程已停止，consumer={}", consumerName);
+            log.info("订单超时关闭线程已停止，consumer={}, index={}", consumerName, index);
         }
     }
 }

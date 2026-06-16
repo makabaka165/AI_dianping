@@ -13,6 +13,7 @@ import com.hmdp.service.IOperationLogService;
 import com.hmdp.service.IPermissionService;
 import com.hmdp.service.ShopGeoIndexService;
 import com.hmdp.service.ShopStatsService;
+import com.hmdp.utils.CacheBusyException;
 import com.hmdp.utils.CacheClient;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -221,6 +222,18 @@ class ShopServiceImplDomainModelTest {
         assertThat(vo.getId()).isEqualTo(100L);
         assertThat(vo.getName()).isEqualTo("old shop");
         assertThat(vo).hasNoNullFieldsOrPropertiesExcept("area", "avgPrice", "openHours");
+    }
+
+    @Test
+    void queryByIdShouldReturnSystemBusyWhenCacheMutexIsBusy() {
+        when(cacheClient.queryWithMutex(eq(CACHE_SHOP_KEY), eq(100L), eq(Shop.class), any(), any(), any()))
+                .thenThrow(new CacheBusyException("busy"));
+
+        Result result = shopService.queryById(100L);
+
+        assertThat(result.getSuccess()).isFalse();
+        assertThat(result.getCode()).isEqualTo(ErrorCode.SYSTEM_BUSY.getCode());
+        assertThat(result.getErrorMsg()).isEqualTo("system busy, please retry later");
     }
 
     @Test

@@ -18,6 +18,7 @@ public enum ErrorCode {
     SHOP_TYPE_UPDATE_FAILED(50020, "Shop type update failed"),
     SHOP_GEO_REBUILD_FAILED(50030, "Shop GEO rebuild failed"),
     SERVICE_UNAVAILABLE(50300, "Service unavailable"),
+    SYSTEM_BUSY(50310, "System busy"),
     BUSINESS_ERROR(50000, "Business error"),
     SYSTEM_ERROR(50001, "Internal server error");
 

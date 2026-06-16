@@ -3,12 +3,16 @@ package com.hmdp.ai.task;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hmdp.dto.ai.AiTask;
+import com.hmdp.dto.ai.AiTaskStatus;
 import org.redisson.api.RBucket;
+import org.redisson.api.RSet;
 import org.redisson.api.RedissonClient;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Repository;
 
 import javax.annotation.Resource;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 
@@ -32,8 +36,10 @@ public class AiTaskRepository {
             return;
         }
         try {
+            Optional<AiTask> oldTask = find(task.getTaskId());
             redissonClient.getBucket(taskKey(task.getTaskId()))
                     .set(objectMapper.writeValueAsString(task), resultTtlHours, TimeUnit.HOURS);
+            updateStatusIndex(oldTask.map(AiTask::getStatus).orElse(null), task.getStatus(), task.getTaskId());
         } catch (Exception e) {
             throw new IllegalStateException("Save AI task failed", e);
         }
@@ -79,11 +85,49 @@ public class AiTaskRepository {
         redissonClient.getBucket(inflightKey(dedupKey)).delete();
     }
 
+    public List<AiTask> findByStatus(AiTaskStatus status, int limit) {
+        if (status == null || limit <= 0) {
+            return List.of();
+        }
+        RSet<String> index = redissonClient.getSet(statusIndexKey(status));
+        List<AiTask> tasks = new ArrayList<>();
+        List<String> staleIds = new ArrayList<>();
+        for (String taskId : index) {
+            Optional<AiTask> task = find(taskId);
+            if (task.isEmpty() || task.get().getStatus() != status) {
+                staleIds.add(taskId);
+                continue;
+            }
+            tasks.add(task.get());
+            if (tasks.size() >= limit) {
+                break;
+            }
+        }
+        staleIds.forEach(index::remove);
+        return tasks;
+    }
+
     private String taskKey(String taskId) {
         return bucketPrefix + taskId;
     }
 
     private String inflightKey(String dedupKey) {
         return bucketPrefix + "inflight:" + dedupKey;
+    }
+
+    private String statusIndexKey(AiTaskStatus status) {
+        return bucketPrefix + "index:status:" + status.name();
+    }
+
+    private void updateStatusIndex(AiTaskStatus oldStatus, AiTaskStatus newStatus, String taskId) {
+        if (taskId == null || taskId.trim().isEmpty()) {
+            return;
+        }
+        if (oldStatus != null && oldStatus != newStatus) {
+            redissonClient.getSet(statusIndexKey(oldStatus)).remove(taskId);
+        }
+        if (newStatus != null) {
+            redissonClient.getSet(statusIndexKey(newStatus)).add(taskId);
+        }
     }
 }

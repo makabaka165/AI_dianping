@@ -115,11 +115,7 @@ public class CacheClient {
             );
             if (!locked) {
                 log.warn("获取缓存互斥锁超时，key={}", key);
-                R cachedAfterWait = readCache(key, type);
-                if (cachedAfterWait != null || isNullValue(key)) {
-                    return cachedAfterWait;
-                }
-                return dbFallback.apply(id);
+                return handleMutexLockTimeout(key, id, type, dbFallback);
             }
 
             R cachedAfterLock = readCache(key, type);
@@ -140,9 +136,48 @@ public class CacheClient {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             log.warn("获取缓存互斥锁被中断，key={}", key, e);
-            return dbFallback.apply(id);
+            throw new CacheBusyException("cache mutex interrupted, please retry later");
         } finally {
             unlockQuietly(lock, locked);
+        }
+    }
+
+    private <R, ID> R handleMutexLockTimeout(String key, ID id, Class<R> type, Function<ID, R> dbFallback) {
+        CacheProperties.RetryAfterFail retry = cacheProperties.getMutex().getRetryAfterFail();
+        if (retry == null || !retry.isEnabled()) {
+            return fallbackAfterMutexTimeout(key, id, dbFallback, false);
+        }
+        int attempts = Math.max(1, retry.getMaxAttempts());
+        for (int i = 0; i < attempts; i++) {
+            sleepAfterLockFail(retry.getSleepMillis());
+            R cached = readCache(key, type);
+            if (cached != null) {
+                return cached;
+            }
+            if (isNullValue(key)) {
+                return null;
+            }
+        }
+        return fallbackAfterMutexTimeout(key, id, dbFallback, retry.isFallbackToDb());
+    }
+
+    private <R, ID> R fallbackAfterMutexTimeout(String key, ID id, Function<ID, R> dbFallback, boolean fallbackToDb) {
+        if (fallbackToDb) {
+            log.warn("缓存互斥锁超时后降级直查DB，key={}", key);
+            return dbFallback.apply(id);
+        }
+        log.warn("缓存互斥锁超时且重试未命中，触发热点保护，key={}", key);
+        throw new CacheBusyException("cache rebuild in progress, please retry later");
+    }
+
+    private void sleepAfterLockFail(long sleepMillis) {
+        long safeSleepMillis = Math.max(1L, sleepMillis);
+        long jitterMillis = ThreadLocalRandom.current().nextLong(Math.min(10L, safeSleepMillis) + 1L);
+        try {
+            Thread.sleep(safeSleepMillis + jitterMillis);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new CacheBusyException("cache mutex retry interrupted, please retry later");
         }
     }
 

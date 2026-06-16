@@ -72,6 +72,9 @@ class AiTaskWorkerTest {
         assertThat(finalTask.getStatus()).isEqualTo(AiTaskStatus.SUCCESS);
         assertThat(finalTask.getResult()).isSameAs(result);
         assertThat(finalTask.getErrorMessage()).isNull();
+        assertThat(finalTask.getStartedAtEpochMillis()).isPositive();
+        assertThat(finalTask.getHeartbeatAtEpochMillis()).isPositive();
+        assertThat(finalTask.getFinishedAtEpochMillis()).isPositive();
         verify(repository).clearInflight("dedup-1");
         verify(eventPublisher, times(2)).publish(any(AiTaskEvent.class));
         verify(aiMetricsService).recordDuration(eq("ai_task"), anyLong(), eq(false));
@@ -93,6 +96,9 @@ class AiTaskWorkerTest {
         AiTask finalTask = updates.getAllValues().get(1);
         assertThat(finalTask.getStatus()).isEqualTo(AiTaskStatus.FAILED);
         assertThat(finalTask.getErrorMessage()).isEqualTo("boom");
+        assertThat(finalTask.getStartedAtEpochMillis()).isPositive();
+        assertThat(finalTask.getHeartbeatAtEpochMillis()).isPositive();
+        assertThat(finalTask.getFinishedAtEpochMillis()).isPositive();
         verify(repository).clearInflight("dedup-1");
         verify(eventPublisher, times(2)).publish(any(AiTaskEvent.class));
         verify(aiMetricsService).recordDuration(eq("ai_task"), anyLong(), eq(true));
@@ -125,6 +131,7 @@ class AiTaskWorkerTest {
         assertThat(task.getStatus()).isEqualTo(AiTaskStatus.SUCCESS);
         assertThat(task.getProgressCurrent()).isEqualTo(2);
         assertThat(task.getProgressTotal()).isEqualTo(2);
+        assertThat(task.getHeartbeatAtEpochMillis()).isPositive();
         ArgumentCaptor<AiTaskEvent> events = ArgumentCaptor.forClass(AiTaskEvent.class);
         verify(eventPublisher, times(4)).publish(events.capture());
         assertThat(events.getAllValues()).extracting(AiTaskEvent::getStatus)

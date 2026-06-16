@@ -22,6 +22,10 @@ public class AiTask {
     private Integer progressTotal;
     private Object result;
     private String errorMessage;
+    private Integer retryCount;
+    private Long startedAtEpochMillis;
+    private Long heartbeatAtEpochMillis;
+    private Long finishedAtEpochMillis;
     private long createdAtEpochMillis;
     private long updatedAtEpochMillis;
 }

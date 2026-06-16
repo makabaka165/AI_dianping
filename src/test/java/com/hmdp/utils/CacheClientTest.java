@@ -19,6 +19,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -109,7 +110,58 @@ class CacheClientTest {
     }
 
     @Test
-    void queryWithMutexShouldFallbackWithoutCacheWriteWhenLockTimesOut() throws InterruptedException {
+    void queryWithMutexShouldReturnCacheWhenRetryHitsAfterLockTimeout() throws InterruptedException {
+        cacheProperties.getMutex().getRetryAfterFail().setSleepMillis(1L);
+        when(valueOperations.get("cache:shop:1"))
+                .thenReturn(null, null, JSONUtil.toJsonStr(shop(1L)));
+        when(redissonClient.getLock("lock:shop:1")).thenReturn(lock);
+        when(lock.tryLock(anyLong(), anyLong(), eq(TimeUnit.MILLISECONDS))).thenReturn(false);
+        AtomicInteger dbCalls = new AtomicInteger();
+
+        Shop result = cacheClient.queryWithMutex(
+                "cache:shop:", 1L, Shop.class,
+                id -> {
+                    dbCalls.incrementAndGet();
+                    return shop(id);
+                },
+                30L, TimeUnit.MINUTES
+        );
+
+        assertThat(result.getId()).isEqualTo(1L);
+        assertThat(dbCalls).hasValue(0);
+        verify(valueOperations, never()).set(eq("cache:shop:1"), anyString(), anyLong(), eq(TimeUnit.SECONDS));
+        verify(lock, never()).unlock();
+    }
+
+    @Test
+    void queryWithMutexShouldThrowBusyAndSkipDbWhenLockTimeoutRetryMisses() throws InterruptedException {
+        cacheProperties.getMutex().getRetryAfterFail().setMaxAttempts(1);
+        cacheProperties.getMutex().getRetryAfterFail().setSleepMillis(1L);
+        cacheProperties.getMutex().getRetryAfterFail().setFallbackToDb(false);
+        when(valueOperations.get("cache:shop:1")).thenReturn(null);
+        when(redissonClient.getLock("lock:shop:1")).thenReturn(lock);
+        when(lock.tryLock(anyLong(), anyLong(), eq(TimeUnit.MILLISECONDS))).thenReturn(false);
+        AtomicInteger dbCalls = new AtomicInteger();
+
+        assertThatThrownBy(() -> cacheClient.queryWithMutex(
+                "cache:shop:", 1L, Shop.class,
+                id -> {
+                    dbCalls.incrementAndGet();
+                    return shop(id);
+                },
+                30L, TimeUnit.MINUTES
+        )).isInstanceOf(CacheBusyException.class);
+
+        assertThat(dbCalls).hasValue(0);
+        verify(valueOperations, never()).set(eq("cache:shop:1"), anyString(), anyLong(), eq(TimeUnit.SECONDS));
+        verify(lock, never()).unlock();
+    }
+
+    @Test
+    void queryWithMutexShouldFallbackToDbWhenConfiguredAfterLockTimeout() throws InterruptedException {
+        cacheProperties.getMutex().getRetryAfterFail().setMaxAttempts(1);
+        cacheProperties.getMutex().getRetryAfterFail().setSleepMillis(1L);
+        cacheProperties.getMutex().getRetryAfterFail().setFallbackToDb(true);
         when(valueOperations.get("cache:shop:1")).thenReturn(null);
         when(redissonClient.getLock("lock:shop:1")).thenReturn(lock);
         when(lock.tryLock(anyLong(), anyLong(), eq(TimeUnit.MILLISECONDS))).thenReturn(false);
@@ -128,6 +180,32 @@ class CacheClientTest {
         assertThat(dbCalls).hasValue(1);
         verify(valueOperations, never()).set(eq("cache:shop:1"), anyString(), anyLong(), eq(TimeUnit.SECONDS));
         verify(lock, never()).unlock();
+    }
+
+    @Test
+    void queryWithMutexShouldPreserveInterruptAndSkipDbWhenInterrupted() throws InterruptedException {
+        when(valueOperations.get("cache:shop:1")).thenReturn(null);
+        when(redissonClient.getLock("lock:shop:1")).thenReturn(lock);
+        when(lock.tryLock(anyLong(), anyLong(), eq(TimeUnit.MILLISECONDS))).thenThrow(new InterruptedException("stop"));
+        AtomicInteger dbCalls = new AtomicInteger();
+
+        try {
+            assertThatThrownBy(() -> cacheClient.queryWithMutex(
+                    "cache:shop:", 1L, Shop.class,
+                    id -> {
+                        dbCalls.incrementAndGet();
+                        return shop(id);
+                    },
+                    30L, TimeUnit.MINUTES
+            )).isInstanceOf(CacheBusyException.class);
+
+            assertThat(Thread.currentThread().isInterrupted()).isTrue();
+            assertThat(dbCalls).hasValue(0);
+            verify(valueOperations, never()).set(eq("cache:shop:1"), anyString(), anyLong(), eq(TimeUnit.SECONDS));
+            verify(lock, never()).unlock();
+        } finally {
+            Thread.interrupted();
+        }
     }
 
     @Test

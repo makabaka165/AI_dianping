@@ -35,6 +35,9 @@ class AiTaskServiceTest {
     @Mock
     private AiMetricsService aiMetricsService;
 
+    @Mock
+    private AiTaskEventPublisher eventPublisher;
+
     private AiTaskService service;
 
     @BeforeEach
@@ -43,6 +46,10 @@ class AiTaskServiceTest {
         ReflectionTestUtils.setField(service, "repository", repository);
         ReflectionTestUtils.setField(service, "queue", queue);
         ReflectionTestUtils.setField(service, "aiMetricsService", aiMetricsService);
+        ReflectionTestUtils.setField(service, "eventPublisher", eventPublisher);
+        ReflectionTestUtils.setField(service, "runningTimeoutMinutes", 30L);
+        ReflectionTestUtils.setField(service, "maxRetryCount", 3);
+        ReflectionTestUtils.setField(service, "stuckScanLimit", 100);
     }
 
     @Test
@@ -89,11 +96,75 @@ class AiTaskServiceTest {
         verify(repository).find(eq("t1"));
     }
 
+    @Test
+    void recoverStuckRunningTasksShouldIgnoreFreshHeartbeat() throws Exception {
+        AiTask fresh = runningTask("fresh", now() - 60_000L, 0);
+        when(repository.findByStatus(AiTaskStatus.RUNNING, 100)).thenReturn(java.util.List.of(fresh));
+
+        int recovered = service.recoverStuckRunningTasks(now());
+
+        assertThat(recovered).isZero();
+        verify(queue, never()).enqueue(anyString());
+        verify(repository, never()).clearInflight(anyString());
+    }
+
+    @Test
+    void recoverStuckRunningTasksShouldRequeueTimedOutTaskUnderRetryLimit() throws Exception {
+        long now = now();
+        AiTask stuck = runningTask("stuck", now - 31 * 60_000L, 1);
+        when(repository.findByStatus(AiTaskStatus.RUNNING, 100)).thenReturn(java.util.List.of(stuck));
+
+        int recovered = service.recoverStuckRunningTasks(now);
+
+        assertThat(recovered).isEqualTo(1);
+        assertThat(stuck.getStatus()).isEqualTo(AiTaskStatus.PENDING);
+        assertThat(stuck.getRetryCount()).isEqualTo(2);
+        assertThat(stuck.getErrorMessage()).isEqualTo("task heartbeat timeout, requeued");
+        verify(repository).clearInflight("dedup-stuck");
+        verify(repository).update(stuck);
+        verify(queue).enqueue("stuck");
+        verify(eventPublisher).publish(org.mockito.ArgumentMatchers.any());
+        verify(aiMetricsService).increment("ai.task.requeued", "ai_task", false);
+    }
+
+    @Test
+    void recoverStuckRunningTasksShouldFailTimedOutTaskAfterRetryLimit() throws InterruptedException {
+        long now = now();
+        AiTask stuck = runningTask("stuck", now - 31 * 60_000L, 3);
+        when(repository.findByStatus(AiTaskStatus.RUNNING, 100)).thenReturn(java.util.List.of(stuck));
+
+        int recovered = service.recoverStuckRunningTasks(now);
+
+        assertThat(recovered).isEqualTo(1);
+        assertThat(stuck.getStatus()).isEqualTo(AiTaskStatus.FAILED);
+        assertThat(stuck.getFinishedAtEpochMillis()).isEqualTo(now);
+        assertThat(stuck.getErrorMessage()).isEqualTo("task heartbeat timeout, max retry exceeded");
+        verify(repository).clearInflight("dedup-stuck");
+        verify(queue, never()).enqueue(anyString());
+        verify(aiMetricsService).increment("ai.task.timeout.failed", "ai_task", true);
+    }
+
     private Map<String, Object> params(Object... values) {
         Map<String, Object> params = new LinkedHashMap<>();
         for (int i = 0; i < values.length; i += 2) {
             params.put((String) values[i], values[i + 1]);
         }
         return params;
+    }
+
+    private AiTask runningTask(String taskId, long heartbeatAt, int retryCount) {
+        return AiTask.builder()
+                .taskId(taskId)
+                .type(AiTaskType.RAG_REBUILD_SHOP)
+                .status(AiTaskStatus.RUNNING)
+                .dedupKey("dedup-" + taskId)
+                .retryCount(retryCount)
+                .heartbeatAtEpochMillis(heartbeatAt)
+                .updatedAtEpochMillis(heartbeatAt)
+                .build();
+    }
+
+    private long now() {
+        return 10_000_000L;
     }
 }

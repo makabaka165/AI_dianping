@@ -21,9 +21,11 @@ import com.hmdp.service.IPermissionService;
 import com.hmdp.service.IShopService;
 import com.hmdp.service.ShopGeoIndexService;
 import com.hmdp.service.ShopStatsService;
+import com.hmdp.utils.CacheBusyException;
 import com.hmdp.utils.CacheClient;
 import com.hmdp.utils.SystemConstants;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.geo.Distance;
 import org.springframework.data.geo.GeoResult;
 import org.springframework.data.geo.GeoResults;
@@ -95,13 +97,28 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
     @Resource
     private IOperationLogService operationLogService;
 
+    @Value("${hmdp.shop.nearby.initial-fetch-multiplier:3}")
+    private int nearbyInitialFetchMultiplier = 3;
+
+    @Value("${hmdp.shop.nearby.max-scan-size:200}")
+    private int nearbyMaxScanSize = 200;
+
+    @Value("${hmdp.shop.nearby.fetch-growth-factor:2}")
+    private int nearbyFetchGrowthFactor = 2;
+
     @Override
     public Result queryById(Long id) {
         if (id == null || id <= 0) {
             return Result.fail(ErrorCode.PARAM_ERROR, "id must be greater than 0");
         }
-        Shop shop = cacheClient.queryWithMutex(
-                CACHE_SHOP_KEY, id, Shop.class, this::getById, CACHE_SHOP_TTL, TimeUnit.MINUTES);
+        Shop shop;
+        try {
+            shop = cacheClient.queryWithMutex(
+                    CACHE_SHOP_KEY, id, Shop.class, this::getById, CACHE_SHOP_TTL, TimeUnit.MINUTES);
+        } catch (CacheBusyException e) {
+            log.warn("Shop detail cache is busy, id={}", id, e);
+            return Result.fail(ErrorCode.SYSTEM_BUSY, "system busy, please retry later");
+        }
         if (shop == null) {
             return Result.fail(ErrorCode.SHOP_NOT_FOUND, "shop does not exist");
         }
@@ -218,11 +235,7 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
                                             Double lastDistance, Long lastId, String sortBy,
                                             ShopQueryFilter filter) {
         int pageSize = SystemConstants.DEFAULT_PAGE_SIZE;
-        int limit = pageSize * 3 + 1;
-        List<GeoResult<RedisGeoCommands.GeoLocation<String>>> geoResults = searchGeo(typeId, x, y, limit);
-        List<Shop> distanceOrderedShops = buildNearbyShopList(
-                typeId, geoResults, true, lastDistance, lastId, "distance");
-        distanceOrderedShops = filterShops(distanceOrderedShops, filter);
+        List<Shop> distanceOrderedShops = queryNearbyDistanceWindow(typeId, x, y, lastDistance, lastId, filter, pageSize);
 
         boolean hasMore = distanceOrderedShops.size() > pageSize;
         List<Shop> pageWindow = distanceOrderedShops;
@@ -244,6 +257,31 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
         cursor.put("lastDistance", nextLastDistance);
         cursor.put("lastId", nextLastId);
         return Result.ok(PageResult.of(toNearbyVOList(displayShops), current, pageSize, null, hasMore, cursor));
+    }
+
+    private List<Shop> queryNearbyDistanceWindow(Integer typeId, Double x, Double y,
+                                                 Double lastDistance, Long lastId,
+                                                 ShopQueryFilter filter, int pageSize) {
+        int initialLimit = pageSize * effectiveInitialFetchMultiplier() + 1;
+        int maxScanSize = Math.max(initialLimit, effectiveNearbyMaxScanSize());
+        int limit = Math.min(initialLimit, maxScanSize);
+        List<Shop> filtered = Collections.emptyList();
+        boolean shouldExpand = filter.hasBusinessFilters();
+
+        while (true) {
+            List<GeoResult<RedisGeoCommands.GeoLocation<String>>> geoResults = searchGeo(typeId, x, y, limit);
+            List<Shop> distanceOrderedShops = buildNearbyShopList(
+                    typeId, geoResults, true, lastDistance, lastId, "distance");
+            filtered = filterShops(distanceOrderedShops, filter);
+            if (!shouldExpand || filtered.size() >= pageSize + 1 || limit >= maxScanSize || geoResults.size() < limit) {
+                return filtered;
+            }
+            int nextLimit = Math.min(maxScanSize, limit * effectiveFetchGrowthFactor());
+            if (nextLimit <= limit) {
+                return filtered;
+            }
+            limit = nextLimit;
+        }
     }
 
     private List<GeoResult<RedisGeoCommands.GeoLocation<String>>> searchGeo(Integer typeId, Double x, Double y, int limit) {
@@ -488,6 +526,18 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
         return StrUtil.isBlank(sortBy) ? "distance" : sortBy.trim().toLowerCase(Locale.ROOT);
     }
 
+    private int effectiveInitialFetchMultiplier() {
+        return Math.max(1, nearbyInitialFetchMultiplier);
+    }
+
+    private int effectiveNearbyMaxScanSize() {
+        return Math.max(SystemConstants.DEFAULT_PAGE_SIZE + 1, nearbyMaxScanSize);
+    }
+
+    private int effectiveFetchGrowthFactor() {
+        return Math.max(2, nearbyFetchGrowthFactor);
+    }
+
     private boolean shouldBindCreatedShopToCurrentUser(Long userId) {
         if (userId == null) {
             return false;
@@ -655,6 +705,15 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
             this.maxAvgPrice = maxAvgPrice;
             this.openNow = openNow;
             this.pageResult = pageResult;
+        }
+
+        private boolean hasBusinessFilters() {
+            return StrUtil.isNotBlank(keyword)
+                    || StrUtil.isNotBlank(area)
+                    || minScore != null
+                    || minAvgPrice != null
+                    || maxAvgPrice != null
+                    || openNow;
         }
     }
 }

@@ -98,6 +98,15 @@ ShopSummaryController
 - `ModelGateway` 会按模型调用记录估算输入/输出 token；该估算用于成本趋势，不等同于供应商精确计费。
 - Prompt 默认全部走 stable 版本；开启 canary 后按 `userId + intent + routeKey` 稳定 hash，保证同一用户同任务命中稳定版本。
 
+## 第三批可靠性收尾
+
+本轮收尾聚焦可靠性、性能和运维可观测性，不改变接口 URL、`Result` 外壳、权限体系，也不推进 AI 微服务拆分或引入新的重量级中间件。项目最终定位为 AI 增强型本地生活平台：在单体内完成 AI 子系统模块化抽取，通过 Port/Adapter 与 ArchUnit 约束为后续按需服务化预留边界，并结合高并发秒杀、缓存治理、安全收束、数据一致性和可靠性收尾，形成当前阶段的完整工程形态。
+
+- 秒杀订单消费线程和超时关闭线程可配置，Redis Stream ready 门控默认开启；Stream/consumer group 未就绪时默认快速拒绝秒杀请求，避免 Stream 异常时继续执行 Lua 静默接单。
+- AI task 增加 RUNNING heartbeat、stuck 扫描、超时重入队、最大重试次数和失败收敛，仍保留当前 Redis BlockingQueue 架构；未升级为 Redis Stream 是本轮有意控制范围。
+- 附近店铺 GEO 查询在存在业务过滤条件时按配置循环扩大候选窗口，`max-scan-size` 防止无限扫描，减少过滤后分页不足和 `hasMore` 误判。
+- CacheClient 互斥锁超时后先短暂 retry 读取缓存，默认不直接 fallback DB；店铺详情会把热点保护状态返回为 `SYSTEM_BUSY`，保护数据库。
+
 ## 主要接口
 
 | Method | Path | 说明 |
@@ -208,7 +217,34 @@ hmdp:
       connect-timeout-millis: ${HMDP_REDIS_CONNECT_TIMEOUT_MILLIS:3000}
       retry-attempts: ${HMDP_REDIS_RETRY_ATTEMPTS:3}
       retry-interval-millis: ${HMDP_REDIS_RETRY_INTERVAL_MILLIS:1500}
+  cache:
+    mutex:
+      wait-timeout-millis: 300
+      lease-time-seconds: 10
+      retry-after-fail:
+        enabled: ${HMDP_CACHE_MUTEX_RETRY_AFTER_FAIL_ENABLED:true}
+        max-attempts: ${HMDP_CACHE_MUTEX_RETRY_AFTER_FAIL_MAX_ATTEMPTS:3}
+        sleep-millis: ${HMDP_CACHE_MUTEX_RETRY_AFTER_FAIL_SLEEP_MILLIS:50}
+        fallback-to-db: ${HMDP_CACHE_MUTEX_RETRY_AFTER_FAIL_FALLBACK_TO_DB:false}
+  voucher:
+    order:
+      worker-threads: ${HMDP_VOUCHER_ORDER_WORKER_THREADS:2}
+      close-worker-threads: ${HMDP_VOUCHER_ORDER_CLOSE_WORKER_THREADS:1}
+      stream-required: ${HMDP_VOUCHER_ORDER_STREAM_REQUIRED:true}
+      stream-health-check-enabled: ${HMDP_VOUCHER_ORDER_STREAM_HEALTH_CHECK_ENABLED:true}
+  shop:
+    nearby:
+      initial-fetch-multiplier: ${HMDP_SHOP_NEARBY_INITIAL_FETCH_MULTIPLIER:3}
+      fetch-growth-factor: ${HMDP_SHOP_NEARBY_FETCH_GROWTH_FACTOR:2}
+      max-scan-size: ${HMDP_SHOP_NEARBY_MAX_SCAN_SIZE:200}
   ai:
+    task:
+      heartbeat-interval-seconds: ${HMDP_AI_TASK_HEARTBEAT_INTERVAL_SECONDS:30}
+      running-timeout-minutes: ${HMDP_AI_TASK_RUNNING_TIMEOUT_MINUTES:30}
+      max-retry-count: ${HMDP_AI_TASK_MAX_RETRY_COUNT:3}
+      stuck-scan-enabled: ${HMDP_AI_TASK_STUCK_SCAN_ENABLED:true}
+      stuck-scan-fixed-delay-millis: ${HMDP_AI_TASK_STUCK_SCAN_FIXED_DELAY_MILLIS:60000}
+      stuck-scan-limit: ${HMDP_AI_TASK_STUCK_SCAN_LIMIT:100}
     quota:
       enabled: true
       minute-permits: 10

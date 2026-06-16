@@ -15,6 +15,11 @@ hmdp:
     mutex:
       wait-timeout-millis: 300
       lease-time-seconds: 10
+      retry-after-fail:
+        enabled: ${HMDP_CACHE_MUTEX_RETRY_AFTER_FAIL_ENABLED:true}
+        max-attempts: ${HMDP_CACHE_MUTEX_RETRY_AFTER_FAIL_MAX_ATTEMPTS:3}
+        sleep-millis: ${HMDP_CACHE_MUTEX_RETRY_AFTER_FAIL_SLEEP_MILLIS:50}
+        fallback-to-db: ${HMDP_CACHE_MUTEX_RETRY_AFTER_FAIL_FALLBACK_TO_DB:false}
     logical:
       min-physical-ttl-minutes: 10
     rebuild-executor:
@@ -43,6 +48,11 @@ hmdp:
   upload:
     blog-image:
       owner-ttl-days: 7
+  shop:
+    nearby:
+      initial-fetch-multiplier: ${HMDP_SHOP_NEARBY_INITIAL_FETCH_MULTIPLIER:3}
+      fetch-growth-factor: ${HMDP_SHOP_NEARBY_FETCH_GROWTH_FACTOR:2}
+      max-scan-size: ${HMDP_SHOP_NEARBY_MAX_SCAN_SIZE:200}
   ai:
     redis-health-check: true
     redisson-fallback: false
@@ -82,6 +92,12 @@ hmdp:
       queue-key: ${HMDP_AI_TASK_QUEUE_KEY:hmdp:ai:task:queue}
       bucket-prefix: ${HMDP_AI_TASK_BUCKET_PREFIX:hmdp:ai:task:}
       stream-timeout-minutes: ${HMDP_AI_TASK_STREAM_TIMEOUT_MINUTES:10}
+      heartbeat-interval-seconds: ${HMDP_AI_TASK_HEARTBEAT_INTERVAL_SECONDS:30}
+      running-timeout-minutes: ${HMDP_AI_TASK_RUNNING_TIMEOUT_MINUTES:30}
+      max-retry-count: ${HMDP_AI_TASK_MAX_RETRY_COUNT:3}
+      stuck-scan-enabled: ${HMDP_AI_TASK_STUCK_SCAN_ENABLED:true}
+      stuck-scan-fixed-delay-millis: ${HMDP_AI_TASK_STUCK_SCAN_FIXED_DELAY_MILLIS:60000}
+      stuck-scan-limit: ${HMDP_AI_TASK_STUCK_SCAN_LIMIT:100}
       batch-summary:
         default-shop-limit: ${HMDP_AI_TASK_BATCH_SUMMARY_DEFAULT_SHOP_LIMIT:200}
       schedule:
@@ -93,6 +109,10 @@ hmdp:
     allowed-origin-patterns: ${HMDP_CORS_ALLOWED_ORIGIN_PATTERNS:http://localhost:*,http://127.0.0.1:*}
   voucher:
     order:
+      worker-threads: ${HMDP_VOUCHER_ORDER_WORKER_THREADS:2}
+      close-worker-threads: ${HMDP_VOUCHER_ORDER_CLOSE_WORKER_THREADS:1}
+      stream-required: ${HMDP_VOUCHER_ORDER_STREAM_REQUIRED:true}
+      stream-health-check-enabled: ${HMDP_VOUCHER_ORDER_STREAM_HEALTH_CHECK_ENABLED:true}
       pay-timeout-minutes: 15
       close-scan-limit: 100
       close-scan-fixed-delay-millis: 60000

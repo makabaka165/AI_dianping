@@ -25,6 +25,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -62,6 +63,7 @@ class VoucherOrderServiceImplTest {
         ReflectionTestUtils.setField(service, "currentUserService", currentUserService);
         ReflectionTestUtils.setField(service, "redisIdWorker", redisIdWorker);
         ReflectionTestUtils.setField(service, "seckillVoucherMapper", seckillVoucherMapper);
+        ReflectionTestUtils.setField(service, "streamReady", true);
     }
 
     @Test
@@ -78,6 +80,59 @@ class VoucherOrderServiceImplTest {
         assertThat(result.getData()).isEqualTo(1001L);
         verify(stringRedisTemplate).execute(
                 any(DefaultRedisScript.class), eq(Collections.emptyList()), eq("12"), eq("7"), eq("1001"));
+    }
+
+    @Test
+    void seckillVoucherShouldRejectWhenStreamRequiredAndNotReady() {
+        ReflectionTestUtils.setField(service, "streamReady", false);
+        ReflectionTestUtils.setField(service, "streamRequired", true);
+
+        Result result = service.seckillVoucher(12L);
+
+        assertThat(result.getSuccess()).isFalse();
+        assertThat(result.getErrorMsg()).contains("订单服务暂不可用");
+        verify(stringRedisTemplate, never()).execute(any(DefaultRedisScript.class), anyList(), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void seckillVoucherShouldContinueWhenStreamNotRequiredAndNotReady() {
+        ReflectionTestUtils.setField(service, "streamReady", false);
+        ReflectionTestUtils.setField(service, "streamRequired", false);
+        when(currentUserService.requireCurrentUserId()).thenReturn(7L);
+        when(redisIdWorker.nextId("voucher_order")).thenReturn(1001L);
+        doReturn(0L).when(stringRedisTemplate).execute(
+                any(DefaultRedisScript.class), eq(Collections.emptyList()), eq("12"), eq("7"), eq("1001"));
+
+        Result result = service.seckillVoucher(12L);
+
+        assertThat(result.getSuccess()).isTrue();
+        assertThat(result.getData()).isEqualTo(1001L);
+    }
+
+    @Test
+    void initializeStreamShouldSetOrderStreamReady() {
+        service.streamInitResult = true;
+
+        boolean initialized = service.initializeStreamAndGroup();
+
+        assertThat(initialized).isTrue();
+        assertThat(service.isOrderStreamReady()).isTrue();
+    }
+
+    @Test
+    void initShouldSubmitConfiguredConsumerLoops() {
+        service.streamInitResult = true;
+        ReflectionTestUtils.setField(service, "workerThreads", 2);
+        ReflectionTestUtils.setField(service, "closeWorkerThreads", 3);
+
+        service.init();
+
+        assertThat(service.submittedConsumerLoops).isEqualTo(2);
+        assertThat(service.submittedCloseLoops).isEqualTo(3);
+        assertThat(service.getOrderConsumerHealth()).containsEntry("workerThreads", 2);
+        assertThat(service.getOrderConsumerHealth()).containsEntry("closeWorkerThreads", 3);
+        service.destroy();
     }
 
     @Test
@@ -346,7 +401,36 @@ class VoucherOrderServiceImplTest {
         private boolean saveResult = true;
         private boolean duplicateOnSave = false;
         private boolean failProcessing = false;
+        private boolean streamInitResult = true;
+        private int submittedConsumerLoops = 0;
+        private int submittedCloseLoops = 0;
         private PendingMessage pendingMessage;
+
+        @Override
+        protected boolean initializeStreamAndGroup() {
+            ReflectionTestUtils.setField(this, "streamReady", streamInitResult);
+            return streamInitResult;
+        }
+
+        @Override
+        protected ExecutorService createExecutor(String threadNamePrefix, int threads) {
+            return java.util.concurrent.Executors.newFixedThreadPool(threads);
+        }
+
+        @Override
+        protected void submitConsumerLoop(ExecutorService targetExecutor, Runnable task) {
+            String className = task.getClass().getSimpleName();
+            if (className.contains("VoucherOrderCloseHandler")) {
+                submittedCloseLoops++;
+            } else {
+                submittedConsumerLoops++;
+            }
+        }
+
+        @Override
+        protected void initializeCloseOrderQueue() {
+            // no Redis dependency in unit tests
+        }
 
         @Override
         public boolean save(VoucherOrder entity) {

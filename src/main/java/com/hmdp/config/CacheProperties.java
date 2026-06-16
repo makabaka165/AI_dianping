@@ -18,6 +18,15 @@ public class CacheProperties {
     public static class Mutex {
         private long waitTimeoutMillis = 300L;
         private long leaseTimeSeconds = 10L;
+        private RetryAfterFail retryAfterFail = new RetryAfterFail();
+    }
+
+    @Data
+    public static class RetryAfterFail {
+        private boolean enabled = true;
+        private int maxAttempts = 3;
+        private long sleepMillis = 50L;
+        private boolean fallbackToDb = false;
     }
 
     @Data

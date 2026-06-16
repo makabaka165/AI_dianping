@@ -92,18 +92,24 @@ public class AiTaskWorker {
         long start = System.currentTimeMillis();
         boolean failed = false;
         try {
+            long now = System.currentTimeMillis();
             task.setStatus(AiTaskStatus.RUNNING);
             task.setErrorMessage(null);
+            task.setStartedAtEpochMillis(now);
+            task.setHeartbeatAtEpochMillis(now);
+            task.setFinishedAtEpochMillis(null);
             repository.update(task);
             publishEvent(task);
 
             Object result = dispatch(task);
             task.setResult(result);
             task.setStatus(AiTaskStatus.SUCCESS);
+            task.setFinishedAtEpochMillis(System.currentTimeMillis());
         } catch (Exception e) {
             failed = true;
             task.setStatus(AiTaskStatus.FAILED);
             task.setErrorMessage(e.getMessage());
+            task.setFinishedAtEpochMillis(System.currentTimeMillis());
             log.warn("AI task failed, taskId={}", taskId, e);
         } finally {
             repository.update(task);
@@ -134,6 +140,7 @@ public class AiTaskWorker {
         return handler.handle(task, (current, total) -> {
             task.setProgressCurrent(current);
             task.setProgressTotal(total);
+            task.setHeartbeatAtEpochMillis(System.currentTimeMillis());
             repository.update(task);
             publishEvent(task);
         });
