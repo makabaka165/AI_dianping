@@ -50,13 +50,6 @@ public class DocumentQualityAssessor {
             "加微信", "返现", "刷单", "复制", "无意义", "广告", "http", "www.", "优惠代理"
     );
 
-    /**
-     * Legacy score-only interface. New callers should use {@link #assess(Document, DocumentQualityProfile)}.
-     */
-    public double assessQuality(Document document) {
-        return assess(document, DocumentQualityProfile.GENERAL).getScore();
-    }
-
     public DocumentQualityAssessment assess(Document document) {
         return assess(document, DocumentQualityProfile.GENERAL);
     }

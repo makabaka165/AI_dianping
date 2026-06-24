@@ -68,10 +68,4 @@ class DocumentQualityAssessorTest {
         assertThat(assessment.getKeywords()).contains("服务", "环境", "味道", "价格");
     }
 
-    @Test
-    void legacyScoreOnlyInterfaceShouldRemainAvailable() {
-        double score = assessor.assessQuality(Document.from("这是一份普通文档，包含清晰段落和基本说明。\n第二段继续描述背景、处理方式和注意事项。"));
-
-        assertThat(score).isBetween(0.0, 1.0);
-    }
 }
