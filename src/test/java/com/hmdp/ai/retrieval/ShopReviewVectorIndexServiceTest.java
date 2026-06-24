@@ -1,6 +1,8 @@
 package com.hmdp.ai.retrieval;
 
 import com.hmdp.ai.port.ReviewDataPort;
+import com.hmdp.ai.infra.DocumentQualityAssessor;
+import com.hmdp.ai.infra.DocumentIndexDecisionService;
 import com.hmdp.dto.ai.EvidenceItem;
 import com.hmdp.dto.ai.ReviewDoc;
 import com.hmdp.dto.ai.ShopRagRebuildResult;
@@ -28,6 +30,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentCaptor.forClass;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -64,6 +67,8 @@ class ShopReviewVectorIndexServiceTest {
         service = new ShopReviewVectorIndexService(storeProvider, modelProvider);
         ReflectionTestUtils.setField(service, "reviewDataPort", reviewDataPort);
         ReflectionTestUtils.setField(service, "documentFactory", documentFactory);
+        ReflectionTestUtils.setField(service, "documentQualityAssessor", new DocumentQualityAssessor());
+        ReflectionTestUtils.setField(service, "documentIndexDecisionService", new DocumentIndexDecisionService());
         ReflectionTestUtils.setField(service, "aiMetricsService", aiMetricsService);
         ReflectionTestUtils.setField(service, "ragEnabled", true);
         ReflectionTestUtils.setField(service, "reviewRagEnabled", true);
@@ -71,6 +76,9 @@ class ShopReviewVectorIndexServiceTest {
         ReflectionTestUtils.setField(service, "maxVectorCandidates", 20);
         ReflectionTestUtils.setField(service, "backfillPageSize", 200);
         ReflectionTestUtils.setField(service, "compactEnabled", true);
+        ReflectionTestUtils.setField(service, "reviewQualityEnabled", true);
+        ReflectionTestUtils.setField(service, "reviewQualityIndexPolicy", "observe_only");
+        ReflectionTestUtils.setField(service, "reviewQualityMinScore", 0.45);
     }
 
     @Test
@@ -85,6 +93,25 @@ class ShopReviewVectorIndexServiceTest {
         assertThat(result.getIndexed()).isEqualTo(1);
         assertThat(result.getFailed()).isZero();
         verify(embeddingStore).add(any(Embedding.class), any(TextSegment.class));
+    }
+
+    @Test
+    void indexBlogShouldKeepIndexingLowQualityReviewInObserveOnlyModeWithQualityMetadata() {
+        ReviewDoc blog = activeBlog(1L, "好");
+        when(reviewDataPort.getReview(1L)).thenReturn(blog);
+        when(embeddingModel.embed(anyString())).thenReturn(Response.from(Embedding.from(new float[]{0.1f, 0.2f})));
+        when(embeddingStore.add(any(Embedding.class), any(TextSegment.class))).thenReturn("embedding-1");
+
+        ShopRagRebuildResult result = service.indexBlog(1L);
+
+        org.mockito.ArgumentCaptor<TextSegment> segmentCaptor = forClass(TextSegment.class);
+        assertThat(result.getIndexed()).isEqualTo(1);
+        verify(embeddingStore).add(any(Embedding.class), segmentCaptor.capture());
+        TextSegment indexedSegment = segmentCaptor.getValue();
+        assertThat(indexedSegment.metadata().getString(ReviewVectorDocumentFactory.META_QUALITY_PROFILE)).isEqualTo("SHOP_REVIEW");
+        assertThat(indexedSegment.metadata().getString(ReviewVectorDocumentFactory.META_INDEX_DECISION_ACTION)).isEqualTo("INDEX");
+        assertThat(indexedSegment.metadata().getString(ReviewVectorDocumentFactory.META_INDEX_DECISION_POLICY)).isEqualTo("OBSERVE_ONLY");
+        assertThat(indexedSegment.metadata().getDouble(ReviewVectorDocumentFactory.META_QUALITY_SCORE)).isLessThan(0.70);
     }
 
     @Test

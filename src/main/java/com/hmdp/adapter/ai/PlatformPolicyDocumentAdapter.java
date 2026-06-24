@@ -1,5 +1,6 @@
 package com.hmdp.adapter.ai;
 
+import com.hmdp.ai.infra.DocumentQualityAssessment;
 import com.hmdp.ai.port.PlatformPolicyDocumentPort;
 import com.hmdp.entity.DocumentMetadata;
 import com.hmdp.entity.DocumentStatus;
@@ -22,7 +23,7 @@ public class PlatformPolicyDocumentAdapter implements PlatformPolicyDocumentPort
                                      String fileType,
                                      LocalDateTime createdAt,
                                      LocalDateTime updatedAt,
-                                     double qualityScore,
+                                     DocumentQualityAssessment qualityAssessment,
                                      int wordCount,
                                      Document document) {
         DocumentMetadata metadata = new DocumentMetadata();
@@ -32,8 +33,21 @@ public class PlatformPolicyDocumentAdapter implements PlatformPolicyDocumentPort
         metadata.setCreatedAt(createdAt);
         metadata.setUpdatedAt(updatedAt);
         metadata.setStatus(DocumentStatus.PUBLISHED);
-        metadata.setQualityScore(qualityScore);
         metadata.setWordCount(wordCount);
+        applyQualityAssessment(metadata, qualityAssessment);
         documentManagementService.saveDocument(metadata);
+    }
+
+    private void applyQualityAssessment(DocumentMetadata metadata, DocumentQualityAssessment assessment) {
+        if (metadata == null || assessment == null) {
+            return;
+        }
+        metadata.setQualityScore(assessment.getScore());
+        metadata.setQualityProfile(assessment.getProfile().name());
+        metadata.setQualityLevel(assessment.getLevel().name());
+        metadata.setQualityDimensions(assessment.getDimensionScores());
+        metadata.setQualityIssues(assessment.getIssues());
+        metadata.setQualitySuggestions(assessment.getSuggestions());
+        metadata.setKeywords(assessment.getKeywords().toArray(new String[0]));
     }
 }

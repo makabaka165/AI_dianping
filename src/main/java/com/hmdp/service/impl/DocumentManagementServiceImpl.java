@@ -2,7 +2,9 @@ package com.hmdp.service.impl;
 
 import com.hmdp.entity.DocumentMetadata;
 import com.hmdp.entity.DocumentStatus;
+import com.hmdp.ai.infra.DocumentQualityAssessment;
 import com.hmdp.ai.infra.DocumentQualityAssessor;
+import com.hmdp.ai.infra.DocumentQualityProfile;
 import com.hmdp.service.DocumentManagementService;
 import dev.langchain4j.data.document.Document;
 import dev.langchain4j.data.segment.TextSegment;
@@ -80,8 +82,8 @@ public class DocumentManagementServiceImpl implements DocumentManagementService 
         }
 
         // 评估文档质量
-        double qualityScore = qualityAssessor.assessQuality(document);
-        metadata.setQualityScore(qualityScore);
+        DocumentQualityAssessment assessment = qualityAssessor.assess(document, DocumentQualityProfile.GENERAL);
+        applyQualityAssessment(metadata, assessment);
         
         // 设置词数
         metadata.setWordCount(document.text().length());
@@ -90,7 +92,7 @@ public class DocumentManagementServiceImpl implements DocumentManagementService 
         documentMetadataStore.put(documentId, metadata);
         documentStore.put(documentId, document);
         
-        log.info("添加文档: ID={}, 标题={}, 质量得分={}", documentId, metadata.getTitle(), qualityScore);
+        log.info("添加文档: ID={}, 标题={}, 质量得分={}", documentId, metadata.getTitle(), assessment.getScore());
         return documentId;
     }
 
@@ -116,8 +118,8 @@ public class DocumentManagementServiceImpl implements DocumentManagementService 
             }
             
             // 重新评估质量
-            double qualityScore = qualityAssessor.assessQuality(document);
-            metadata.setQualityScore(qualityScore);
+            DocumentQualityAssessment assessment = qualityAssessor.assess(document, DocumentQualityProfile.GENERAL);
+            applyQualityAssessment(metadata, assessment);
             metadata.setWordCount(document.text().length());
             
             documentMetadataStore.put(documentId, metadata);
@@ -174,5 +176,18 @@ public class DocumentManagementServiceImpl implements DocumentManagementService 
         return documentMetadataStore.values().stream()
                 .filter(metadata -> metadata.getQualityScore() >= minScore && metadata.getQualityScore() <= maxScore)
                 .collect(ArrayList::new, (list, item) -> list.add(item), ArrayList::addAll);
+    }
+
+    private void applyQualityAssessment(DocumentMetadata metadata, DocumentQualityAssessment assessment) {
+        if (metadata == null || assessment == null) {
+            return;
+        }
+        metadata.setQualityScore(assessment.getScore());
+        metadata.setQualityProfile(assessment.getProfile().name());
+        metadata.setQualityLevel(assessment.getLevel().name());
+        metadata.setQualityDimensions(assessment.getDimensionScores());
+        metadata.setQualityIssues(assessment.getIssues());
+        metadata.setQualitySuggestions(assessment.getSuggestions());
+        metadata.setKeywords(assessment.getKeywords().toArray(new String[0]));
     }
 }

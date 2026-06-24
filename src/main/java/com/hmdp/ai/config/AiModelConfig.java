@@ -2,7 +2,9 @@ package com.hmdp.ai.config;
 
 import com.hmdp.ai.memory.ChatMemoryKeyManager;
 import com.hmdp.ai.memory.RedissonChatMemoryStore;
+import com.hmdp.ai.infra.DocumentQualityAssessment;
 import com.hmdp.ai.infra.DocumentQualityAssessor;
+import com.hmdp.ai.infra.DocumentQualityProfile;
 import com.hmdp.ai.port.PlatformPolicyDocumentPort;
 import com.hmdp.ai.retrieval.QualityBasedContentRetriever;
 import dev.langchain4j.data.document.Document;
@@ -340,14 +342,15 @@ public class AiModelConfig {
             // 4. 将文档添加到文档管理系统
             for (Document document : documents) {
                 LocalDateTime now = LocalDateTime.now();
-                double qualityScore = documentQualityAssessor.assessQuality(document);
+                DocumentQualityAssessment qualityAssessment =
+                        documentQualityAssessor.assess(document, DocumentQualityProfile.PLATFORM_POLICY);
                 platformPolicyDocumentPort.saveImportedDocument(
                         "imported-document-" + UUID.randomUUID().toString().substring(0, 8),
                         "system-initial-import",
                         "txt",
                         now,
                         now,
-                        qualityScore,
+                        qualityAssessment,
                         document.text().length(),
                         document);
             }

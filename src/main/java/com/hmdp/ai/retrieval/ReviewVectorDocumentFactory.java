@@ -1,5 +1,7 @@
 package com.hmdp.ai.retrieval;
 
+import com.hmdp.ai.infra.DocumentIndexDecision;
+import com.hmdp.ai.infra.DocumentQualityAssessment;
 import com.hmdp.dto.ai.EvidenceItem;
 import com.hmdp.dto.ai.ReviewDoc;
 import dev.langchain4j.data.document.Metadata;
@@ -18,8 +20,19 @@ public class ReviewVectorDocumentFactory {
     public static final String META_SHOP_ID = "shopId";
     public static final String META_CONTENT_HASH = "contentHash";
     public static final String META_CREATED_AT = "createdAt";
+    public static final String META_QUALITY_PROFILE = "qualityProfile";
+    public static final String META_QUALITY_SCORE = "qualityScore";
+    public static final String META_QUALITY_LEVEL = "qualityLevel";
+    public static final String META_QUALITY_ISSUES = "qualityIssues";
+    public static final String META_INDEX_DECISION_POLICY = "indexDecisionPolicy";
+    public static final String META_INDEX_DECISION_ACTION = "indexDecisionAction";
+    public static final String META_INDEX_DECISION_REASON = "indexDecisionReason";
 
     public TextSegment toSegment(ReviewDoc review) {
+        return toSegment(review, null);
+    }
+
+    public TextSegment toSegment(ReviewDoc review, DocumentIndexDecision decision) {
         if (review == null || review.getId() == null || review.getShopId() == null || isBlank(review.getContent())) {
             return null;
         }
@@ -29,7 +42,22 @@ public class ReviewVectorDocumentFactory {
                 .put(META_SHOP_ID, review.getShopId())
                 .put(META_CONTENT_HASH, contentHash(review))
                 .put(META_CREATED_AT, review.getCreateTime() == null ? "" : review.getCreateTime().toString());
+        addQualityMetadata(metadata, decision);
         return TextSegment.from(vectorText(review), metadata);
+    }
+
+    private void addQualityMetadata(Metadata metadata, DocumentIndexDecision decision) {
+        if (metadata == null || decision == null || decision.getAssessment() == null) {
+            return;
+        }
+        DocumentQualityAssessment assessment = decision.getAssessment();
+        metadata.put(META_QUALITY_PROFILE, assessment.getProfile().name())
+                .put(META_QUALITY_SCORE, assessment.getScore())
+                .put(META_QUALITY_LEVEL, assessment.getLevel().name())
+                .put(META_QUALITY_ISSUES, String.join(",", assessment.getIssues()))
+                .put(META_INDEX_DECISION_POLICY, decision.getPolicy().name())
+                .put(META_INDEX_DECISION_ACTION, decision.getAction().name())
+                .put(META_INDEX_DECISION_REASON, decision.getReason());
     }
 
     public String contentHash(ReviewDoc review) {

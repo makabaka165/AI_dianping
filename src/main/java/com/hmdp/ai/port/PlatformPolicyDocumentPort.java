@@ -1,5 +1,6 @@
 package com.hmdp.ai.port;
 
+import com.hmdp.ai.infra.DocumentQualityAssessment;
 import dev.langchain4j.data.document.Document;
 
 import java.time.LocalDateTime;
@@ -11,7 +12,7 @@ public interface PlatformPolicyDocumentPort {
                               String fileType,
                               LocalDateTime createdAt,
                               LocalDateTime updatedAt,
-                              double qualityScore,
+                              DocumentQualityAssessment qualityAssessment,
                               int wordCount,
                               Document document);
 }

@@ -7,6 +7,11 @@ import com.hmdp.dto.ai.ReviewDoc;
 import com.hmdp.dto.ai.ShopRagRebuildResult;
 import com.hmdp.ai.infra.AiMetricsService;
 import com.hmdp.ai.infra.AiLogSanitizer;
+import com.hmdp.ai.infra.DocumentIndexDecision;
+import com.hmdp.ai.infra.DocumentIndexDecisionService;
+import com.hmdp.ai.infra.DocumentIndexPolicy;
+import com.hmdp.ai.infra.DocumentQualityAssessment;
+import com.hmdp.ai.infra.DocumentQualityAssessor;
 import dev.langchain4j.data.embedding.Embedding;
 import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.model.embedding.EmbeddingModel;
@@ -42,6 +47,12 @@ public class ShopReviewVectorIndexService {
     private ReviewVectorDocumentFactory documentFactory;
 
     @Resource
+    private DocumentQualityAssessor documentQualityAssessor;
+
+    @Resource
+    private DocumentIndexDecisionService documentIndexDecisionService;
+
+    @Resource
     private AiMetricsService aiMetricsService;
 
     @Value("${rag.enabled:false}")
@@ -64,6 +75,15 @@ public class ShopReviewVectorIndexService {
 
     @Value("${rag.review.compact.warn-invalid-ratio:0.3}")
     private double compactWarnInvalidRatio;
+
+    @Value("${rag.review.quality.enabled:true}")
+    private boolean reviewQualityEnabled;
+
+    @Value("${rag.review.quality.index-policy:observe_only}")
+    private String reviewQualityIndexPolicy;
+
+    @Value("${rag.review.quality.min-score:0.45}")
+    private double reviewQualityMinScore;
 
     public ShopReviewVectorIndexService(@Qualifier("shopReviewEmbeddingStore")
                                         ObjectProvider<EmbeddingStore<TextSegment>> embeddingStoreProvider,
@@ -225,7 +245,16 @@ public class ShopReviewVectorIndexService {
                     "blog inactive or invalid");
         }
         try {
-            TextSegment segment = documentFactory.toSegment(review);
+            DocumentIndexDecision indexDecision = decideReviewIndexing(review);
+            if (indexDecision != null && !indexDecision.shouldIndex()) {
+                log.info("Review vector indexing skipped by quality decision, blogId={}, score={}, reason={}",
+                        review.getId(),
+                        indexDecision.getAssessment() == null ? null : indexDecision.getAssessment().getScore(),
+                        indexDecision.getReason());
+                return result(review.getShopId(), 0, 1, 0, start,
+                        "quality decision skipped: " + indexDecision.getReason());
+            }
+            TextSegment segment = documentFactory.toSegment(review, indexDecision);
             if (segment == null) {
                 return result(review.getShopId(), 0, 1, 0, start, "empty segment");
             }
@@ -244,6 +273,34 @@ public class ShopReviewVectorIndexService {
             recordRagIndex("index_blog", 0, 0, 1, result.getDurationMs());
             return result;
         }
+    }
+
+    private DocumentIndexDecision decideReviewIndexing(ReviewDoc review) {
+        if (!reviewQualityEnabled || review == null) {
+            return null;
+        }
+        DocumentQualityAssessor assessor = documentQualityAssessor;
+        if (assessor == null) {
+            return null;
+        }
+        DocumentQualityAssessment assessment = assessor.assessReview(review);
+        DocumentIndexDecisionService decisionService = documentIndexDecisionService == null
+                ? new DocumentIndexDecisionService()
+                : documentIndexDecisionService;
+        DocumentIndexDecision decision = decisionService.decide(
+                assessment,
+                DocumentIndexPolicy.from(reviewQualityIndexPolicy, DocumentIndexPolicy.OBSERVE_ONLY),
+                reviewQualityMinScore);
+        if (decision.lowQuality()) {
+            log.info("Review vector quality observed, blogId={}, score={}, level={}, policy={}, action={}, issues={}",
+                    review.getId(),
+                    assessment.getScore(),
+                    assessment.getLevel(),
+                    decision.getPolicy(),
+                    decision.getAction(),
+                    assessment.getIssues());
+        }
+        return decision;
     }
 
     private EvidenceItem toEvidence(Long expectedShopId, EmbeddingMatch<TextSegment> match) {
