@@ -17,6 +17,6 @@ public class DocumentIndexDecision {
     }
 
     public boolean lowQuality() {
-        return assessment != null && assessment.getScore() < minScore;
+        return assessment == null || assessment.getScore() < minScore;
     }
 }

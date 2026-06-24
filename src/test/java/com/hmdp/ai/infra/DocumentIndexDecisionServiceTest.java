@@ -75,6 +75,19 @@ class DocumentIndexDecisionServiceTest {
         }
     }
 
+    @Test
+    void missingAssessmentShouldBeTreatedAsLowQualityForStrictPolicy() {
+        DocumentIndexDecision decision = service.decide(
+                null,
+                DocumentIndexPolicy.SKIP_LOW_QUALITY,
+                0.45);
+
+        assertThat(decision.lowQuality()).isTrue();
+        assertThat(decision.shouldIndex()).isFalse();
+        assertThat(decision.getAction()).isEqualTo(DocumentIndexAction.SKIP);
+        assertThat(decision.getReason()).isEqualTo("LOW_QUALITY_SKIPPED");
+    }
+
     private DocumentQualityAssessment assessment(double score) {
         return DocumentQualityAssessment.builder()
                 .profile(DocumentQualityProfile.SHOP_REVIEW)
