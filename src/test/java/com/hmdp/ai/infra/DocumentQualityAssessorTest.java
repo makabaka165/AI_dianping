@@ -41,6 +41,20 @@ class DocumentQualityAssessorTest {
     }
 
     @Test
+    void platformPolicyAssessmentShouldKeepPositiveTopicWhenSameTermAlsoAppearsInNegatedBoundary() {
+        String content = "# 退款规则\n"
+                + "适用范围：用户在平台订单发生重复支付或商家无法履约时，可以申请退款。\n"
+                + "处理流程：用户提交订单号、支付凭证和商家沟通记录，平台客服审核后处理。\n"
+                + "限制条件：已核销订单或缺少凭证时，平台不支持退款。\n"
+                + "投诉渠道：如商家拒绝沟通，用户可以继续投诉。";
+
+        DocumentQualityAssessment assessment = assessor.assess(content, DocumentQualityProfile.PLATFORM_POLICY);
+
+        assertThat(assessment.getDimensionScores().get("topicRelevance")).isGreaterThanOrEqualTo(0.75);
+        assertThat(assessment.getIssues()).doesNotContain("LOW_PLATFORM_POLICY_RELEVANCE");
+    }
+
+    @Test
     void shopReviewAssessmentShouldUseReviewEvidenceProfile() {
         String content = "周末和朋友来吃晚餐，排队等了20分钟。服务态度不错，店员会主动加水，"
                 + "招牌菜味道稳定，人均88元，环境有点吵但整体适合聚餐，性价比还可以。";

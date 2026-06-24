@@ -128,7 +128,7 @@ public class DocumentQualityAssessor {
     }
 
     private ProfileScore scorePlatformPolicy(TextStats stats) {
-        double topic = coverageScore(stats.content, POLICY_TOPICS, 4);
+        double topic = coverageScore(stats.content, POLICY_TOPICS, 4, true);
         double completeness = coverageScore(stats.content, POLICY_COMPLETENESS_TERMS, 6, true);
         double structure = structureScore(stats);
         double retrievability = retrievabilityScore(stats, POLICY_TOPICS, POLICY_COMPLETENESS_TERMS);
@@ -251,6 +251,12 @@ public class DocumentQualityAssessor {
                                                       List<String> issues,
                                                       List<String> suggestions) {
         double safeScore = clamp(score);
+        if (stats.charCount < 20) {
+            safeScore = Math.min(safeScore, 0.44);
+        }
+        if (stats.noiseRatio > 0.15) {
+            safeScore = Math.min(safeScore, 0.60);
+        }
         return DocumentQualityAssessment.builder()
                 .profile(profile)
                 .level(DocumentQualityLevel.fromScore(safeScore))
@@ -274,7 +280,7 @@ public class DocumentQualityAssessor {
         if (stats.charCount < 20) {
             issues.add("TOO_SHORT");
         }
-        if (stats.noiseRatio > 0.20) {
+        if (stats.noiseRatio > 0.15) {
             issues.add("HIGH_NOISE_RATIO");
         }
         if (stats.duplicateLineRatio > 0.35) {
@@ -379,7 +385,7 @@ public class DocumentQualityAssessor {
     private double coverageScore(String content, List<String> terms, int idealMatches, boolean ignoreNegated) {
         int matches = 0;
         for (String term : terms) {
-            if (containsIgnoreCase(content, term) && (!ignoreNegated || !negatedNearTerm(content, term))) {
+            if (termCovered(content, term, ignoreNegated)) {
                 matches++;
             }
         }
@@ -512,7 +518,7 @@ public class DocumentQualityAssessor {
     }
 
     private boolean isCommonPunctuation(char ch) {
-        return "，。！？；：、“”‘’（）【】《》,.!?;:()[]#-*_/|+%&=@".indexOf(ch) >= 0;
+        return "，。！？；：、“”‘’（）【】《》,.!?;:()[]#-*_/".indexOf(ch) >= 0;
     }
 
     private int countSentences(String content) {
@@ -607,20 +613,33 @@ public class DocumentQualityAssessor {
                 && content.toLowerCase(Locale.ROOT).contains(term.toLowerCase(Locale.ROOT));
     }
 
-    private boolean negatedNearTerm(String content, String term) {
+    private boolean termCovered(String content, String term, boolean ignoreNegated) {
         if (content == null || term == null) {
             return false;
         }
-        int index = content.indexOf(term);
+        String normalizedContent = content.toLowerCase(Locale.ROOT);
+        String normalizedTerm = term.toLowerCase(Locale.ROOT);
+        int index = normalizedContent.indexOf(normalizedTerm);
         while (index >= 0) {
-            int start = Math.max(0, index - 8);
-            String prefix = content.substring(start, index);
-            if (prefix.matches(".*(没有|没有任何|未包含|缺少|不含|无).*")) {
+            if (!ignoreNegated || !negatedAt(content, index)) {
                 return true;
             }
-            index = content.indexOf(term, index + term.length());
+            index = normalizedContent.indexOf(normalizedTerm, index + normalizedTerm.length());
         }
         return false;
+    }
+
+    private boolean negatedAt(String content, int index) {
+        int start = Math.max(0, index - 8);
+        String prefix = content.substring(start, index);
+        if (prefix.matches(".*(没有|没有任何|未包含|缺少|不含|不支持|不适合|无).*")) {
+            return true;
+        }
+        int sentenceStart = Math.max(
+                Math.max(content.lastIndexOf('。', index), content.lastIndexOf('！', index)),
+                Math.max(content.lastIndexOf('？', index), content.lastIndexOf('\n', index))) + 1;
+        String sentencePrefix = content.substring(sentenceStart, index);
+        return sentencePrefix.matches(".*(没有|没有任何|未包含|缺少|不含|不支持|不适合|无).*");
     }
 
     private boolean containsChinese(String text) {

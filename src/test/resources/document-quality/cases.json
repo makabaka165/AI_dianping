@@ -1,0 +1,99 @@
+[
+  {
+    "name": "excellent refund policy",
+    "file": "platform-policy/excellent_refund_policy.md",
+    "profile": "PLATFORM_POLICY",
+    "minScore": 0.75,
+    "expectedLevelAtLeast": "GOOD",
+    "expectedDimensionsPresent": ["topicRelevance", "policyCompleteness", "retrievability"],
+    "expectedKeywordsPresent": ["平台", "退款", "投诉", "商家"],
+    "expectedIssuesAbsent": ["HIGH_NOISE_RATIO", "LOW_PLATFORM_POLICY_RELEVANCE", "MISSING_POLICY_PROCESS_OR_BOUNDARIES"]
+  },
+  {
+    "name": "fair account policy",
+    "file": "platform-policy/fair_account_policy.md",
+    "profile": "PLATFORM_POLICY",
+    "minScore": 0.45,
+    "maxScore": 0.88,
+    "expectedLevelAtLeast": "FAIR",
+    "expectedDimensionsPresent": ["topicRelevance", "policyCompleteness", "retrievability"],
+    "expectedKeywordsPresent": ["平台", "账号", "登录"],
+    "expectedIssuesAbsent": ["HIGH_NOISE_RATIO", "LOW_PLATFORM_POLICY_RELEVANCE"]
+  },
+  {
+    "name": "poor unrelated policy",
+    "file": "platform-policy/poor_unrelated_policy.md",
+    "profile": "PLATFORM_POLICY",
+    "maxScore": 0.55,
+    "expectedLevelAtMost": "FAIR",
+    "expectedDimensionsPresent": ["topicRelevance", "policyCompleteness", "retrievability"],
+    "expectedIssuesPresent": ["LOW_PLATFORM_POLICY_RELEVANCE"]
+  },
+  {
+    "name": "noisy policy",
+    "file": "platform-policy/noisy_policy.md",
+    "profile": "PLATFORM_POLICY",
+    "maxScore": 0.60,
+    "expectedLevelAtMost": "FAIR",
+    "expectedDimensionsPresent": ["topicRelevance", "policyCompleteness", "readability"],
+    "expectedIssuesPresent": ["HIGH_NOISE_RATIO"]
+  },
+  {
+    "name": "excellent review",
+    "file": "shop-review/excellent_review.txt",
+    "profile": "SHOP_REVIEW",
+    "minScore": 0.75,
+    "expectedLevelAtLeast": "GOOD",
+    "expectedDimensionsPresent": ["reviewEvidence", "aspectCoverage", "sentimentSignal", "spamSafety"],
+    "expectedKeywordsPresent": ["服务", "环境", "味道", "价格"],
+    "expectedIssuesAbsent": ["LOW_REVIEW_EVIDENCE_VALUE", "POSSIBLE_REVIEW_SPAM_OR_AD"]
+  },
+  {
+    "name": "useful short review",
+    "file": "shop-review/useful_short_review.txt",
+    "profile": "SHOP_REVIEW",
+    "minScore": 0.45,
+    "maxScore": 0.90,
+    "expectedLevelAtLeast": "FAIR",
+    "expectedDimensionsPresent": ["reviewEvidence", "aspectCoverage", "sentimentSignal", "spamSafety"],
+    "expectedKeywordsPresent": ["服务", "味道", "价格"],
+    "expectedIssuesAbsent": ["POSSIBLE_REVIEW_SPAM_OR_AD"]
+  },
+  {
+    "name": "vague review",
+    "file": "shop-review/vague_review.txt",
+    "profile": "SHOP_REVIEW",
+    "maxScore": 0.65,
+    "expectedLevelAtMost": "FAIR",
+    "expectedDimensionsPresent": ["reviewEvidence", "aspectCoverage", "sentimentSignal"],
+    "expectedIssuesPresent": ["LOW_REVIEW_ASPECT_COVERAGE", "LOW_REVIEW_EVIDENCE_VALUE"]
+  },
+  {
+    "name": "spam review",
+    "file": "shop-review/spam_review.txt",
+    "profile": "SHOP_REVIEW",
+    "maxScore": 0.60,
+    "expectedLevelAtMost": "FAIR",
+    "expectedDimensionsPresent": ["reviewEvidence", "spamSafety", "readability"],
+    "expectedIssuesPresent": ["POSSIBLE_REVIEW_SPAM_OR_AD"]
+  },
+  {
+    "name": "structured general doc",
+    "file": "general/structured_doc.md",
+    "profile": "GENERAL",
+    "minScore": 0.70,
+    "expectedLevelAtLeast": "GOOD",
+    "expectedDimensionsPresent": ["length", "keywordDiversity", "structure", "readability"],
+    "expectedKeywordsPresent": ["文档", "流程"],
+    "expectedIssuesAbsent": ["HIGH_NOISE_RATIO", "DUPLICATE_CONTENT"]
+  },
+  {
+    "name": "short general doc",
+    "file": "general/short_doc.txt",
+    "profile": "GENERAL",
+    "maxScore": 0.45,
+    "expectedLevelAtMost": "POOR",
+    "expectedDimensionsPresent": ["length", "keywordDiversity", "structure", "readability"],
+    "expectedIssuesPresent": ["TOO_SHORT"]
+  }
+]
