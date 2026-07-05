@@ -1,11 +1,34 @@
 -- Enterprise-oriented voucher seckill upgrade.
 
-DELETE o1
-FROM `tb_voucher_order` o1
-JOIN `tb_voucher_order` o2
-  ON o1.user_id = o2.user_id
- AND o1.voucher_id = o2.voucher_id
- AND o1.id > o2.id;
+DROP PROCEDURE IF EXISTS `hmdp_assert_no_duplicate_voucher_orders`;
+DELIMITER $$
+CREATE PROCEDURE `hmdp_assert_no_duplicate_voucher_orders`()
+BEGIN
+    DECLARE duplicate_order_groups BIGINT DEFAULT 0;
+    DECLARE duplicate_order_message VARCHAR(128);
+
+    SELECT COUNT(*)
+    INTO duplicate_order_groups
+    FROM (
+        SELECT `user_id`, `voucher_id`
+        FROM `tb_voucher_order`
+        GROUP BY `user_id`, `voucher_id`
+        HAVING COUNT(*) > 1
+    ) duplicate_orders;
+
+    IF duplicate_order_groups > 0 THEN
+        SET duplicate_order_message = CONCAT(
+            'Duplicate voucher order groups: ',
+            duplicate_order_groups,
+            '; resolve manually before migration'
+        );
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = duplicate_order_message;
+    END IF;
+END$$
+DELIMITER ;
+
+CALL `hmdp_assert_no_duplicate_voucher_orders`();
+DROP PROCEDURE IF EXISTS `hmdp_assert_no_duplicate_voucher_orders`;
 
 SET @idx_exists := (
     SELECT COUNT(*)

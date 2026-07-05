@@ -10,6 +10,7 @@ import javax.annotation.PostConstruct;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * 本地缓存管理器
@@ -26,6 +27,7 @@ public class LocalCacheManager {
     private Cache<String, Object> memoryStatsCache;   // 记忆统计：2分钟
     private Cache<String, Object> aiResultCache;      // AI分析结果：1小时
     private Cache<String, Object> quickCache;         // 快速缓存：1分钟
+    private Cache<String, AtomicInteger> rateLimitCache;
 
     // 店铺相关的缓存键映射，用于快速清理
     private Map<Long, Set<String>> shopRelatedCacheKeys = new ConcurrentHashMap<>();
@@ -104,6 +106,14 @@ public class LocalCacheManager {
         quickCache = Caffeine.newBuilder()
                 .maximumSize(1000)
                 .expireAfterWrite(1, TimeUnit.MINUTES)
+                .recordStats()
+                .build();
+
+        // Single-instance local rate limit cache. The window segment is part of
+        // each key, so callers recover automatically when the window advances.
+        rateLimitCache = Caffeine.newBuilder()
+                .maximumSize(10000)
+                .expireAfterAccess(2, TimeUnit.HOURS)
                 .recordStats()
                 .build();
 
@@ -347,8 +357,35 @@ public class LocalCacheManager {
         memoryStatsCache.invalidateAll();
         aiResultCache.invalidateAll();
         quickCache.invalidateAll();
+        rateLimitCache.invalidateAll();
         shopRelatedCacheKeys.clear();
         log.info("已清空所有缓存");
+    }
+
+    public boolean checkAndIncrementUserCallCount(String userId, String toolName, int limit, long windowMillis) {
+        return checkAndIncrementUserCallCount(userId, toolName, limit, windowMillis, System.currentTimeMillis());
+    }
+
+    boolean checkAndIncrementUserCallCount(String userId, String toolName, int limit, long windowMillis, long nowMillis) {
+        if (limit <= 0) {
+            return false;
+        }
+        long safeWindowMillis = Math.max(1L, windowMillis);
+        long segment = Math.floorDiv(Math.max(0L, nowMillis), safeWindowMillis);
+        String key = safeRateLimitSegment(userId, "anonymous")
+                + ":" + safeRateLimitSegment(toolName, "default")
+                + ":" + segment;
+        AtomicInteger counter = rateLimitCache.get(key, ignored -> new AtomicInteger(0));
+        return counter.incrementAndGet() <= limit;
+    }
+
+    public void cleanupExpiredUserCallCounters() {
+        rateLimitCache.cleanUp();
+    }
+
+    private String safeRateLimitSegment(String value, String fallback) {
+        String text = value == null || value.trim().isEmpty() ? fallback : value.trim();
+        return text.replaceAll("[^a-zA-Z0-9_.-]", "_");
     }
 
     /**

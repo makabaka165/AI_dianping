@@ -1,6 +1,7 @@
 package com.hmdp.service.impl;
 
 import com.hmdp.entity.Blog;
+import com.hmdp.exception.BusinessException;
 import com.hmdp.mapper.BlogMapper;
 import com.hmdp.service.IPermissionService;
 import org.junit.jupiter.api.BeforeEach;
@@ -16,6 +17,7 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
@@ -92,6 +94,51 @@ class BlogImageOwnershipServiceTest {
         when(blogMapper.selectList(any())).thenReturn(List.of(blog));
 
         assertThat(ownershipService.canDelete(PATH, 1L)).isTrue();
+    }
+
+    @Test
+    void legacyCsvBadSegmentShouldNotInvalidateOtherValidSegments() {
+        when(permissionService.hasRole(1L, "admin")).thenReturn(false);
+        when(valueOperations.get(ownershipService.ownerKey(PATH))).thenReturn(null);
+        Blog blog = new Blog().setUserId(1L)
+                .setImages("https://example.com/bad.png,/blogs/1/1/a.png,../bad.png");
+        when(blogMapper.selectList(any())).thenReturn(List.of(blog));
+
+        assertThat(ownershipService.canDelete(PATH, 1L)).isTrue();
+    }
+
+    @Test
+    void validateAndNormalizeShouldAllowCurrentOwnerAndReturnNormalizedCsv() {
+        when(valueOperations.get(ownershipService.ownerKey(PATH))).thenReturn("1");
+
+        String normalized = ownershipService.validateAndNormalizeUserImages("/imgs/" + PATH, 1L);
+
+        assertThat(normalized).isEqualTo(PATH);
+    }
+
+    @Test
+    void validateAndNormalizeShouldAllowLegacyImageBoundToOwnBlog() {
+        when(valueOperations.get(ownershipService.ownerKey(PATH))).thenReturn(null);
+        Blog blog = new Blog().setUserId(1L).setImages("/blogs/1/1/a.png");
+        when(blogMapper.selectList(any())).thenReturn(List.of(blog));
+
+        String normalized = ownershipService.validateAndNormalizeUserImages(PATH, 1L);
+
+        assertThat(normalized).isEqualTo(PATH);
+    }
+
+    @Test
+    void validateAndNormalizeShouldRejectExternalOrOtherUserImage() {
+        assertThatThrownBy(() -> ownershipService.validateAndNormalizeUserImages("https://example.com/a.png", 1L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("blog image path is invalid");
+
+        when(valueOperations.get(ownershipService.ownerKey(PATH))).thenReturn("2");
+        when(blogMapper.selectList(any())).thenReturn(List.of());
+
+        assertThatThrownBy(() -> ownershipService.validateAndNormalizeUserImages(PATH, 1L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("blog image is not owned by current user");
     }
 
     @Test

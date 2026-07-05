@@ -144,7 +144,7 @@ public class ModelGateway {
                                                               List<ShopView> candidates,
                                                               String qualityReason) {
         String repairPrompt = repairPrompt(prompt, qualityReason,
-                "请重新输出严格 JSON，字段必须包含 userPreference、category、message、items，items 内包含 rank、shopId、shopName、reason、suitableFor、uncertainty、evidenceIds、confidence。");
+                "请重新输出严格 JSON，字段必须包含 userPreference、category、message、items，items 内包含 rank、shopId、shopName、address、reason、suitableFor、uncertainty、evidenceIds、confidence。");
         String json = executeTextUnchecked("recommend:analyzeShopData.repair", repairPrompt,
                 () -> modelService().repairAnalyzeShopData(memoryId, repairPrompt));
         return parser().parseRecommend(json, userPreference, category, candidates);

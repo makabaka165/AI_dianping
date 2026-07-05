@@ -13,6 +13,7 @@ public class ShopProfileSnapshot {
     private String name;
     private Long typeId;
     private String area;
+    private String address;
     private Long avgPrice;
     private Integer sold;
     private Integer comments;
@@ -28,6 +29,7 @@ public class ShopProfileSnapshot {
                 .name(shopView.getName())
                 .typeId(shopView.getTypeId())
                 .area(shopView.getArea())
+                .address(shopView.getAddress())
                 .avgPrice(shopView.getAvgPrice())
                 .sold(shopView.getSold())
                 .comments(shopView.getComments())

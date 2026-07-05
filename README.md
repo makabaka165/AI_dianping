@@ -186,6 +186,20 @@ mvn clean package -DskipTests
 java -jar target/hm-dianping-0.0.1-SNAPSHOT.jar
 ```
 
+本地可从 `src/main/resources/application-example.yaml` 复制配置形态。不要把真实数据库密码、Redis 密码或模型 Key 提交到仓库；优先使用环境变量覆盖。
+
+常用环境变量：
+
+| 变量 | 说明 | 默认值 |
+| --- | --- | --- |
+| `MYSQL_URL` | MySQL JDBC 地址 | `jdbc:mysql://127.0.0.1:3306/hmdp?...` |
+| `MYSQL_USERNAME` / `MYSQL_PASSWORD` | MySQL 用户名和密码 | `root` / 空 |
+| `REDIS_HOST` / `REDIS_PORT` / `REDIS_PASSWORD` | 业务 Redis，缓存、Stream、记忆、配额使用 | `127.0.0.1:6379` |
+| `RAG_REDIS_HOST` / `RAG_REDIS_PORT` | Redis Stack，RAG 向量检索使用 | `127.0.0.1:6380` |
+| `API_KEY` 或 `DASHSCOPE_API_KEY` | OpenAI compatible / DashScope 模型 Key | 空 |
+| `AI_LOG_REQUESTS` / `AI_LOG_RESPONSES` | 模型请求/响应详细日志 | `false` |
+| `CHAT_MEMORY_TTL_*` | 不同 AI 记忆类型的 TTL 秒数 | 见 `application.yaml` |
+
 关键配置：
 
 ```yaml
@@ -283,10 +297,28 @@ RAG Redis configuration: vector retrieval uses a separate Redis Stack instance t
 
 Security defaults: forwarded IP and device fingerprint headers are not trusted unless explicitly enabled; mock SMS code exposure is disabled by default. Keep `HMDP_SMS_MOCK_ENABLED=false`, `hmdp.security.device-fingerprint.trust-client-header=false`, and `SA_TOKEN_IS_SHARE=false` in production. Enable forwarded headers only behind real trusted reverse proxies, and set `trusted-proxies` to explicit proxy egress IPs, never `*`, broad CIDRs, or user networks. The `prod`/`production` profile fails startup when mock SMS is enabled, client device fingerprint headers are trusted, Sa-Token token sharing is enabled, or forwarded headers are enabled with empty/wildcard trusted proxies. Defaults are `SA_TOKEN_TIMEOUT=604800`, `SA_TOKEN_ACTIVE_TIMEOUT=7200`, `SA_TOKEN_IS_CONCURRENT=true`, and blog image owner TTL 7 days. For admin or merchant accounts, use shorter session timeouts where possible.
 
+## 当前能力边界
+
+- 当前仍是单体应用，AI 子系统通过应用服务、编排器、工作流和 Port/Adapter 做内部边界约束，没有拆成微服务。
+- 本地限流使用 Caffeine/本机内存，适合当前单实例或小规模部署；多实例强一致限流后续可再演进。
+- 业务 Redis 默认 `6379`，承载缓存、锁、Stream、聊天记忆、配额和任务队列；RAG 向量检索使用独立 Redis Stack，默认 `6380`。
+- RAG 文档元数据和正文已持久化到 MySQL。删除文档时会标记 MySQL 状态为 `DELETED`；当前 LangChain4j `RedisEmbeddingStore` 不方便按 `documentId` 物理删除旧向量，因此需要依赖元数据状态/检索过滤继续治理。
+- AI 请求/响应详细日志默认关闭。调试时再显式设置 `AI_LOG_REQUESTS=true` 或 `AI_LOG_RESPONSES=true`，并避免在生产输出完整用户问题、prompt 或模型响应。
+
+## 常见问题
+
+- `API_KEY` 未配置或已欠费：不要运行会真实调用模型的测试；只跑 mock/unit 测试或 `mvn -DskipTests package`。应用启动可保留空 Key，但访问真实 AI 接口会失败。
+- Redis Stack 未启动：`rag.enabled=true` 且 `rag.redis.fallback-to-memory=false` 时，向量库不可用会导致 RAG 相关 Bean 启动失败；本地临时调试可设置 `RAG_ENABLED=false` 或 `RAG_REDIS_FALLBACK_TO_MEMORY=true`。
+- MySQL 密码不同：设置 `MYSQL_PASSWORD`，不要把密码写死到 `application.yaml`。
+- 需要查看模型请求细节：只在本地短时间开启 `AI_LOG_REQUESTS`/`AI_LOG_RESPONSES`，排查结束后关闭。
+
 ## 测试
+
+默认 `pom.xml` 已排除 `external` 和 `integration` 分组，其中 `AIServiceTest` 属于真实模型外部测试。如果当前 `API_KEY` 失效或不希望产生费用，不要单独运行该测试，也不要改 Maven 分组排除规则。
 
 ```bash
 mvn test
+mvn "-Dtest=ChatMemoryKeyManagerTest,RedissonChatMemoryStoreTest,LocalCacheManagerRateLimitTest,VoucherOrderServiceImplTest,DocumentManagementServiceImplTest" test
 mvn "-Dtest=AiMetricsServiceTest,AiTokenEstimatorTest,PromptVersionPolicyTest,ModelGatewayTest,ShopReviewVectorIndexServiceTest,ShopReviewEvidenceRetrieverTest,ShopAICacheInvalidationEventListenerTest,ShopAIRagAdminControllerTest,ShopSummaryControllerArchitectureTest" test
 mvn "-Dtest=PromptTemplateRegistryTest,ShopReviewEvidenceRetrieverTest,ShopContextAssemblerTest,QualityGuardTest,ModelGatewayTest,QAWorkflowTest,CompareWorkflowTest,RecommendWorkflowTest,ChatWorkflowStreamTest,ShopSummaryControllerArchitectureTest" test
 mvn "-Dtest=FallbackPolicyTest,ModelGatewayTest,ShopToolContextTest,ShopSummaryControllerArchitectureTest" test

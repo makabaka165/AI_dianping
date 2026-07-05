@@ -2,7 +2,9 @@ package com.hmdp.service.impl;
 
 import cn.hutool.core.util.StrUtil;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.hmdp.common.ErrorCode;
 import com.hmdp.entity.Blog;
+import com.hmdp.exception.BusinessException;
 import com.hmdp.mapper.BlogMapper;
 import com.hmdp.service.BlogImageOwnershipService;
 import com.hmdp.service.IPermissionService;
@@ -13,6 +15,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
 import javax.annotation.Resource;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -59,6 +62,28 @@ public class BlogImageOwnershipServiceImpl implements BlogImageOwnershipService 
             return owner.equals(userId.toString());
         }
         return isImageBoundToUserBlog(normalizedPath, userId);
+    }
+
+    @Override
+    public String validateAndNormalizeUserImages(String images, Long userId) {
+        if (userId == null) {
+            throw new BusinessException(ErrorCode.UNAUTHORIZED);
+        }
+        List<String> normalizedPaths;
+        try {
+            normalizedPaths = BlogImagePathUtils.normalizeImageSegments(images);
+        } catch (IllegalArgumentException e) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "blog image path is invalid");
+        }
+        if (normalizedPaths.isEmpty()) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "blog images are required");
+        }
+        for (String normalizedPath : normalizedPaths) {
+            if (!isPublishAllowedForUser(normalizedPath, userId)) {
+                throw new BusinessException(ErrorCode.FORBIDDEN, "blog image is not owned by current user");
+            }
+        }
+        return StrUtil.join(",", normalizedPaths);
     }
 
     @Override
@@ -109,12 +134,30 @@ public class BlogImageOwnershipServiceImpl implements BlogImageOwnershipService 
         return false;
     }
 
+    private boolean isPublishAllowedForUser(String normalizedPath, Long userId) {
+        String owner = queryOwner(normalizedPath);
+        if (userId.toString().equals(owner)) {
+            return true;
+        }
+        return isImageBoundToUserBlog(normalizedPath, userId);
+    }
+
     private List<String> normalizeSegmentsQuietly(String images) {
-        try {
-            return BlogImagePathUtils.normalizeImageSegments(images);
-        } catch (IllegalArgumentException e) {
+        if (StrUtil.isBlank(images)) {
             return Collections.emptyList();
         }
+        List<String> normalizedPaths = new ArrayList<>();
+        for (String segment : images.split(",")) {
+            if (StrUtil.isBlank(segment)) {
+                continue;
+            }
+            try {
+                normalizedPaths.add(BlogImagePathUtils.normalizeBlogImageName(segment));
+            } catch (IllegalArgumentException e) {
+                log.warn("ignore invalid legacy blog image path segment, segment={}", segment);
+            }
+        }
+        return normalizedPaths;
     }
 
     private long ttlDays() {

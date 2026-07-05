@@ -97,6 +97,9 @@ public class ChatMemoryKeyManager {
      * 解析Key获取功能类型
      */
     public String getFunctionType(String key) {
+        if (key == null || key.trim().isEmpty()) {
+            return "unknown";
+        }
         String[] parts = key.split(":");
         if (parts.length < 4 || !"memory".equals(parts[1])) {
             return "unknown";

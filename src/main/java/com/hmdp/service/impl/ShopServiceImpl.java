@@ -12,6 +12,7 @@ import com.hmdp.dto.ShopCreateDTO;
 import com.hmdp.dto.ShopDetailVO;
 import com.hmdp.dto.ShopStatusVO;
 import com.hmdp.dto.ShopUpdateDTO;
+import com.hmdp.ai.application.ShopAICacheInvalidationService;
 import com.hmdp.entity.Shop;
 import com.hmdp.mapper.ShopMapper;
 import com.hmdp.service.CurrentUserService;
@@ -97,6 +98,9 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
     @Resource
     private IOperationLogService operationLogService;
 
+    @Resource
+    private ShopAICacheInvalidationService shopAICacheInvalidationService;
+
     @Value("${hmdp.shop.nearby.initial-fetch-multiplier:3}")
     private int nearbyInitialFetchMultiplier = 3;
 
@@ -180,6 +184,7 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
         recordShopOperation("update", id, buildUpdateAuditDetail(request), true, null);
         runAfterCommit(() -> {
             stringRedisTemplate.delete(CACHE_SHOP_KEY + id);
+            shopAICacheInvalidationService.clearShopRelatedCaches(id);
             runGeoSyncAction(() -> shopGeoIndexService.refreshShopGeoIndex(oldShop, getById(id)));
             updateShopExistsCache(id, true);
         });

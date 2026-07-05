@@ -14,6 +14,7 @@ public class ShopView {
     private String name;
     private Long typeId;
     private String area;
+    private String address;
     private Long avgPrice;
     private Integer sold;
     private Integer comments;

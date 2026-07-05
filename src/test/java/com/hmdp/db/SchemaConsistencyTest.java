@@ -6,6 +6,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -43,10 +44,97 @@ class SchemaConsistencyTest {
         assertThat(allSql).contains(
                 "CREATE TABLE `tb_voucher_order`",
                 "`status` tinyint(1) UNSIGNED NOT NULL DEFAULT 1",
+                "`pay_request_id` varchar(64)",
+                "`active_order_key` tinyint(1) DEFAULT 1",
                 "`pay_time` timestamp NULL DEFAULT NULL",
-                "uk_voucher_order_user_voucher (user_id, voucher_id)",
-                "idx_voucher_order_status_create (status, create_time)"
+                "uk_voucher_order_user_voucher_active",
+                "idx_voucher_order_status_create (status, create_time)",
+                "WHERE `status` IN (4, 6)",
+                "WHERE `status` NOT IN (4, 6)"
         );
+    }
+
+    @Test
+    void voucherOrderActiveKeyMigrationShouldFailOnDuplicateActiveOrdersInsteadOfDeleting() throws IOException {
+        String migration = Files.readString(
+                MIGRATION_DIR.resolve("V20260630_02__voucher_order_active_key_and_pay_request.sql"),
+                StandardCharsets.UTF_8);
+        Pattern voucherOrderDelete = Pattern.compile("(?is)\\bDELETE\\b.{0,120}\\btb_voucher_order\\b");
+        Pattern voucherOrderAliasDelete = Pattern.compile("(?is)\\bDELETE\\s+o1\\b");
+        Pattern signalAssignedToDynamicSql = Pattern.compile(
+                "(?is)\\bSET\\s+@\\w+\\s*(?::=|=)\\s*(?:(?!;).)*\\bSIGNAL\\s+SQLSTATE\\b");
+        Pattern signalPreparedFromLiteral = Pattern.compile(
+                "(?is)\\bPREPARE\\s+\\w+\\s+FROM\\s+['\"]\\s*SIGNAL\\s+SQLSTATE\\b");
+        int duplicateCheckIndex = migration.indexOf("CALL `hmdp_assert_no_duplicate_active_voucher_orders`()");
+        int dropOldIndex = migration.indexOf("DROP INDEX uk_voucher_order_user_voucher");
+
+        assertThat(voucherOrderDelete.matcher(migration).find()).isFalse();
+        assertThat(voucherOrderAliasDelete.matcher(migration).find()).isFalse();
+        assertThat(signalAssignedToDynamicSql.matcher(migration).find()).isFalse();
+        assertThat(signalPreparedFromLiteral.matcher(migration).find()).isFalse();
+        assertThat(migration).doesNotContain("SIGNAL SQLSTATE ''45000''");
+        assertThat(migration).contains(
+                "CREATE PROCEDURE `hmdp_assert_no_duplicate_active_voucher_orders`()",
+                "DECLARE duplicate_active_order_groups BIGINT DEFAULT 0",
+                "GROUP BY `user_id`, `voucher_id`",
+                "HAVING COUNT(*) > 1",
+                "SIGNAL SQLSTATE '45000'",
+                "CALL `hmdp_assert_no_duplicate_active_voucher_orders`()",
+                "resolve manually before migration"
+        );
+        assertThat(duplicateCheckIndex).isGreaterThanOrEqualTo(0);
+        assertThat(dropOldIndex).isGreaterThanOrEqualTo(0);
+        assertThat(duplicateCheckIndex).isLessThan(dropOldIndex);
+    }
+
+    @Test
+    void voucherOrderLegacyUniqueMigrationShouldFailOnDuplicatesBeforeAddingOldIndex() throws IOException {
+        String migration = Files.readString(
+                MIGRATION_DIR.resolve("V20260610_03__voucher_seckill_enterprise_upgrade.sql"),
+                StandardCharsets.UTF_8);
+        int duplicateCheckIndex = migration.indexOf("CALL `hmdp_assert_no_duplicate_voucher_orders`()");
+        int addOldUniqueIndex = migration.indexOf(
+                "ADD UNIQUE KEY uk_voucher_order_user_voucher (user_id, voucher_id)");
+
+        assertThat(migration).contains(
+                "CREATE PROCEDURE `hmdp_assert_no_duplicate_voucher_orders`()",
+                "DECLARE duplicate_order_groups BIGINT DEFAULT 0",
+                "GROUP BY `user_id`, `voucher_id`",
+                "HAVING COUNT(*) > 1",
+                "SIGNAL SQLSTATE '45000'",
+                "resolve manually before migration"
+        );
+        assertThat(duplicateCheckIndex).isGreaterThanOrEqualTo(0);
+        assertThat(addOldUniqueIndex).isGreaterThanOrEqualTo(0);
+        assertThat(duplicateCheckIndex).isLessThan(addOldUniqueIndex);
+    }
+
+    @Test
+    void voucherOrderMigrationsShouldNotDestructivelyDeleteBusinessOrders() throws IOException {
+        List<Pattern> destructiveVoucherOrderStatements = List.of(
+                Pattern.compile("(?is)\\bDELETE\\s+o1\\b.{0,200}\\bFROM\\s+`?tb_voucher_order`?\\b"),
+                Pattern.compile("(?is)\\bDELETE\\s+FROM\\s+`?tb_voucher_order`?\\b"),
+                Pattern.compile("(?is)\\bTRUNCATE\\s+(?:TABLE\\s+)?`?tb_voucher_order`?\\b"),
+                Pattern.compile("(?is)\\bDROP\\s+TABLE\\s+(?:IF\\s+EXISTS\\s+)?`?tb_voucher_order`?\\b")
+        );
+        List<String> violations = new ArrayList<>();
+
+        try (var stream = Files.list(MIGRATION_DIR)) {
+            List<Path> migrations = stream
+                    .filter(Files::isRegularFile)
+                    .sorted()
+                    .collect(Collectors.toList());
+            for (Path migration : migrations) {
+                String sql = Files.readString(migration, StandardCharsets.UTF_8);
+                for (Pattern destructiveStatement : destructiveVoucherOrderStatements) {
+                    if (destructiveStatement.matcher(sql).find()) {
+                        violations.add(migration.getFileName() + " matches " + destructiveStatement.pattern());
+                    }
+                }
+            }
+        }
+
+        assertThat(violations).isEmpty();
     }
 
     @Test

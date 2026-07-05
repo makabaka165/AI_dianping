@@ -1,5 +1,7 @@
 package com.hmdp.ai.retrieval;
 
+import com.hmdp.ai.infra.AiLogSanitizer;
+import com.hmdp.ai.port.PlatformPolicyDocumentPort;
 import dev.langchain4j.data.embedding.Embedding;
 import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.model.embedding.EmbeddingModel;
@@ -16,7 +18,6 @@ import lombok.extern.slf4j.Slf4j;
 import java.util.List;
 import java.util.stream.Collectors;
 
-import static dev.langchain4j.internal.Utils.randomUUID;
 import static java.util.Collections.emptyList;
 
 @Slf4j
@@ -24,29 +25,35 @@ public class QualityBasedContentRetriever implements ContentRetriever {
 
     private final EmbeddingStore<TextSegment> embeddingStore;
     private final EmbeddingModel embeddingModel;
+    private final PlatformPolicyDocumentPort platformPolicyDocumentPort;
     private final double minScore;
     private final int maxResults;
+    private final int maxVectorCandidates;
 
     @Builder
     public QualityBasedContentRetriever(EmbeddingStore<TextSegment> embeddingStore,
                                         EmbeddingModel embeddingModel,
+                                        PlatformPolicyDocumentPort platformPolicyDocumentPort,
                                         double minScore,
                                         int maxResults) {
         this.embeddingStore = embeddingStore;
         this.embeddingModel = embeddingModel;
+        this.platformPolicyDocumentPort = platformPolicyDocumentPort;
         this.minScore = minScore;
         this.maxResults = maxResults;
+        this.maxVectorCandidates = Math.max(maxResults, Math.min(50, Math.max(maxResults * 4, maxResults + 10)));
     }
 
     @Override
     public List<Content> retrieve(Query query) {
         // 1. 将查询转换为嵌入向量
-        Embedding queryEmbedding = embeddingModel.embed(query.text()).content();
+        String queryText = query == null ? "" : query.text();
+        Embedding queryEmbedding = embeddingModel.embed(queryText).content();
 
         // 2. 在向量数据库中搜索相关的文本片段
         EmbeddingSearchRequest searchRequest = EmbeddingSearchRequest.builder()
                 .queryEmbedding(queryEmbedding)
-                .maxResults(maxResults)
+                .maxResults(maxVectorCandidates)
                 .minScore(minScore)
                 .build();
 
@@ -59,7 +66,7 @@ public class QualityBasedContentRetriever implements ContentRetriever {
         }
 
         List<EmbeddingMatch<TextSegment>> matches = searchResult.matches();
-        log.info("查询 '{}' 找到 {} 个匹配结果", query.text(), matches.size());
+        log.info("Platform policy retrieval matched {} raw vector results", matches.size());
 
         if (matches.isEmpty()) {
             return emptyList();
@@ -67,11 +74,40 @@ public class QualityBasedContentRetriever implements ContentRetriever {
 
         // 3. 将匹配结果转换为内容列表
         return matches.stream()
+                .filter(this::activeDocumentChunk)
+                .limit(maxResults)
                 .map(match -> {
                     TextSegment segment = match.embedded();
-                    log.debug("匹配片段 (得分: {}): {}", match.score(), segment.text());
+                    log.debug("Platform policy match accepted, score={}, documentId={}",
+                            match.score(), AiLogSanitizer.safeKey(metadata(segment, PlatformPolicyVectorDocumentFactory.META_DOCUMENT_ID)));
                     return Content.from(segment);
                 })
                 .collect(Collectors.toList());
+    }
+
+    private boolean activeDocumentChunk(EmbeddingMatch<TextSegment> match) {
+        if (platformPolicyDocumentPort == null) {
+            return true;
+        }
+        TextSegment segment = match == null ? null : match.embedded();
+        String documentId = metadata(segment, PlatformPolicyVectorDocumentFactory.META_DOCUMENT_ID);
+        String contentHash = metadata(segment, PlatformPolicyVectorDocumentFactory.META_CONTENT_HASH);
+        boolean active = platformPolicyDocumentPort.isActiveDocumentChunk(documentId, contentHash);
+        if (!active) {
+            log.debug("Platform policy match filtered, score={}, documentId={}",
+                    match == null ? null : match.score(), AiLogSanitizer.safeKey(documentId));
+        }
+        return active;
+    }
+
+    private String metadata(TextSegment segment, String key) {
+        if (segment == null || segment.metadata() == null || key == null) {
+            return null;
+        }
+        try {
+            return segment.metadata().getString(key);
+        } catch (RuntimeException e) {
+            return null;
+        }
     }
 }

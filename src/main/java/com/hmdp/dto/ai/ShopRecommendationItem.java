@@ -16,6 +16,7 @@ public class ShopRecommendationItem {
     private Integer rank;
     private Long shopId;
     private String shopName;
+    private String address;
     private String reason;
     private String suitableFor;
     private String uncertainty;

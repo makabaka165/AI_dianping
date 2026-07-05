@@ -1,5 +1,10 @@
 package com.hmdp.ai.retrieval;
 
+import com.hmdp.ai.infra.DocumentQualityAssessment;
+import com.hmdp.ai.port.PlatformPolicyDocumentPort;
+import com.hmdp.entity.DocumentMetadata;
+import com.hmdp.entity.DocumentStatus;
+import dev.langchain4j.data.document.Document;
 import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.rag.content.Content;
 import dev.langchain4j.rag.query.Query;
@@ -11,6 +16,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -74,6 +81,93 @@ class PlatformPolicyRetrievalExperimentTest {
     private String load(String file) throws IOException {
         try (InputStream inputStream = new ClassPathResource(ROOT + file).getInputStream()) {
             return new String(inputStream.readAllBytes(), StandardCharsets.UTF_8);
+        }
+    }
+    @Test
+    void shouldFilterDeletedMissingAndHashMismatchPlatformPolicyChunks() {
+        InMemoryEmbeddingStore<TextSegment> store = new InMemoryEmbeddingStore<>();
+        addSegment(store, "active-doc", "refund active policy", DocumentStatus.PUBLISHED);
+        addSegment(store, "deleted-doc", "refund deleted policy", DocumentStatus.PUBLISHED);
+        addSegment(store, "missing-doc", "refund missing policy", DocumentStatus.PUBLISHED);
+        addSegment(store, "changed-doc", "refund old policy", DocumentStatus.PUBLISHED);
+        PlatformPolicyDocumentPort documentPort = new FakePlatformPolicyDocumentPort(Map.of(
+                "active-doc", "refund active policy",
+                "changed-doc", "refund new policy"));
+
+        QualityBasedContentRetriever retriever = QualityBasedContentRetriever.builder()
+                .embeddingStore(store)
+                .embeddingModel(embeddingModel)
+                .platformPolicyDocumentPort(documentPort)
+                .minScore(0.0)
+                .maxResults(4)
+                .build();
+
+        List<Content> contents = retriever.retrieve(Query.from("refund policy"));
+
+        assertThat(contents)
+                .extracting(content -> content.textSegment().metadata().getString(PlatformPolicyVectorDocumentFactory.META_DOCUMENT_ID))
+                .containsExactly("active-doc");
+    }
+
+    @Test
+    void shouldOverFetchWhenStaleChunksWouldFillRequestedTopK() {
+        InMemoryEmbeddingStore<TextSegment> store = new InMemoryEmbeddingStore<>();
+        addSegment(store, "stale-1", "refund policy exact", DocumentStatus.PUBLISHED);
+        addSegment(store, "stale-2", "refund policy exact", DocumentStatus.PUBLISHED);
+        addSegment(store, "active-doc", "refund policy exact", DocumentStatus.PUBLISHED);
+        PlatformPolicyDocumentPort documentPort = new FakePlatformPolicyDocumentPort(Map.of(
+                "active-doc", "refund policy exact"));
+
+        QualityBasedContentRetriever retriever = QualityBasedContentRetriever.builder()
+                .embeddingStore(store)
+                .embeddingModel(embeddingModel)
+                .platformPolicyDocumentPort(documentPort)
+                .minScore(0.0)
+                .maxResults(1)
+                .build();
+
+        List<Content> contents = retriever.retrieve(Query.from("refund policy exact"));
+
+        assertThat(contents)
+                .extracting(content -> content.textSegment().metadata().getString(PlatformPolicyVectorDocumentFactory.META_DOCUMENT_ID))
+                .containsExactly("active-doc");
+    }
+
+    private void addSegment(InMemoryEmbeddingStore<TextSegment> store,
+                            String documentId,
+                            String content,
+                            DocumentStatus status) {
+        DocumentMetadata metadata = new DocumentMetadata();
+        metadata.setId(documentId);
+        metadata.setStatus(status);
+        TextSegment segment = TextSegment.from(content,
+                PlatformPolicyVectorDocumentFactory.metadata(documentId, metadata, content));
+        store.add(embeddingModel.embed(segment.text()).content(), segment);
+    }
+
+    private static class FakePlatformPolicyDocumentPort implements PlatformPolicyDocumentPort {
+
+        private final Map<String, String> activeDocuments;
+
+        private FakePlatformPolicyDocumentPort(Map<String, String> activeDocuments) {
+            this.activeDocuments = activeDocuments;
+        }
+
+        @Override
+        public void saveImportedDocument(DocumentMetadata metadata,
+                                         DocumentQualityAssessment qualityAssessment,
+                                         Document document) {
+        }
+
+        @Override
+        public boolean isActiveDocumentChunk(String documentId, String contentHash) {
+            String content = activeDocuments.get(documentId);
+            return content != null
+                    && PlatformPolicyVectorDocumentFactory.contentHash(documentId, content).equals(contentHash);
+        }
+
+        @Override
+        public void archiveMissingImportedDocuments(Set<String> activeDocumentIds) {
         }
     }
 }

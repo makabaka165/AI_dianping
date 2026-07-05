@@ -84,6 +84,7 @@ public class ShopContextAssembler {
         return "name=" + nullSafe(profile.getName())
                 + ", typeId=" + profile.getTypeId()
                 + ", area=" + nullSafe(profile.getArea())
+                + ", address=" + truncate(profile.getAddress(), 120)
                 + ", avgPrice=" + profile.getAvgPrice()
                 + ", sold=" + profile.getSold()
                 + ", comments=" + profile.getComments()

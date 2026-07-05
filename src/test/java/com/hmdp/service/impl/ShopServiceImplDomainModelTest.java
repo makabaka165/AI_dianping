@@ -6,6 +6,7 @@ import com.hmdp.dto.ShopCreateDTO;
 import com.hmdp.dto.ShopDetailVO;
 import com.hmdp.dto.ShopStatusVO;
 import com.hmdp.dto.ShopUpdateDTO;
+import com.hmdp.ai.application.ShopAICacheInvalidationService;
 import com.hmdp.entity.Shop;
 import com.hmdp.service.CurrentUserService;
 import com.hmdp.service.IMerchantShopService;
@@ -63,6 +64,9 @@ class ShopServiceImplDomainModelTest {
     @Mock
     private IOperationLogService operationLogService;
 
+    @Mock
+    private ShopAICacheInvalidationService shopAICacheInvalidationService;
+
     private TestableShopServiceImpl shopService;
 
     @BeforeEach
@@ -76,6 +80,7 @@ class ShopServiceImplDomainModelTest {
         ReflectionTestUtils.setField(shopService, "merchantShopService", merchantShopService);
         ReflectionTestUtils.setField(shopService, "shopStatsService", shopStatsService);
         ReflectionTestUtils.setField(shopService, "operationLogService", operationLogService);
+        ReflectionTestUtils.setField(shopService, "shopAICacheInvalidationService", shopAICacheInvalidationService);
     }
 
     @Test
@@ -204,6 +209,7 @@ class ShopServiceImplDomainModelTest {
         assertThat(result.getSuccess()).isTrue();
         assertThat(shopService.db.get(100L).getVersion()).isEqualTo(1);
         verify(stringRedisTemplate).delete(CACHE_SHOP_KEY + 100L);
+        verify(shopAICacheInvalidationService).clearShopRelatedCaches(100L);
         verify(shopGeoIndexService).refreshShopGeoIndex(eq(oldShop), any(Shop.class));
         verify(shopStatsService).updateShopExistsCache(100L, true);
     }

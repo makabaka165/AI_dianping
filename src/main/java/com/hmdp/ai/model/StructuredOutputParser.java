@@ -95,6 +95,7 @@ public class StructuredOutputParser {
                         .rank(readInteger(item.path("rank"), items.size() + 1))
                         .shopId(shopId)
                         .shopName(readText(item.path("shopName"), shop == null ? null : shop.getName()))
+                        .address(shop == null ? null : shop.getAddress())
                         .reason(readText(item.path("reason"), ""))
                         .suitableFor(readText(item.path("suitableFor"), ""))
                         .uncertainty(readText(item.path("uncertainty"), ""))

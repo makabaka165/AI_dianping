@@ -6,6 +6,8 @@ public interface BlogImageOwnershipService {
 
     boolean canDelete(String normalizedPath, Long userId);
 
+    String validateAndNormalizeUserImages(String images, Long userId);
+
     void refreshOwnerTtlForUserImages(String images, Long userId);
 
     void clearOwner(String normalizedPath);

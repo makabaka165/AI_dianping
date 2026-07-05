@@ -220,29 +220,11 @@ public class ChatWorkflow {
                                                                     IntentRoutingResult routing,
                                                                     String message) {
         PromptTemplateRender prompt = promptTemplateRegistry.renderFreeChat(context, message);
-        StringBuilder streamedText = new StringBuilder();
-        Flux<ServerSentEvent<ShopAIStreamEvent>> chunks = modelGateway.streamChat(context.getMemoryId(), prompt.getContent())
-                .doOnNext(text -> streamedText.append(text == null ? "" : text))
-                .map(text -> event("delta", ShopAIStreamEvent.builder()
-                        .type("delta")
-                        .text(text)
-                        .traceId(context.getTraceId())
-                        .sessionId(context.getSessionId())
-                        .memoryId(context.getMemoryId())
-                        .intent(routing == null ? context.getIntent() : routing.getIntent())
-                        .routingSource(routing == null ? null : routing.getSource())
-                        .routingConfidence(routing == null ? null : routing.getConfidence())
-                        .build()));
         return Flux.concat(
                 Flux.just(metadataEvent(context, routing, context.getMemoryId(), prompt.getVersion())),
-                chunks,
-                Flux.defer(() -> {
-                    AuditResult audit = audit(CHAT_ANALYSIS_TYPE, streamedText.toString());
-                    return Flux.just(
-                            auditEvent(context, routing, audit),
-                            doneEvent(context, routing, false, false, 0.7, audit)
-                    );
-                })
+                modelGateway.streamChat(context.getMemoryId(), prompt.getContent())
+                        .collectList()
+                        .flatMapMany(parts -> streamAuditedFreeChatText(context, routing, message, parts))
         ).onErrorResume(e -> {
             String fallback = fallbackPolicy.fallbackChat(message, CHAT_ANALYSIS_TYPE,
                     FallbackReason.MODEL_UNAVAILABLE).getMessage();
@@ -266,6 +248,57 @@ public class ChatWorkflow {
         });
     }
 
+    private Flux<ServerSentEvent<ShopAIStreamEvent>> streamAuditedFreeChatText(ShopAIRequestContext context,
+                                                                               IntentRoutingResult routing,
+                                                                               String message,
+                                                                               List<String> parts) {
+        List<String> safeParts = parts == null ? Collections.emptyList() : parts;
+        String text = safeParts.stream()
+                .map(part -> part == null ? "" : part)
+                .collect(Collectors.joining());
+        AuditResult audit = audit(CHAT_ANALYSIS_TYPE, text);
+        if (!audit.pass) {
+            String fallback = fallbackPolicy.fallbackChat(message, CHAT_ANALYSIS_TYPE,
+                    FallbackReason.QUALITY_REJECTED).getMessage();
+            return Flux.just(
+                    event("delta", ShopAIStreamEvent.builder()
+                            .type("delta")
+                            .text(fallback)
+                            .traceId(context.getTraceId())
+                            .sessionId(context.getSessionId())
+                            .memoryId(context.getMemoryId())
+                            .intent(routing == null ? context.getIntent() : routing.getIntent())
+                            .routingSource(routing == null ? null : routing.getSource())
+                            .routingConfidence(routing == null ? null : routing.getConfidence())
+                            .degraded(true)
+                            .confidence(0.35)
+                            .fallbackReason(FallbackReason.QUALITY_REJECTED.name())
+                            .build()),
+                    auditEvent(context, routing, audit),
+                    doneEvent(context, routing, true, false, 0.35, audit,
+                            FallbackReason.QUALITY_REJECTED.name())
+            );
+        }
+        Flux<ServerSentEvent<ShopAIStreamEvent>> deltas = Flux.fromIterable(safeParts)
+                .map(part -> event("delta", ShopAIStreamEvent.builder()
+                        .type("delta")
+                        .text(part)
+                        .traceId(context.getTraceId())
+                        .sessionId(context.getSessionId())
+                        .memoryId(context.getMemoryId())
+                        .intent(routing == null ? context.getIntent() : routing.getIntent())
+                        .routingSource(routing == null ? null : routing.getSource())
+                        .routingConfidence(routing == null ? null : routing.getConfidence())
+                        .build()));
+        return Flux.concat(
+                deltas,
+                Flux.just(
+                        auditEvent(context, routing, audit),
+                        doneEvent(context, routing, false, false, 0.7, audit)
+                )
+        );
+    }
+
     private Flux<ServerSentEvent<ShopAIStreamEvent>> streamPlan(ShopAIRequestContext context,
                                                                 IntentRoutingResult routing,
                                                                 StreamWorkflowPlan plan) {
@@ -275,53 +308,17 @@ public class ChatWorkflow {
             return Flux.concat(
                     Flux.just(metadataEvent(context, routing, memoryId, plan.getPromptVersion()),
                             evidenceEvent(context, routing, memoryId, plan.safeEvidence())),
-                    Flux.just(event("delta", ShopAIStreamEvent.builder()
-                            .type("delta")
-                            .text(plan.getDirectText())
-                            .traceId(context.getTraceId())
-                            .sessionId(context.getSessionId())
-                            .memoryId(memoryId)
-                            .intent(routing == null ? context.getIntent() : routing.getIntent())
-                            .routingSource(routing == null ? null : routing.getSource())
-                            .routingConfidence(routing == null ? null : routing.getConfidence())
-                            .degraded(Boolean.TRUE.equals(plan.getDegraded()))
-                            .confidence(plan.getConfidence())
-                            .build())),
-                    Flux.just(doneEvent(context, routing,
-                            Boolean.TRUE.equals(plan.getDegraded()),
-                            Boolean.TRUE.equals(plan.getCacheHit()),
-                            plan.getConfidence()))
+                    streamAuditedPlanText(context, routing, plan, memoryId,
+                            Collections.singletonList(plan.getDirectText()))
             ).filter(item -> item.data() != null);
         }
-
-        StringBuilder streamedText = new StringBuilder();
-        Flux<ServerSentEvent<ShopAIStreamEvent>> chunks = streamForPlan(plan)
-                .doOnNext(text -> streamedText.append(text == null ? "" : text))
-                .map(text -> event("delta", ShopAIStreamEvent.builder()
-                        .type("delta")
-                        .text(text)
-                        .traceId(context.getTraceId())
-                        .sessionId(context.getSessionId())
-                        .memoryId(memoryId)
-                        .intent(routing == null ? context.getIntent() : routing.getIntent())
-                        .routingSource(routing == null ? null : routing.getSource())
-                        .routingConfidence(routing == null ? null : routing.getConfidence())
-                        .build()));
 
         return Flux.concat(
                         Flux.just(metadataEvent(context, routing, memoryId, plan.getPromptVersion()),
                                 evidenceEvent(context, routing, memoryId, plan.safeEvidence())),
-                        chunks,
-                        Flux.defer(() -> {
-                            AuditResult audit = audit(plan.getAnalysisType(), streamedText.toString());
-                            return Flux.just(
-                                    auditEvent(context, routing, audit),
-                                    doneEvent(context, routing, false,
-                                            Boolean.TRUE.equals(plan.getCacheHit()),
-                                            plan.getConfidence(),
-                                            audit)
-                            );
-                        })
+                        streamForPlan(plan)
+                                .collectList()
+                                .flatMapMany(parts -> streamAuditedPlanText(context, routing, plan, memoryId, parts))
                 )
                 .filter(item -> item.data() != null)
                 .onErrorResume(e -> {
@@ -349,6 +346,49 @@ public class ChatWorkflow {
                 });
     }
 
+    private Flux<ServerSentEvent<ShopAIStreamEvent>> streamAuditedPlanText(ShopAIRequestContext context,
+                                                                           IntentRoutingResult routing,
+                                                                           StreamWorkflowPlan plan,
+                                                                           String memoryId,
+                                                                           List<String> parts) {
+        String text = parts == null ? "" : parts.stream()
+                .map(part -> part == null ? "" : part)
+                .collect(Collectors.joining());
+        AuditResult audit = audit(plan.getAnalysisType(), text);
+        String finalText = text;
+        boolean degraded = Boolean.TRUE.equals(plan.getDegraded());
+        String fallbackReason = null;
+        Double confidence = plan.getConfidence();
+        if (!audit.pass) {
+            finalText = fallbackPolicy.fallbackText(memoryId, plan.getPrompt(), plan.getAnalysisType());
+            degraded = true;
+            fallbackReason = FallbackReason.QUALITY_REJECTED.name();
+            confidence = minConfidence(confidence, 0.35);
+        }
+        return Flux.just(
+                event("delta", ShopAIStreamEvent.builder()
+                        .type("delta")
+                        .text(finalText)
+                        .traceId(context.getTraceId())
+                        .sessionId(context.getSessionId())
+                        .memoryId(memoryId)
+                        .intent(routing == null ? context.getIntent() : routing.getIntent())
+                        .routingSource(routing == null ? null : routing.getSource())
+                        .routingConfidence(routing == null ? null : routing.getConfidence())
+                        .degraded(degraded)
+                        .confidence(confidence)
+                        .fallbackReason(fallbackReason)
+                        .build()),
+                auditEvent(context, routing, audit),
+                doneEvent(context, routing,
+                        degraded,
+                        Boolean.TRUE.equals(plan.getCacheHit()),
+                        confidence,
+                        audit,
+                        fallbackReason)
+        );
+    }
+
     private Flux<String> streamForPlan(StreamWorkflowPlan plan) {
         if ("compare".equals(plan.getAnalysisType())) {
             return modelGateway.streamComparison(plan.getMemoryId(), plan.getPrompt());
@@ -363,25 +403,54 @@ public class ChatWorkflow {
                                                                     IntentRoutingResult routing,
                                                                     ShopAIResponse response) {
         String memoryId = response.getMemoryId() == null ? context.getMemoryId() : response.getMemoryId();
-        Flux<ServerSentEvent<ShopAIStreamEvent>> base = Flux.just(
-                metadataEvent(context, routing, memoryId, response.getPromptVersion()),
-                evidenceEvent(context, routing, memoryId, safeEvidence(response.getEvidence())),
+        Flux<ServerSentEvent<ShopAIStreamEvent>> base = Flux.concat(
+                Flux.just(
+                        metadataEvent(context, routing, memoryId, response.getPromptVersion()),
+                        evidenceEvent(context, routing, memoryId, safeEvidence(response.getEvidence()))),
+                streamAuditedResponseText(context, routing, response, memoryId)
+        );
+        return base.filter(item -> item.data() != null);
+    }
+
+    private Flux<ServerSentEvent<ShopAIStreamEvent>> streamAuditedResponseText(ShopAIRequestContext context,
+                                                                               IntentRoutingResult routing,
+                                                                               ShopAIResponse response,
+                                                                               String memoryId) {
+        String text = responseText(response);
+        String analysisType = responseAnalysisType(response);
+        AuditResult audit = audit(analysisType, text);
+        String finalText = text;
+        boolean degraded = Boolean.TRUE.equals(response.getDegraded());
+        String fallbackReason = response.getFallbackReason();
+        Double confidence = response.getConfidence();
+        if (!audit.pass) {
+            finalText = fallbackPolicy.fallbackText(memoryId, "", analysisType);
+            degraded = true;
+            fallbackReason = FallbackReason.QUALITY_REJECTED.name();
+            confidence = minConfidence(confidence, 0.35);
+        }
+        return Flux.just(
                 event("delta", ShopAIStreamEvent.builder()
                         .type("delta")
-                        .text(responseText(response))
+                        .text(finalText)
                         .traceId(context.getTraceId())
                         .sessionId(context.getSessionId())
                         .memoryId(memoryId)
                         .intent(routing == null ? context.getIntent() : routing.getIntent())
                         .routingSource(routing == null ? null : routing.getSource())
                         .routingConfidence(routing == null ? null : routing.getConfidence())
+                        .degraded(degraded)
+                        .confidence(confidence)
+                        .fallbackReason(fallbackReason)
                         .build()),
+                auditEvent(context, routing, audit),
                 doneEvent(context, routing,
-                        Boolean.TRUE.equals(response.getDegraded()),
+                        degraded,
                         Boolean.TRUE.equals(response.getCacheHit()),
-                        response.getConfidence())
+                        confidence,
+                        audit,
+                        fallbackReason)
         );
-        return base.filter(item -> item.data() != null);
     }
 
     private Flux<ServerSentEvent<ShopAIStreamEvent>> streamText(ShopAIRequestContext context,
@@ -568,6 +637,25 @@ public class ChatWorkflow {
             return nullSafe(response.getChat().getMessage());
         }
         return "";
+    }
+
+    private String responseAnalysisType(ShopAIResponse response) {
+        if (response == null) {
+            return CHAT_ANALYSIS_TYPE;
+        }
+        if (response.getSummary() != null) {
+            return "summary";
+        }
+        if (response.getQa() != null) {
+            return "qa";
+        }
+        if (response.getCompare() != null) {
+            return "compare";
+        }
+        if (response.getRecommend() != null) {
+            return "recommend";
+        }
+        return CHAT_ANALYSIS_TYPE;
     }
 
     private String nullSafe(String value) {

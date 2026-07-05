@@ -1,0 +1,86 @@
+# Local development example. Do not put real secrets in this file.
+
+server:
+  port: ${SERVER_PORT:8081}
+
+spring:
+  application:
+    name: hmdp
+  datasource:
+    driver-class-name: com.mysql.jdbc.Driver
+    url: ${MYSQL_URL:jdbc:mysql://127.0.0.1:3306/hmdp?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true}
+    username: ${MYSQL_USERNAME:root}
+    password: ${MYSQL_PASSWORD:}
+  redis:
+    host: ${REDIS_HOST:127.0.0.1}
+    port: ${REDIS_PORT:6379}
+    password: ${REDIS_PASSWORD:}
+    database: ${REDIS_DATABASE:0}
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    locations: classpath:db/migration
+
+hmdp:
+  redis:
+    redisson:
+      host: ${HMDP_REDIS_HOST:${REDIS_HOST:127.0.0.1}}
+      port: ${HMDP_REDIS_PORT:${REDIS_PORT:6379}}
+      password: ${HMDP_REDIS_PASSWORD:${REDIS_PASSWORD:}}
+      database: ${HMDP_REDIS_DATABASE:${REDIS_DATABASE:0}}
+      ssl: ${HMDP_REDIS_SSL:false}
+  ai:
+    redis-health-check: ${HMDP_AI_REDIS_HEALTH_CHECK:true}
+    redisson-fallback: ${HMDP_AI_REDISSON_FALLBACK:false}
+    quota:
+      enabled: ${HMDP_AI_QUOTA_ENABLED:true}
+      minute-permits: ${HMDP_AI_QUOTA_MINUTE_PERMITS:10}
+      daily-permits: ${HMDP_AI_QUOTA_DAILY_PERMITS:200}
+  voucher:
+    order:
+      stream-required: ${HMDP_VOUCHER_ORDER_STREAM_REQUIRED:true}
+
+langchain4j:
+  open-ai:
+    chat-model:
+      base-url: ${AI_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
+      api-key: ${API_KEY:${DASHSCOPE_API_KEY:}}
+      model-name: ${AI_CHAT_MODEL:qwen-plus}
+      temperature: ${AI_CHAT_TEMPERATURE:0.3}
+      max-tokens: ${AI_CHAT_MAX_TOKENS:1000}
+      log-requests: ${AI_LOG_REQUESTS:false}
+      log-responses: ${AI_LOG_RESPONSES:false}
+    streaming-chat-model:
+      api-key: ${AI_STREAM_API_KEY:${API_KEY:${DASHSCOPE_API_KEY:}}}
+      base-url: ${AI_STREAM_BASE_URL:${AI_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}}
+      model-name: ${AI_STREAM_MODEL:${AI_CHAT_MODEL:qwen-plus}}
+      temperature: ${AI_STREAM_TEMPERATURE:${AI_CHAT_TEMPERATURE:0.3}}
+      max-tokens: ${AI_STREAM_MAX_TOKENS:${AI_CHAT_MAX_TOKENS:1000}}
+      log-requests: ${AI_LOG_REQUESTS:false}
+      log-responses: ${AI_LOG_RESPONSES:false}
+    embedding-model:
+      base-url: ${AI_EMBEDDING_BASE_URL:${AI_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}}
+      api-key: ${AI_EMBEDDING_API_KEY:${API_KEY:${DASHSCOPE_API_KEY:}}}
+      model-name: ${AI_EMBEDDING_MODEL:text-embedding-v3}
+      log-requests: ${AI_LOG_REQUESTS:false}
+      log-responses: ${AI_LOG_RESPONSES:false}
+
+chat:
+  memory:
+    max-messages: ${CHAT_MEMORY_MAX_MESSAGES:20}
+    ttl:
+      shop-summary: ${CHAT_MEMORY_TTL_SHOP_SUMMARY:3600}
+      shop-qa: ${CHAT_MEMORY_TTL_SHOP_QA:7200}
+      shop-compare: ${CHAT_MEMORY_TTL_SHOP_COMPARE:1800}
+      shop-recommend: ${CHAT_MEMORY_TTL_SHOP_RECOMMEND:86400}
+      ai-chat: ${CHAT_MEMORY_TTL_AI_CHAT:3600}
+
+rag:
+  enabled: ${RAG_ENABLED:true}
+  document:
+    max-upload-bytes: ${RAG_DOCUMENT_MAX_UPLOAD_BYTES:5242880}
+  redis:
+    host: ${RAG_REDIS_HOST:127.0.0.1}
+    port: ${RAG_REDIS_PORT:6380}
+    dimension: ${RAG_REDIS_DIMENSION:1024}
+    fallback-to-memory: ${RAG_REDIS_FALLBACK_TO_MEMORY:false}

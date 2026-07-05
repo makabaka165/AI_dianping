@@ -1,5 +1,10 @@
 package com.hmdp.controller;
 
+import cn.dev33.satoken.annotation.SaCheckPermission;
+import cn.dev33.satoken.stp.StpUtil;
+import com.hmdp.ai.quota.AiQuotaExceededException;
+import com.hmdp.ai.quota.AiUserQuotaService;
+import com.hmdp.common.ErrorCode;
 import com.hmdp.dto.Result;
 import com.hmdp.service.ai.AIService;
 import lombok.extern.slf4j.Slf4j;
@@ -7,6 +12,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Profile;
 import org.springframework.web.bind.annotation.*;
 
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Proxy;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -19,11 +26,15 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api/ai/test")
 @Profile({"dev", "test"})
+@SaCheckPermission("ai:test")
 @Slf4j
 public class AITestController {
 
     @Autowired
     private AIService aiService;
+
+    @Autowired
+    private AiUserQuotaService aiUserQuotaService;
 
     // ========== 健康检查和基础测试 ==========
 
@@ -34,6 +45,7 @@ public class AITestController {
     @GetMapping("/health")
     public Result healthCheck() {
         try {
+            checkQuota("ai-test-health");
             long startTime = System.currentTimeMillis();
             String response = aiService.healthCheck("请回复：AI服务正常");
             long responseTime = System.currentTimeMillis() - startTime;
@@ -49,14 +61,16 @@ public class AITestController {
             log.info("AI健康检查 - 状态: {}, 响应时间: {}ms", isHealthy ? "正常" : "异常", responseTime);
 
             return Result.ok(resultData);
+        } catch (AiQuotaExceededException e) {
+            return quotaFailure(e);
         } catch (Exception e) {
             log.error("AI服务健康检查失败", e);
             Map<String, Object> resultData = new HashMap<>();
             resultData.put("status", "error");
-            resultData.put("error", e.getMessage());
+            resultData.put("error", "AI test endpoint failed");
             resultData.put("timestamp", System.currentTimeMillis());
 
-            Result result = Result.fail("AI服务不可用: " + e.getMessage());
+            Result result = Result.fail("AI服务不可用");
             result.setData(resultData);
             return result;
         }
@@ -69,14 +83,15 @@ public class AITestController {
     @GetMapping("/chat")
     public Result testBasicChat(@RequestParam String message) {
         try {
-            log.info("基础聊天测试 - 消息: {}", message);
+            checkQuota("ai-test-chat");
+            log.info("基础聊天测试 - 消息长度: {}", lengthOf(message));
 
             long startTime = System.currentTimeMillis();
             String response = aiService.testChat(message);
             long responseTime = System.currentTimeMillis() - startTime;
 
             Map<String, Object> resultData = new HashMap<>();
-            resultData.put("request", message);
+            resultData.put("requestLength", lengthOf(message));
             resultData.put("response", response);
             resultData.put("responseTime", responseTime + "ms");
             resultData.put("timestamp", System.currentTimeMillis());
@@ -84,9 +99,11 @@ public class AITestController {
             log.info("基础聊天测试完成 - 响应时间: {}ms", responseTime);
 
             return Result.ok(resultData);
+        } catch (AiQuotaExceededException e) {
+            return quotaFailure(e);
         } catch (Exception e) {
-            log.error("基础聊天测试失败 - 消息: {}", message, e);
-            return Result.fail("聊天测试失败: " + e.getMessage());
+            log.error("基础聊天测试失败 - 消息长度: {}", lengthOf(message), e);
+            return Result.fail("聊天测试失败");
         }
     }
 
@@ -99,25 +116,28 @@ public class AITestController {
             @RequestParam(defaultValue = "test_memory") String memoryId,
             @RequestParam String message) {
         try {
-            log.info("记忆功能测试 - memoryId: {}, 消息: {}", memoryId, message);
+            checkQuota("ai-test-memory");
+            log.info("记忆功能测试 - memoryId: {}, 消息长度: {}", safeKey(memoryId), lengthOf(message));
 
             long startTime = System.currentTimeMillis();
             String response = aiService.testMemory(memoryId, message);
             long responseTime = System.currentTimeMillis() - startTime;
 
             Map<String, Object> resultData = new HashMap<>();
-            resultData.put("memoryId", memoryId);
-            resultData.put("request", message);
+            resultData.put("memoryId", safeKey(memoryId));
+            resultData.put("requestLength", lengthOf(message));
             resultData.put("response", response);
             resultData.put("responseTime", responseTime + "ms");
             resultData.put("timestamp", System.currentTimeMillis());
 
-            log.info("记忆功能测试完成 - memoryId: {}, 响应时间: {}ms", memoryId, responseTime);
+            log.info("记忆功能测试完成 - memoryId: {}, 响应时间: {}ms", safeKey(memoryId), responseTime);
 
             return Result.ok(resultData);
+        } catch (AiQuotaExceededException e) {
+            return quotaFailure(e);
         } catch (Exception e) {
-            log.error("记忆功能测试失败 - memoryId: {}, 消息: {}", memoryId, message, e);
-            return Result.fail("记忆测试失败: " + e.getMessage());
+            log.error("记忆功能测试失败 - memoryId: {}, 消息长度: {}", safeKey(memoryId), lengthOf(message), e);
+            return Result.fail("记忆测试失败");
         }
     }
 
@@ -132,6 +152,7 @@ public class AITestController {
     @PostMapping("/sentiment")
     public Result testSentiment(@RequestBody Map<String, String> request) {
         try {
+            checkQuota("ai-test-sentiment");
             String content = request.get("content");
             if (content == null || content.trim().isEmpty()) {
                 return Result.fail("测试内容不能为空");
@@ -150,7 +171,7 @@ public class AITestController {
             long responseTime = System.currentTimeMillis() - startTime;
 
             Map<String, Object> resultData = new HashMap<>();
-            resultData.put("content", content);
+            resultData.put("contentLength", lengthOf(content));
             resultData.put("basicSentiment", basicSentiment);
             resultData.put("detailedSentiment", detailedSentiment);
             resultData.put("responseTime", responseTime + "ms");
@@ -160,9 +181,11 @@ public class AITestController {
             log.info("情感分析测试完成 - 基础结果: {}, 响应时间: {}ms", basicSentiment, responseTime);
 
             return Result.ok(resultData);
+        } catch (AiQuotaExceededException e) {
+            return quotaFailure(e);
         } catch (Exception e) {
             log.error("情感分析测试失败", e);
-            return Result.fail("情感分析测试失败: " + e.getMessage());
+            return Result.fail("情感分析测试失败");
         }
     }
 
@@ -175,6 +198,7 @@ public class AITestController {
     @PostMapping("/keywords")
     public Result testKeywords(@RequestBody Map<String, String> request) {
         try {
+            checkQuota("ai-test-keywords");
             String content = request.get("content");
             if (content == null || content.trim().isEmpty()) {
                 return Result.fail("测试内容不能为空");
@@ -188,7 +212,7 @@ public class AITestController {
             long responseTime = System.currentTimeMillis() - startTime;
 
             Map<String, Object> resultData = new HashMap<>();
-            resultData.put("content", content);
+            resultData.put("contentLength", lengthOf(content));
             resultData.put("keywords", keywords);
             resultData.put("keywordsList", keywords.split("[,，]"));  // 分割为数组
             resultData.put("responseTime", responseTime + "ms");
@@ -198,9 +222,11 @@ public class AITestController {
             log.info("关键词提取测试完成 - 结果: {}, 响应时间: {}ms", keywords, responseTime);
 
             return Result.ok(resultData);
+        } catch (AiQuotaExceededException e) {
+            return quotaFailure(e);
         } catch (Exception e) {
             log.error("关键词提取测试失败", e);
-            return Result.fail("关键词提取测试失败: " + e.getMessage());
+            return Result.fail("关键词提取测试失败");
         }
     }
 
@@ -212,6 +238,7 @@ public class AITestController {
     @PostMapping("/summarize")
     public Result testSummarize(@RequestBody Map<String, String> request) {
         try {
+            checkQuota("ai-test-summarize");
             String content = request.get("content");
             if (content == null || content.trim().isEmpty()) {
                 return Result.fail("测试内容不能为空");
@@ -224,7 +251,7 @@ public class AITestController {
             long responseTime = System.currentTimeMillis() - startTime;
 
             Map<String, Object> resultData = new HashMap<>();
-            resultData.put("content", content);
+            resultData.put("contentLength", lengthOf(content));
             resultData.put("summary", summary);
             resultData.put("responseTime", responseTime + "ms");
             resultData.put("timestamp", System.currentTimeMillis());
@@ -233,9 +260,11 @@ public class AITestController {
             log.info("文本总结测试完成 - 响应时间: {}ms", responseTime);
 
             return Result.ok(resultData);
+        } catch (AiQuotaExceededException e) {
+            return quotaFailure(e);
         } catch (Exception e) {
             log.error("文本总结测试失败", e);
-            return Result.fail("文本总结测试失败: " + e.getMessage());
+            return Result.fail("文本总结测试失败");
         }
     }
 
@@ -251,6 +280,7 @@ public class AITestController {
         long totalStartTime = System.currentTimeMillis();
 
         try {
+            AIService aiService = quotaCheckedAiService("ai-test-batch");
             log.info("开始执行AI服务批量测试");
 
             // 1. 测试基础聊天
@@ -266,7 +296,7 @@ public class AITestController {
                 log.debug("基础聊天测试完成: {}ms", chatTime);
             } catch (Exception e) {
                 testResults.put("basicChat", Map.of(
-                        "error", e.getMessage(),
+                        "error", "failed",
                         "status", "failed"
                 ));
                 log.warn("基础聊天测试失败", e);
@@ -285,7 +315,7 @@ public class AITestController {
                 log.debug("情感分析测试完成: {}ms", sentimentTime);
             } catch (Exception e) {
                 testResults.put("sentiment", Map.of(
-                        "error", e.getMessage(),
+                        "error", "failed",
                         "status", "failed"
                 ));
                 log.warn("情感分析测试失败", e);
@@ -304,7 +334,7 @@ public class AITestController {
                 log.debug("关键词提取测试完成: {}ms", keywordsTime);
             } catch (Exception e) {
                 testResults.put("keywords", Map.of(
-                        "error", e.getMessage(),
+                        "error", "failed",
                         "status", "failed"
                 ));
                 log.warn("关键词提取测试失败", e);
@@ -328,7 +358,7 @@ public class AITestController {
                 log.debug("记忆功能测试完成: {}ms", memoryTime);
             } catch (Exception e) {
                 testResults.put("memory", Map.of(
-                        "error", e.getMessage(),
+                        "error", "failed",
                         "status", "failed"
                 ));
                 log.warn("记忆功能测试失败", e);
@@ -347,7 +377,7 @@ public class AITestController {
                 log.debug("文本总结测试完成: {}ms", summarizeTime);
             } catch (Exception e) {
                 testResults.put("summarize", Map.of(
-                        "error", e.getMessage(),
+                        "error", "failed",
                         "status", "failed"
                 ));
                 log.warn("文本总结测试失败", e);
@@ -365,24 +395,31 @@ public class AITestController {
                         return 0;
                     })
                     .sum();
+            int totalTests = testResults.size();
+            long failureCount = totalTests - successCount;
+            String successRate = totalTests == 0
+                    ? "0.0%"
+                    : String.format("%.1f%%", (double) successCount / totalTests * 100);
 
             testResults.put("summary", Map.of(
-                    "totalTests", testResults.size() - 1,  // 减去summary本身
+                    "totalTests", totalTests,
                     "successCount", successCount,
-                    "failureCount", testResults.size() - 1 - successCount,
-                    "successRate", String.format("%.1f%%", (double) successCount / (testResults.size() - 1) * 100),
+                    "failureCount", failureCount,
+                    "successRate", successRate,
                     "totalTime", totalTime + "ms",
                     "timestamp", System.currentTimeMillis(),
                     "note", "⚠️ 这些是测试功能，生产环境请使用对应的业务服务"
             ));
 
             log.info("AI服务批量测试完成 - 成功: {}/{}, 总耗时: {}ms",
-                    successCount, testResults.size() - 1, totalTime);
+                    successCount, totalTests, totalTime);
 
             return Result.ok(testResults);
+        } catch (QuotaExceededSignal e) {
+            return quotaFailure(e.getQuotaException());
         } catch (Exception e) {
             log.error("批量测试执行失败", e);
-            testResults.put("error", e.getMessage());
+                testResults.put("error", "failed");
             testResults.put("timestamp", System.currentTimeMillis());
             return Result.ok(testResults);  // 即使测试失败也返回结果
         }
@@ -394,6 +431,9 @@ public class AITestController {
      */
     @GetMapping("/stress")
     public Result stressTest(@RequestParam(defaultValue = "5") Integer count) {
+        if (count == null || count <= 0) {
+            return Result.fail("stress test count must be greater than 0");
+        }
         if (count > 20) {
             return Result.fail("压力测试次数不能超过20次");
         }
@@ -402,6 +442,7 @@ public class AITestController {
         long totalStartTime = System.currentTimeMillis();
 
         try {
+            AIService aiService = quotaCheckedAiService("ai-test-stress");
             log.info("开始AI服务压力测试，测试次数: {}", count);
 
             long totalResponseTime = 0;
@@ -417,12 +458,15 @@ public class AITestController {
 
                     log.debug("压力测试 {}/{} 完成，响应时间: {}ms", i, count, responseTime);
                 } catch (Exception e) {
-                    log.warn("压力测试 {}/{} 失败: {}", i, count, e.getMessage());
+                    log.warn("压力测试 {}/{} 失败", i, count, e);
                 }
             }
 
             long totalTime = System.currentTimeMillis() - totalStartTime;
             double avgResponseTime = successCount > 0 ? (double) totalResponseTime / successCount : 0;
+            String maxQPS = successCount > 0 && avgResponseTime > 0
+                    ? String.format("%.1f", 1000.0 / avgResponseTime)
+                    : "0.0";
 
             stressResults.put("testCount", count);
             stressResults.put("successCount", successCount);
@@ -430,16 +474,18 @@ public class AITestController {
             stressResults.put("successRate", String.format("%.1f%%", (double) successCount / count * 100));
             stressResults.put("totalTime", totalTime + "ms");
             stressResults.put("avgResponseTime", String.format("%.1fms", avgResponseTime));
-            stressResults.put("maxQPS", String.format("%.1f", 1000.0 / avgResponseTime));
+            stressResults.put("maxQPS", maxQPS);
             stressResults.put("timestamp", System.currentTimeMillis());
 
             log.info("AI服务压力测试完成 - 成功率: {}/{} ({:.1f%}), 平均响应时间: {:.1f}ms",
                     successCount, count, (double) successCount / count * 100, avgResponseTime);
 
             return Result.ok(stressResults);
+        } catch (QuotaExceededSignal e) {
+            return quotaFailure(e.getQuotaException());
         } catch (Exception e) {
             log.error("压力测试执行失败", e);
-            return Result.fail("压力测试失败: " + e.getMessage());
+            return Result.fail("压力测试失败");
         }
     }
 
@@ -450,6 +496,7 @@ public class AITestController {
     @GetMapping("/stats")
     public Result getTestStats() {
         try {
+            checkQuota("ai-test-stats");
             Map<String, Object> stats = new HashMap<>();
             stats.put("availableTests", Map.of(
                     "health", "AI服务健康检查",
@@ -480,9 +527,61 @@ public class AITestController {
             stats.put("timestamp", System.currentTimeMillis());
 
             return Result.ok(stats);
+        } catch (AiQuotaExceededException e) {
+            return quotaFailure(e);
         } catch (Exception e) {
             log.error("获取测试统计失败", e);
-            return Result.fail("获取统计失败: " + e.getMessage());
+            return Result.fail("获取统计失败");
         }
+    }
+
+    private AIService quotaCheckedAiService(String operation) {
+        return (AIService) Proxy.newProxyInstance(
+                AIService.class.getClassLoader(),
+                new Class<?>[]{AIService.class},
+                (proxy, method, args) -> {
+                    try {
+                        checkQuota(operation);
+                    } catch (AiQuotaExceededException e) {
+                        throw new QuotaExceededSignal(e);
+                    }
+                    try {
+                        return method.invoke(aiService, args);
+                    } catch (InvocationTargetException e) {
+                        throw e.getTargetException();
+                    }
+                });
+    }
+
+    protected void checkQuota(String operation) {
+        aiUserQuotaService.checkAndConsume(StpUtil.getLoginIdAsString(), operation);
+    }
+
+    private Result quotaFailure(AiQuotaExceededException e) {
+        return Result.fail(e.isInfraError() ? ErrorCode.SERVICE_UNAVAILABLE : ErrorCode.RATE_LIMITED, e.getMessage());
+    }
+
+    private static class QuotaExceededSignal extends Error {
+        private final AiQuotaExceededException quotaException;
+
+        private QuotaExceededSignal(AiQuotaExceededException quotaException) {
+            super(quotaException);
+            this.quotaException = quotaException;
+        }
+
+        private AiQuotaExceededException getQuotaException() {
+            return quotaException;
+        }
+    }
+
+    private int lengthOf(String value) {
+        return value == null ? 0 : value.length();
+    }
+
+    private String safeKey(String value) {
+        if (value == null || value.length() <= 16) {
+            return value;
+        }
+        return value.substring(0, 8) + "***" + value.substring(value.length() - 4);
     }
 }

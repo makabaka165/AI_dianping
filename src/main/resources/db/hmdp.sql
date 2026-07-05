@@ -32,7 +32,9 @@ CREATE TABLE `tb_blog`  (
   `comments` int(8) UNSIGNED NULL DEFAULT NULL COMMENT '评论数量',
   `create_time` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_time` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  PRIMARY KEY (`id`) USING BTREE
+  PRIMARY KEY (`id`) USING BTREE,
+  KEY `idx_blog_shop_time` (`shop_id`, `create_time`) USING BTREE,
+  KEY `idx_blog_shop_liked_time` (`shop_id`, `liked`, `create_time`) USING BTREE
 ) ENGINE = InnoDB AUTO_INCREMENT = 23 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci ROW_FORMAT = Compact;
 
 -- ----------------------------
@@ -76,6 +78,7 @@ CREATE TABLE `tb_follow`  (
   `create_time` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   PRIMARY KEY (`id`) USING BTREE,
   UNIQUE KEY `uk_follow_user` (`user_id`, `follow_user_id`) USING BTREE,
+  KEY `idx_follow_user_follow` (`user_id`, `follow_user_id`) USING BTREE,
   KEY `idx_followed_user` (`follow_user_id`) USING BTREE
 ) ENGINE = InnoDB AUTO_INCREMENT = 1 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci ROW_FORMAT = Compact;
 
@@ -123,7 +126,8 @@ CREATE TABLE `tb_shop`  (
   `create_time` timestamp NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_time` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   PRIMARY KEY (`id`) USING BTREE,
-  INDEX `foreign_key_type`(`type_id`) USING BTREE
+  INDEX `foreign_key_type`(`type_id`) USING BTREE,
+  KEY `idx_shop_type_score` (`type_id`, `score`) USING BTREE
 ) ENGINE = InnoDB AUTO_INCREMENT = 15 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci ROW_FORMAT = Compact;
 
 -- ----------------------------
@@ -1275,16 +1279,49 @@ CREATE TABLE `tb_voucher_order`  (
   `voucher_id` bigint(20) UNSIGNED NOT NULL COMMENT '购买的代金券id',
   `pay_type` tinyint(1) UNSIGNED NOT NULL DEFAULT 1 COMMENT '支付方式 1：余额支付；2：支付宝；3：微信',
   `status` tinyint(1) UNSIGNED NOT NULL DEFAULT 1 COMMENT '订单状态，1：未支付；2：已支付；3：已核销；4：已取消；5：退款中；6：已退款',
+  `pay_request_id` varchar(64) DEFAULT NULL COMMENT 'Mock payment idempotency key',
+  `active_order_key` tinyint(1) DEFAULT 1 COMMENT '1 for active order; NULL releases re-seckill eligibility',
   `create_time` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '下单时间',
   `pay_time` timestamp NULL DEFAULT NULL COMMENT '支付时间',
   `use_time` timestamp NULL DEFAULT NULL COMMENT '核销时间',
   `refund_time` timestamp NULL DEFAULT NULL COMMENT '退款时间',
   `update_time` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  PRIMARY KEY (`id`) USING BTREE
+  PRIMARY KEY (`id`) USING BTREE,
+  UNIQUE KEY `uk_voucher_order_user_voucher_active` (`user_id`, `voucher_id`, `active_order_key`) USING BTREE,
+  KEY `idx_voucher_order_pay_request` (`pay_request_id`) USING BTREE,
+  KEY `idx_voucher_order_voucher` (`voucher_id`, `create_time`) USING BTREE,
+  KEY `idx_voucher_order_status_create` (`status`, `create_time`) USING BTREE
 ) ENGINE = InnoDB CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci ROW_FORMAT = Compact;
 
 -- ----------------------------
 -- Records of tb_voucher_order
+-- ----------------------------
+
+-- ----------------------------
+-- Table structure for tb_ai_document
+-- ----------------------------
+DROP TABLE IF EXISTS `tb_ai_document`;
+CREATE TABLE `tb_ai_document` (
+  `id` varchar(64) NOT NULL,
+  `title` varchar(255) NOT NULL,
+  `source` varchar(255) DEFAULT NULL,
+  `file_type` varchar(32) NOT NULL DEFAULT 'txt',
+  `status` varchar(32) NOT NULL DEFAULT 'PUBLISHED',
+  `quality_score` double DEFAULT 0,
+  `quality_profile` varchar(64) DEFAULT NULL,
+  `quality_level` varchar(64) DEFAULT NULL,
+  `word_count` bigint DEFAULT 0,
+  `keywords` varchar(512) DEFAULT NULL,
+  `content` mediumtext,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_ai_document_status_updated` (`status`, `updated_at`),
+  KEY `idx_ai_document_quality` (`quality_score`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AI RAG document metadata and content';
+
+-- ----------------------------
+-- Records of tb_ai_document
 -- ----------------------------
 
 SET FOREIGN_KEY_CHECKS = 1;

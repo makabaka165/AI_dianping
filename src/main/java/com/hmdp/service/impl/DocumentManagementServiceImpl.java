@@ -1,181 +1,290 @@
 package com.hmdp.service.impl;
 
-import com.hmdp.entity.DocumentMetadata;
-import com.hmdp.entity.DocumentStatus;
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.hmdp.ai.infra.DocumentQualityAssessment;
 import com.hmdp.ai.infra.DocumentQualityAssessor;
 import com.hmdp.ai.infra.DocumentQualityProfile;
+import com.hmdp.ai.retrieval.PlatformPolicyVectorDocumentFactory;
+import com.hmdp.entity.AiDocument;
+import com.hmdp.entity.DocumentMetadata;
+import com.hmdp.entity.DocumentStatus;
+import com.hmdp.mapper.AiDocumentMapper;
 import com.hmdp.service.DocumentManagementService;
 import dev.langchain4j.data.document.Document;
+import dev.langchain4j.data.document.splitter.DocumentSplitters;
 import dev.langchain4j.data.segment.TextSegment;
+import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.store.embedding.EmbeddingStore;
+import dev.langchain4j.store.embedding.EmbeddingStoreIngestor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
-import javax.annotation.PostConstruct;
 import java.time.LocalDateTime;
-import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
 public class DocumentManagementServiceImpl implements DocumentManagementService {
 
-    // 使用内存存储文档元数据，实际项目中应该使用数据库存储
-    private final Map<String, DocumentMetadata> documentMetadataStore = new ConcurrentHashMap<>();
-    private final Map<String, Document> documentStore = new ConcurrentHashMap<>();
+    @Autowired
+    private AiDocumentMapper aiDocumentMapper;
 
     @Autowired
     private DocumentQualityAssessor qualityAssessor;
 
-    // 移除了对EmbeddingStore的直接依赖，避免循环依赖问题
+    @Autowired(required = false)
+    private EmbeddingModel embeddingModel;
 
-    @PostConstruct
-    public void init() {
-        log.info("文档管理服务初始化完成");
-    }
+    @Autowired(required = false)
+    @Qualifier("platformPolicyEmbeddingStore")
+    private EmbeddingStore<TextSegment> embeddingStore;
+
+    @Value("${rag.enabled:true}")
+    private boolean ragEnabled;
 
     @Override
     public void saveDocument(DocumentMetadata metadata) {
-        if (metadata.getId() == null || metadata.getId().isEmpty()) {
-            metadata.setId(UUID.randomUUID().toString());
-        }
-        
-        if (metadata.getCreatedAt() == null) {
-            metadata.setCreatedAt(LocalDateTime.now());
-        }
-        metadata.setUpdatedAt(LocalDateTime.now());
-        
-        if (metadata.getStatus() == null) {
-            metadata.setStatus(DocumentStatus.PUBLISHED);
-        }
-        
-        documentMetadataStore.put(metadata.getId(), metadata);
-        log.info("保存文档元数据: ID={}, 标题={}", metadata.getId(), metadata.getTitle());
+        saveDocument(null, metadata);
+    }
+
+    @Override
+    public void saveDocument(Document document, DocumentMetadata metadata) {
+        DocumentMetadata safeMetadata = prepareMetadata(metadata, document);
+        upsert(toRecord(safeMetadata, document == null ? null : document.text()));
+        log.info("Saved AI document metadata, id={}, title={}", safeMetadata.getId(), safeMetadata.getTitle());
     }
 
     @Override
     public String addDocument(Document document, DocumentMetadata metadata) {
-        String documentId = UUID.randomUUID().toString();
-        
-        // 如果没有提供metadata，创建默认的
-        if (metadata == null) {
-            metadata = new DocumentMetadata();
-            metadata.setId(documentId);
-            metadata.setTitle("未命名文档");
-            metadata.setSource("系统添加");
-            metadata.setFileType("txt");
-            metadata.setCreatedAt(LocalDateTime.now());
-            metadata.setUpdatedAt(LocalDateTime.now());
-            metadata.setStatus(DocumentStatus.PUBLISHED);
-        } else {
-            metadata.setId(documentId);
-            if (metadata.getCreatedAt() == null) {
-                metadata.setCreatedAt(LocalDateTime.now());
-            }
-            metadata.setUpdatedAt(LocalDateTime.now());
-            if (metadata.getStatus() == null) {
-                metadata.setStatus(DocumentStatus.PUBLISHED);
-            }
+        if (document == null || blank(document.text())) {
+            throw new IllegalArgumentException("document content must not be blank");
         }
-
-        // 评估文档质量
-        DocumentQualityAssessment assessment = qualityAssessor.assess(document, DocumentQualityProfile.GENERAL);
-        applyQualityAssessment(metadata, assessment);
-        
-        // 设置词数
-        metadata.setWordCount(document.text().length());
-        
-        // 存储文档和元数据
-        documentMetadataStore.put(documentId, metadata);
-        documentStore.put(documentId, document);
-        
-        log.info("添加文档: ID={}, 标题={}, 质量得分={}", documentId, metadata.getTitle(), assessment.getScore());
-        return documentId;
+        DocumentMetadata safeMetadata = prepareMetadata(metadata, document);
+        upsert(toRecord(safeMetadata, document.text()));
+        ingestIfEnabled(safeMetadata.getId(), document, safeMetadata);
+        log.info("Added AI document, id={}, title={}, qualityScore={}",
+                safeMetadata.getId(), safeMetadata.getTitle(), safeMetadata.getQualityScore());
+        return safeMetadata.getId();
     }
 
     @Override
     public boolean updateDocument(String documentId, Document document, DocumentMetadata metadata) {
-        if (!documentMetadataStore.containsKey(documentId)) {
-            log.warn("尝试更新不存在的文档: {}", documentId);
+        AiDocument existing = aiDocumentMapper.selectById(documentId);
+        if (existing == null || DocumentStatus.DELETED.name().equals(existing.getStatus())) {
             return false;
         }
-
-        // 更新元数据
-        if (metadata != null) {
-            DocumentMetadata existingMetadata = documentMetadataStore.get(documentId);
-            // 保留一些不变的字段
-            metadata.setId(documentId);
-            metadata.setCreatedAt(existingMetadata.getCreatedAt());
-            if (metadata.getCreatedAt() == null) {
-                metadata.setCreatedAt(existingMetadata.getCreatedAt());
-            }
-            metadata.setUpdatedAt(LocalDateTime.now());
-            if (metadata.getStatus() == null) {
-                metadata.setStatus(existingMetadata.getStatus());
-            }
-            
-            // 重新评估质量
-            DocumentQualityAssessment assessment = qualityAssessor.assess(document, DocumentQualityProfile.GENERAL);
-            applyQualityAssessment(metadata, assessment);
-            metadata.setWordCount(document.text().length());
-            
-            documentMetadataStore.put(documentId, metadata);
+        DocumentMetadata merged = metadata == null ? toMetadata(existing) : metadata;
+        merged.setId(documentId);
+        if (merged.getCreatedAt() == null) {
+            merged.setCreatedAt(existing.getCreatedAt());
         }
-
-        // 更新文档内容
-        if (document != null) {
-            documentStore.put(documentId, document);
-        }
-
-        log.info("更新文档: {}", documentId);
+        merged.setUpdatedAt(LocalDateTime.now());
+        Document safeDocument = document == null ? Document.from(existing.getContent() == null ? "" : existing.getContent()) : document;
+        DocumentMetadata prepared = prepareMetadata(merged, safeDocument);
+        upsert(toRecord(prepared, safeDocument.text()));
+        ingestIfEnabled(documentId, safeDocument, prepared);
         return true;
     }
 
     @Override
     public boolean deleteDocument(String documentId) {
-        DocumentMetadata removedMetadata = documentMetadataStore.remove(documentId);
-        Document removedDocument = documentStore.remove(documentId);
-        
-        boolean success = removedMetadata != null && removedDocument != null;
-        if (success) {
-            log.info("删除文档: {}", documentId);
-        } else {
-            log.warn("尝试删除不存在的文档: {}", documentId);
+        AiDocument existing = aiDocumentMapper.selectById(documentId);
+        if (existing == null || DocumentStatus.DELETED.name().equals(existing.getStatus())) {
+            return false;
         }
-        
-        return success;
+        existing.setStatus(DocumentStatus.DELETED.name());
+        existing.setUpdatedAt(LocalDateTime.now());
+        aiDocumentMapper.updateById(existing);
+        log.info("Marked AI document as deleted, id={}", documentId);
+        return true;
     }
 
     @Override
     public Optional<DocumentMetadata> getDocumentMetadata(String documentId) {
-        return Optional.ofNullable(documentMetadataStore.get(documentId));
+        AiDocument record = aiDocumentMapper.selectById(documentId);
+        if (record == null || DocumentStatus.DELETED.name().equals(record.getStatus())) {
+            return Optional.empty();
+        }
+        return Optional.of(toMetadata(record));
     }
 
     @Override
     public Optional<Document> getDocument(String documentId) {
-        return Optional.ofNullable(documentStore.get(documentId));
+        AiDocument record = aiDocumentMapper.selectById(documentId);
+        if (record == null || DocumentStatus.DELETED.name().equals(record.getStatus())) {
+            return Optional.empty();
+        }
+        return Optional.of(Document.from(record.getContent() == null ? "" : record.getContent(),
+                PlatformPolicyVectorDocumentFactory.metadata(record.getId(), toMetadata(record), record.getContent())));
     }
 
     @Override
     public List<DocumentMetadata> listAllDocuments() {
-        return new ArrayList<>(documentMetadataStore.values());
+        List<AiDocument> records = aiDocumentMapper.selectList(new QueryWrapper<AiDocument>()
+                .ne("status", DocumentStatus.DELETED.name())
+                .orderByDesc("updated_at"));
+        return toMetadataList(records);
     }
 
     @Override
     public List<DocumentMetadata> listDocumentsByStatus(DocumentStatus status) {
-        return documentMetadataStore.values().stream()
-                .filter(metadata -> metadata.getStatus() == status)
-                .collect(ArrayList::new, (list, item) -> list.add(item), ArrayList::addAll);
+        if (status == null) {
+            return Collections.emptyList();
+        }
+        List<AiDocument> records = aiDocumentMapper.selectList(new QueryWrapper<AiDocument>()
+                .eq("status", status.name())
+                .orderByDesc("updated_at"));
+        return toMetadataList(records);
     }
 
     @Override
     public List<DocumentMetadata> listDocumentsByQualityScoreRange(double minScore, double maxScore) {
-        return documentMetadataStore.values().stream()
-                .filter(metadata -> metadata.getQualityScore() >= minScore && metadata.getQualityScore() <= maxScore)
-                .collect(ArrayList::new, (list, item) -> list.add(item), ArrayList::addAll);
+        List<AiDocument> records = aiDocumentMapper.selectList(new QueryWrapper<AiDocument>()
+                .ne("status", DocumentStatus.DELETED.name())
+                .between("quality_score", minScore, maxScore)
+                .orderByDesc("quality_score"));
+        return toMetadataList(records);
+    }
+
+    public boolean isRagIngestionAvailable() {
+        return ragEnabled && embeddingModel != null && embeddingStore != null;
+    }
+
+    private DocumentMetadata prepareMetadata(DocumentMetadata metadata, Document document) {
+        DocumentMetadata safeMetadata = metadata == null ? new DocumentMetadata() : metadata;
+        if (blank(safeMetadata.getId())) {
+            safeMetadata.setId(UUID.randomUUID().toString());
+        }
+        if (blank(safeMetadata.getTitle())) {
+            safeMetadata.setTitle("untitled-document");
+        }
+        if (blank(safeMetadata.getSource())) {
+            safeMetadata.setSource("manual-upload");
+        }
+        if (blank(safeMetadata.getFileType())) {
+            safeMetadata.setFileType("txt");
+        }
+        if (safeMetadata.getCreatedAt() == null) {
+            safeMetadata.setCreatedAt(LocalDateTime.now());
+        }
+        safeMetadata.setUpdatedAt(LocalDateTime.now());
+        if (safeMetadata.getStatus() == null) {
+            safeMetadata.setStatus(DocumentStatus.PUBLISHED);
+        }
+        if (document != null && blank(safeMetadata.getQualityProfile())) {
+            DocumentQualityAssessment assessment = qualityAssessor.assess(document, DocumentQualityProfile.GENERAL);
+            applyQualityAssessment(safeMetadata, assessment);
+        }
+        if (document != null) {
+            safeMetadata.setWordCount(document.text() == null ? 0 : document.text().length());
+        }
+        return safeMetadata;
+    }
+
+    private void upsert(AiDocument record) {
+        AiDocument existing = aiDocumentMapper.selectById(record.getId());
+        if (existing == null) {
+            aiDocumentMapper.insert(record);
+        } else {
+            aiDocumentMapper.updateById(record);
+        }
+    }
+
+    private void ingestIfEnabled(String documentId, Document document, DocumentMetadata metadata) {
+        if (!isRagIngestionAvailable()) {
+            log.info("RAG is disabled or unavailable; document saved without vector ingestion, id={}", documentId);
+            return;
+        }
+        try {
+            Document vectorDocument = PlatformPolicyVectorDocumentFactory.toDocument(documentId, document, metadata);
+            EmbeddingStoreIngestor ingestor = EmbeddingStoreIngestor.builder()
+                    .embeddingStore(embeddingStore)
+                    .embeddingModel(embeddingModel)
+                    .documentSplitter(DocumentSplitters.recursive(300, 30))
+                    .build();
+            ingestor.ingest(vectorDocument);
+        } catch (Exception e) {
+            log.warn("Vector ingestion skipped for document id={}, reason={}", documentId, e.getMessage());
+        }
+    }
+
+    private AiDocument toRecord(DocumentMetadata metadata, String content) {
+        AiDocument record = new AiDocument();
+        record.setId(metadata.getId());
+        record.setTitle(metadata.getTitle());
+        record.setSource(metadata.getSource());
+        record.setFileType(metadata.getFileType());
+        record.setStatus(metadata.getStatus() == null ? DocumentStatus.PUBLISHED.name() : metadata.getStatus().name());
+        record.setQualityScore(metadata.getQualityScore());
+        record.setQualityProfile(metadata.getQualityProfile());
+        record.setQualityLevel(metadata.getQualityLevel());
+        record.setWordCount(metadata.getWordCount());
+        record.setKeywords(joinKeywords(metadata.getKeywords()));
+        record.setContent(content);
+        record.setCreatedAt(metadata.getCreatedAt());
+        record.setUpdatedAt(metadata.getUpdatedAt());
+        return record;
+    }
+
+    private DocumentMetadata toMetadata(AiDocument record) {
+        DocumentMetadata metadata = new DocumentMetadata();
+        metadata.setId(record.getId());
+        metadata.setTitle(record.getTitle());
+        metadata.setSource(record.getSource());
+        metadata.setFileType(record.getFileType());
+        metadata.setCreatedAt(record.getCreatedAt());
+        metadata.setUpdatedAt(record.getUpdatedAt());
+        metadata.setStatus(parseStatus(record.getStatus()));
+        metadata.setQualityScore(record.getQualityScore() == null ? 0.0 : record.getQualityScore());
+        metadata.setQualityProfile(record.getQualityProfile());
+        metadata.setQualityLevel(record.getQualityLevel());
+        metadata.setWordCount(record.getWordCount() == null ? 0L : record.getWordCount());
+        metadata.setKeywords(splitKeywords(record.getKeywords()));
+        return metadata;
+    }
+
+    private List<DocumentMetadata> toMetadataList(List<AiDocument> records) {
+        if (records == null || records.isEmpty()) {
+            return Collections.emptyList();
+        }
+        return records.stream().map(this::toMetadata).collect(Collectors.toList());
+    }
+
+    private DocumentStatus parseStatus(String status) {
+        try {
+            return status == null ? DocumentStatus.PUBLISHED : DocumentStatus.valueOf(status);
+        } catch (IllegalArgumentException e) {
+            return DocumentStatus.PUBLISHED;
+        }
+    }
+
+    private String joinKeywords(String[] keywords) {
+        if (keywords == null || keywords.length == 0) {
+            return "";
+        }
+        return Arrays.stream(keywords)
+                .filter(value -> !blank(value))
+                .map(String::trim)
+                .distinct()
+                .collect(Collectors.joining(","));
+    }
+
+    private String[] splitKeywords(String keywords) {
+        if (blank(keywords)) {
+            return new String[0];
+        }
+        return Arrays.stream(keywords.split(","))
+                .map(String::trim)
+                .filter(value -> !value.isEmpty())
+                .toArray(String[]::new);
     }
 
     private void applyQualityAssessment(DocumentMetadata metadata, DocumentQualityAssessment assessment) {
@@ -189,5 +298,9 @@ public class DocumentManagementServiceImpl implements DocumentManagementService 
         metadata.setQualityIssues(assessment.getIssues());
         metadata.setQualitySuggestions(assessment.getSuggestions());
         metadata.setKeywords(assessment.getKeywords().toArray(new String[0]));
+    }
+
+    private boolean blank(String value) {
+        return value == null || value.trim().isEmpty();
     }
 }

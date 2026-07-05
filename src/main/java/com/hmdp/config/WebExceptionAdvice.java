@@ -10,6 +10,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.validation.BindException;
 import org.springframework.validation.BindingResult;
 import org.springframework.validation.ObjectError;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -49,6 +50,11 @@ public class WebExceptionAdvice {
     @ExceptionHandler(BindException.class)
     public Result handleBindException(BindException e) {
         return Result.fail(ErrorCode.PARAM_ERROR, firstBindingError(e.getBindingResult()));
+    }
+
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public Result handleHttpMessageNotReadableException(HttpMessageNotReadableException e) {
+        return Result.fail(ErrorCode.PARAM_ERROR, "request body is invalid");
     }
 
     @ExceptionHandler(ConstraintViolationException.class)

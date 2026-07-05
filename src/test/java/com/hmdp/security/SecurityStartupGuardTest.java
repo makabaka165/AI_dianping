@@ -39,6 +39,16 @@ class SecurityStartupGuardTest {
     }
 
     @Test
+    void prodShouldRejectDevOrTestMixedProfile() {
+        MockEnvironment environment = new MockEnvironment();
+        environment.setActiveProfiles("prod", "test");
+
+        assertThatThrownBy(() -> new SecurityStartupGuard(environment).validateProductionSafety())
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("must not be combined");
+    }
+
+    @Test
     void prodShouldRejectForwardedHeadersWithEmptyTrustedProxies() {
         MockEnvironment environment = prodEnvironment()
                 .withProperty("hmdp.security.forwarded-headers.enabled", "true")

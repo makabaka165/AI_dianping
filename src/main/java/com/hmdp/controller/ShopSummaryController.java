@@ -294,7 +294,6 @@ public class ShopSummaryController {
             }
             long ttl = shopAIApplicationService.getMemoryTtl(memoryKey);
             Map<String, Object> resultData = new HashMap<>();
-            resultData.put("memoryKey", memoryKey);
             resultData.put("type", type);
             resultData.put("exists", shopAIApplicationService.hasMemory(memoryKey));
             resultData.put("messageCount", shopAIApplicationService.getMemoryMessageCount(memoryKey));
@@ -317,7 +316,9 @@ public class ShopSummaryController {
                 return Result.fail("不支持的记忆类型: " + type);
             }
             shopAIApplicationService.refreshMemoryTtl(memoryKey);
-            return Result.ok(message("记忆过期时间已刷新", "memoryKey", memoryKey));
+            Map<String, Object> resultData = message("记忆过期时间已刷新", "type", type);
+            resultData.put("shopId", shopId);
+            return Result.ok(resultData);
         } catch (Exception e) {
             log.error("刷新记忆失败, shopId={}, type={}", shopId, type, e);
             return Result.fail("刷新记忆失败");

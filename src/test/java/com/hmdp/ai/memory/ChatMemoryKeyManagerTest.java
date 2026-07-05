@@ -10,16 +10,27 @@ class ChatMemoryKeyManagerTest {
 
     @Test
     void getFunctionTypeShouldKeepTwoSegmentShopType() {
-        assertThat(keyManager.getFunctionType("hmdp:memory:shop:summary:1:10001"))
+        assertThat(keyManager.getFunctionType(keyManager.buildShopSummaryKey(1L, "10001")))
                 .isEqualTo(ChatMemoryKeyManager.SHOP_SUMMARY_PREFIX);
-        assertThat(keyManager.getFunctionType("hmdp:memory:shop:qa:1:10001"))
+        assertThat(keyManager.getFunctionType(keyManager.buildShopQAKey(1L, "10001")))
                 .isEqualTo(ChatMemoryKeyManager.SHOP_QA_PREFIX);
+        assertThat(keyManager.getFunctionType(keyManager.buildShopCompareKey("10001", "s1")))
+                .isEqualTo(ChatMemoryKeyManager.SHOP_COMPARE_PREFIX);
+        assertThat(keyManager.getFunctionType(keyManager.buildShopRecommendKey("10001")))
+                .isEqualTo(ChatMemoryKeyManager.SHOP_RECOMMEND_PREFIX);
     }
 
     @Test
     void getFunctionTypeShouldKeepTwoSegmentAiType() {
-        assertThat(keyManager.getFunctionType("hmdp:memory:ai:chat:10001:default"))
+        assertThat(keyManager.getFunctionType(keyManager.buildAIChatKey("10001", "default")))
                 .isEqualTo(ChatMemoryKeyManager.AI_CHAT_PREFIX);
+    }
+
+    @Test
+    void getFunctionTypeShouldReturnUnknownForUnknownOrBlankKey() {
+        assertThat(keyManager.getFunctionType("not-a-memory-key")).isEqualTo("unknown");
+        assertThat(keyManager.getFunctionType(null)).isEqualTo("unknown");
+        assertThat(keyManager.getFunctionType("")).isEqualTo("unknown");
     }
 
     @Test

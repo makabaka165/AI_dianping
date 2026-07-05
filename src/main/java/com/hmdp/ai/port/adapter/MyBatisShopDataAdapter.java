@@ -99,6 +99,7 @@ public class MyBatisShopDataAdapter implements ShopDataPort {
                 .name(shop.getName())
                 .typeId(shop.getTypeId())
                 .area(shop.getArea())
+                .address(shop.getAddress())
                 .avgPrice(shop.getAvgPrice())
                 .sold(shop.getSold())
                 .comments(shop.getComments())

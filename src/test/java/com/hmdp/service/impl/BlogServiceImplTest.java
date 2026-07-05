@@ -5,6 +5,7 @@ import com.hmdp.common.ErrorCode;
 import com.hmdp.dto.BlogCreateRequest;
 import com.hmdp.dto.Result;
 import com.hmdp.entity.Blog;
+import com.hmdp.exception.BusinessException;
 import com.hmdp.event.BlogPublishedEvent;
 import com.hmdp.mapper.ShopMapper;
 import com.hmdp.service.BlogImageOwnershipService;
@@ -81,6 +82,8 @@ class BlogServiceImplTest {
     void saveBlogWhenShopExistsShouldSaveBlogPublishEventAndRefreshImageOwnerTtl() {
         when(shopMapper.selectCount(any(QueryWrapper.class))).thenReturn(1);
         when(currentUserService.requireCurrentUserId()).thenReturn(7L);
+        when(blogImageOwnershipService.validateAndNormalizeUserImages("/imgs/a.jpg", 7L))
+                .thenReturn("blogs/a.jpg");
 
         Result result = service.saveBlog(request(1L));
 
@@ -90,6 +93,7 @@ class BlogServiceImplTest {
         Blog saved = service.savedBlogs.get(0);
         assertThat(saved.getShopId()).isEqualTo(1L);
         assertThat(saved.getUserId()).isEqualTo(7L);
+        assertThat(saved.getImages()).isEqualTo("blogs/a.jpg");
         assertThat(saved.getStatus()).isEqualTo(1);
         assertThat(saved.getDeleted()).isEqualTo(0);
         assertThat(saved.getPublishTime()).isNotNull();
@@ -98,7 +102,22 @@ class BlogServiceImplTest {
         verify(eventPublisher).publishEvent(eventCaptor.capture());
         assertThat(eventCaptor.getValue().getBlogId()).isEqualTo(21L);
         assertThat(eventCaptor.getValue().getAuthorId()).isEqualTo(7L);
-        verify(blogImageOwnershipService).refreshOwnerTtlForUserImages(eq("/imgs/a.jpg"), eq(7L));
+        verify(blogImageOwnershipService).refreshOwnerTtlForUserImages(eq("blogs/a.jpg"), eq(7L));
+    }
+
+    @Test
+    void saveBlogWhenImageOwnershipInvalidShouldRejectBeforeSave() {
+        when(shopMapper.selectCount(any(QueryWrapper.class))).thenReturn(1);
+        when(currentUserService.requireCurrentUserId()).thenReturn(7L);
+        when(blogImageOwnershipService.validateAndNormalizeUserImages("/imgs/a.jpg", 7L))
+                .thenThrow(new BusinessException(ErrorCode.FORBIDDEN, "blog image is not owned by current user"));
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.saveBlog(request(1L)))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("blog image is not owned by current user");
+        assertThat(service.savedBlogs).isEmpty();
+        verify(eventPublisher, never()).publishEvent(any());
+        verify(blogImageOwnershipService, never()).refreshOwnerTtlForUserImages(any(), any());
     }
 
     @Test
@@ -106,12 +125,14 @@ class BlogServiceImplTest {
         service.saveResult = false;
         when(shopMapper.selectCount(any(QueryWrapper.class))).thenReturn(1);
         when(currentUserService.requireCurrentUserId()).thenReturn(7L);
+        when(blogImageOwnershipService.validateAndNormalizeUserImages("/imgs/a.jpg", 7L))
+                .thenReturn("blogs/a.jpg");
 
         Result result = service.saveBlog(request(1L));
 
         assertThat(result.getSuccess()).isFalse();
         verify(eventPublisher, never()).publishEvent(any());
-        verifyNoInteractions(blogImageOwnershipService);
+        verify(blogImageOwnershipService, never()).refreshOwnerTtlForUserImages(any(), any());
     }
 
     private BlogCreateRequest request(Long shopId) {

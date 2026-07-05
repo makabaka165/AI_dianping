@@ -26,6 +26,9 @@ public class SecurityStartupGuard {
         if (!isProductionProfile()) {
             return;
         }
+        if (hasProfile("dev") || hasProfile("test")) {
+            fail("prod profile must not be combined with dev or test profile");
+        }
         if (environment.getProperty("hmdp.sms.mock.enabled", Boolean.class, false)) {
             fail("hmdp.sms.mock.enabled must be false in prod profile");
         }
@@ -46,8 +49,12 @@ public class SecurityStartupGuard {
     }
 
     private boolean isProductionProfile() {
+        return hasProfile("prod") || hasProfile("production");
+    }
+
+    private boolean hasProfile(String targetProfile) {
         return Arrays.stream(environment.getActiveProfiles())
-                .anyMatch(profile -> "prod".equalsIgnoreCase(profile) || "production".equalsIgnoreCase(profile));
+                .anyMatch(profile -> targetProfile.equalsIgnoreCase(profile));
     }
 
     private boolean hasSafeTrustedProxies(String trustedProxies) {

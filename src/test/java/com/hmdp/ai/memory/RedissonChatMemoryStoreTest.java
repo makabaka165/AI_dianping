@@ -104,6 +104,24 @@ class RedissonChatMemoryStoreTest {
     }
 
     @Test
+    void updateMessagesShouldUseConfiguredFunctionTtl() {
+        String memoryId = "hmdp:memory:shop:summary:7:u1";
+        ReflectionTestUtils.setField(store, "shopSummaryTtlSeconds", 1234L);
+        store.init();
+        when(redissonClient.<String>getBucket(memoryId)).thenReturn(bucket);
+        when(keyManager.getFunctionType(memoryId)).thenReturn(ChatMemoryKeyManager.SHOP_SUMMARY_PREFIX);
+        when(keyManager.getUserId(memoryId)).thenReturn(null);
+        when(keyManager.getShopSummaryShopId(memoryId)).thenReturn(null);
+        when(keyManager.buildFunctionIndexKey(ChatMemoryKeyManager.SHOP_SUMMARY_PREFIX))
+                .thenReturn("hmdp:memory:index:function:shop:summary");
+        when(redissonClient.<String>getSet("hmdp:memory:index:function:shop:summary")).thenReturn(functionIndex);
+
+        store.updateMessages(memoryId, List.of(UserMessage.from("summary")));
+
+        verify(bucket).set(org.mockito.ArgumentMatchers.anyString(), eq(1234L), eq(TimeUnit.SECONDS));
+    }
+
+    @Test
     void deleteMessagesShouldRemoveIndexes() {
         String memoryId = "hmdp:memory:shop:summary:7:u1";
         when(redissonClient.<String>getBucket(memoryId)).thenReturn(bucket);

@@ -227,12 +227,13 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
         }
 
         Long currentUserId = currentUserService.requireCurrentUserId();
+        String normalizedImages = blogImageOwnershipService.validateAndNormalizeUserImages(request.getImages(), currentUserId);
         LocalDateTime now = LocalDateTime.now();
         Blog blog = new Blog()
                 .setShopId(request.getShopId())
                 .setUserId(currentUserId)
                 .setTitle(request.getTitle())
-                .setImages(request.getImages())
+                .setImages(normalizedImages)
                 .setContent(request.getContent())
                 .setLiked(0)
                 .setComments(0)
@@ -250,7 +251,7 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
                 currentUserId,
                 toEpochMilli(now)
         ));
-        blogImageOwnershipService.refreshOwnerTtlForUserImages(request.getImages(), currentUserId);
+        blogImageOwnershipService.refreshOwnerTtlForUserImages(normalizedImages, currentUserId);
         return Result.ok(blog.getId());
     }
 

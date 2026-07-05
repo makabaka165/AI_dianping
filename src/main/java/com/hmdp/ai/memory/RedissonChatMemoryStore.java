@@ -42,6 +42,21 @@ public class RedissonChatMemoryStore implements ChatMemoryStore {
     @Value("${chat.memory.redis.ttl:7200}")
     private long defaultTtlSeconds;
 
+    @Value("${chat.memory.ttl.shop-summary:3600}")
+    private long shopSummaryTtlSeconds;
+
+    @Value("${chat.memory.ttl.shop-qa:7200}")
+    private long shopQaTtlSeconds;
+
+    @Value("${chat.memory.ttl.shop-compare:1800}")
+    private long shopCompareTtlSeconds;
+
+    @Value("${chat.memory.ttl.shop-recommend:86400}")
+    private long shopRecommendTtlSeconds;
+
+    @Value("${chat.memory.ttl.ai-chat:3600}")
+    private long aiChatTtlSeconds;
+
     // 是否开启详细日志（可以通过配置控制）
     @Value("${chat.memory.debug.enabled:false}")
     private boolean debugEnabled;
@@ -69,11 +84,11 @@ public class RedissonChatMemoryStore implements ChatMemoryStore {
     public void init() {
         // 初始化TTL配置缓存
         ttlConfigCache = new ConcurrentHashMap<>();
-        ttlConfigCache.put(ChatMemoryKeyManager.SHOP_SUMMARY_PREFIX, 3600L);      // 1小时
-        ttlConfigCache.put(ChatMemoryKeyManager.SHOP_QA_PREFIX, 7200L);           // 2小时
-        ttlConfigCache.put(ChatMemoryKeyManager.SHOP_COMPARE_PREFIX, 1800L);      // 30分钟
-        ttlConfigCache.put(ChatMemoryKeyManager.SHOP_RECOMMEND_PREFIX, 86400L);   // 24小时
-        ttlConfigCache.put(ChatMemoryKeyManager.AI_CHAT_PREFIX, 3600L);           // 1小时
+        ttlConfigCache.put(ChatMemoryKeyManager.SHOP_SUMMARY_PREFIX, positiveOrDefault(shopSummaryTtlSeconds, 3600L));
+        ttlConfigCache.put(ChatMemoryKeyManager.SHOP_QA_PREFIX, positiveOrDefault(shopQaTtlSeconds, 7200L));
+        ttlConfigCache.put(ChatMemoryKeyManager.SHOP_COMPARE_PREFIX, positiveOrDefault(shopCompareTtlSeconds, 1800L));
+        ttlConfigCache.put(ChatMemoryKeyManager.SHOP_RECOMMEND_PREFIX, positiveOrDefault(shopRecommendTtlSeconds, 86400L));
+        ttlConfigCache.put(ChatMemoryKeyManager.AI_CHAT_PREFIX, positiveOrDefault(aiChatTtlSeconds, 3600L));
     }
 
     // ========== 也支持字段注入（保持兼容） ==========
@@ -672,6 +687,10 @@ public class RedissonChatMemoryStore implements ChatMemoryStore {
 
         // 如果缓存中没有，则使用默认值
         return defaultTtlSeconds;
+    }
+
+    private long positiveOrDefault(long value, long fallback) {
+        return value <= 0 ? fallback : value;
     }
 
     /**

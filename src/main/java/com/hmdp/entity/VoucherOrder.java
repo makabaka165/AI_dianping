@@ -53,6 +53,16 @@ public class VoucherOrder implements Serializable {
     private Integer status;
 
     /**
+     * Mock payment idempotency key supplied by the client.
+     */
+    private String payRequestId;
+
+    /**
+     * 1 for active orders; NULL for terminal orders that release purchase eligibility.
+     */
+    private Integer activeOrderKey;
+
+    /**
      * 下单时间
      */
     private LocalDateTime createTime;

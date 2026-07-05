@@ -32,6 +32,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.lenient;
 
 @ExtendWith(MockitoExtension.class)
 class ChatWorkflowStreamTest {
@@ -70,6 +71,11 @@ class ChatWorkflowStreamTest {
         ReflectionTestUtils.setField(workflow, "qualityGuard", qualityGuard);
         ReflectionTestUtils.setField(workflow, "fallbackPolicy", fallbackPolicy);
         ReflectionTestUtils.setField(workflow, "promptTemplateRegistry", new PromptTemplateRegistry());
+        lenient().when(fallbackPolicy.fallbackChat(any(), eq("chat"), eq(com.hmdp.ai.fallback.FallbackReason.QUALITY_REJECTED)))
+                .thenReturn(com.hmdp.dto.ai.ShopChatResult.builder()
+                        .message("free chat fallback")
+                        .clarification(false)
+                        .build());
     }
 
     @Test
@@ -161,6 +167,64 @@ class ChatWorkflowStreamTest {
     }
 
     @Test
+    void summaryStreamAuditRejectedShouldEmitFallbackDeltaAndDegradedDone() {
+        ShopAIRequestContext context = ShopAIRequestContext.builder()
+                .userId("u1")
+                .sessionId("s1")
+                .traceId("t1")
+                .build();
+        String unsafeSummary = "raw user review with banned-phone-12345";
+        when(memoryService.aiChatKey("u1", "s1")).thenReturn("chat-memory");
+        when(intentRouteCoordinator.route(context, "summary shop 1", null)).thenReturn(IntentRoutingResult.builder()
+                .intent(ShopAIIntent.SUMMARY)
+                .source(IntentRouteSource.RULE)
+                .confidence(0.95)
+                .shopId(1L)
+                .build());
+        when(summaryWorkflow.execute(eq(context), any())).thenReturn(ShopSummaryResult.builder()
+                .shopId(1L)
+                .coreSummary(unsafeSummary)
+                .memoryId("chat-memory")
+                .traceId("t1")
+                .confidence(0.8)
+                .degraded(false)
+                .cacheHit(false)
+                .build());
+        when(qualityGuard.validateText(unsafeSummary, "summary"))
+                .thenReturn(QualityCheck.builder()
+                        .decision(QualityDecision.FALLBACK)
+                        .reason("unsafe summary")
+                        .build());
+        when(fallbackPolicy.fallbackText("chat-memory", "", "summary"))
+                .thenReturn("safe summary fallback");
+
+        List<ServerSentEvent<ShopAIStreamEvent>> events = workflow.stream(context, ChatWorkflowRequest.builder()
+                        .message("summary shop 1")
+                        .build())
+                .collectList()
+                .block();
+
+        assertThat(events).extracting(ServerSentEvent::event)
+                .containsExactly("metadata", "delta", "audit", "done");
+        ShopAIStreamEvent delta = events.get(1).data();
+        ShopAIStreamEvent audit = events.get(2).data();
+        ShopAIStreamEvent done = events.get(3).data();
+        assertThat(delta.getText())
+                .isEqualTo("safe summary fallback")
+                .doesNotContain(unsafeSummary);
+        assertThat(delta.getDegraded()).isTrue();
+        assertThat(delta.getFallbackReason()).isEqualTo("QUALITY_REJECTED");
+        assertThat(audit.getAuditStatus()).isEqualTo("REJECTED");
+        assertThat(audit.getAuditReason()).isEqualTo("unsafe summary");
+        assertThat(done.getDegraded()).isTrue();
+        assertThat(done.getAuditStatus()).isEqualTo("REJECTED");
+        assertThat(done.getFallbackReason()).isEqualTo("QUALITY_REJECTED");
+        assertThat(done.getConfidence()).isLessThanOrEqualTo(0.35);
+        verify(qualityGuard).validateText(unsafeSummary, "summary");
+        verify(fallbackPolicy).fallbackText("chat-memory", "", "summary");
+    }
+
+    @Test
     void freeChatStreamShouldEmitAuditEventAfterDeltas() {
         ShopAIRequestContext context = ShopAIRequestContext.builder()
                 .userId("u1")
@@ -216,9 +280,12 @@ class ChatWorkflowStreamTest {
                 .block();
 
         assertThat(events).extracting(ServerSentEvent::event)
-                .containsExactly("metadata", "delta", "delta", "audit", "done");
-        ShopAIStreamEvent audit = events.get(3).data();
-        ShopAIStreamEvent done = events.get(4).data();
+                .containsExactly("metadata", "delta", "audit", "done");
+        assertThat(events.get(1).data().getText())
+                .isEqualTo("free chat fallback")
+                .doesNotContain("AI");
+        ShopAIStreamEvent audit = events.get(2).data();
+        ShopAIStreamEvent done = events.get(3).data();
         assertThat(audit.getAuditStatus()).isEqualTo("REJECTED");
         assertThat(done.getDegraded()).isTrue();
         assertThat(done.getConfidence()).isLessThanOrEqualTo(0.35);
@@ -255,6 +322,8 @@ class ChatWorkflowStreamTest {
                         .decision(QualityDecision.FALLBACK)
                         .reason("内容包含过度确定或越界承诺")
                         .build());
+        when(fallbackPolicy.fallbackText("qa-memory", "prompt", "qa"))
+                .thenReturn("当前无法提供可靠回答，请稍后再试。");
 
         List<ServerSentEvent<ShopAIStreamEvent>> events = workflow.stream(context, ChatWorkflowRequest.builder()
                         .message("店铺1服务怎么样")
@@ -263,11 +332,13 @@ class ChatWorkflowStreamTest {
                 .block();
 
         assertThat(events).extracting(ServerSentEvent::event)
-                .containsExactly("metadata", "delta", "delta", "audit", "done");
+                .containsExactly("metadata", "delta", "audit", "done");
+        assertThat(events.get(1).data().getText()).isEqualTo("当前无法提供可靠回答，请稍后再试。");
+        assertThat(events.get(1).data().getText()).doesNotContain("我保证", "绝对最好");
+        assertThat(events.get(2).data().getAuditStatus()).isEqualTo("REJECTED");
+        assertThat(events.get(3).data().getDegraded()).isTrue();
         assertThat(events.get(3).data().getAuditStatus()).isEqualTo("REJECTED");
-        assertThat(events.get(4).data().getDegraded()).isTrue();
-        assertThat(events.get(4).data().getAuditStatus()).isEqualTo("REJECTED");
-        assertThat(events.get(4).data().getConfidence()).isLessThanOrEqualTo(0.35);
+        assertThat(events.get(3).data().getConfidence()).isLessThanOrEqualTo(0.35);
     }
 
     @Test

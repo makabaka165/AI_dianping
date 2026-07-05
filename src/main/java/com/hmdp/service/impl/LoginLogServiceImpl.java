@@ -1,6 +1,7 @@
 package com.hmdp.service.impl;
 
 import cn.hutool.core.util.StrUtil;
+import cn.hutool.crypto.digest.DigestUtil;
 import com.hmdp.entity.LoginLog;
 import com.hmdp.mapper.LoginLogMapper;
 import com.hmdp.security.RequestContextResolver;
@@ -20,6 +21,7 @@ public class LoginLogServiceImpl implements ILoginLogService {
     private static final int SUCCESS = 1;
     private static final int FAIL = 0;
     private static final int ENABLED = 1;
+    private static final String TOKEN_DIGEST_PREFIX = "sha256:";
 
     @Resource
     private LoginLogMapper loginLogMapper;
@@ -71,10 +73,20 @@ public class LoginLogServiceImpl implements ILoginLogService {
                 .setFailReason(failReason)
                 .setIp(requestContextResolver.getClientIp(request))
                 .setUserAgent(RequestContextUtils.getUserAgent(request))
-                .setTokenId(StrUtil.maxLength(tokenId, 128))
+                .setTokenId(digestTokenId(tokenId))
                 .setRiskLevel(0)
                 .setFailCount(0)
                 .setStatus(ENABLED);
+    }
+
+    private String digestTokenId(String tokenId) {
+        if (StrUtil.isBlank(tokenId)) {
+            return null;
+        }
+        if (tokenId.startsWith(TOKEN_DIGEST_PREFIX) && tokenId.length() == TOKEN_DIGEST_PREFIX.length() + 64) {
+            return tokenId;
+        }
+        return TOKEN_DIGEST_PREFIX + DigestUtil.sha256Hex(tokenId);
     }
 
     private void insertQuietly(LoginLog loginLog) {

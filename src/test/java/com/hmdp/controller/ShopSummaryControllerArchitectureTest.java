@@ -120,6 +120,14 @@ class ShopSummaryControllerArchitectureTest {
     }
 
     @Test
+    void aiTestControllerShouldRequireDedicatedPermission() {
+        SaCheckPermission permission = AITestController.class.getAnnotation(SaCheckPermission.class);
+
+        assertThat(permission).isNotNull();
+        assertThat(permission.value()).containsExactly("ai:test");
+    }
+
+    @Test
     void shopAIResponseShouldNotExposeLegacyTextFields() {
         Set<String> fieldNames = Arrays.stream(ShopAIResponse.class.getDeclaredFields())
                 .map(Field::getName)

@@ -109,6 +109,7 @@ public class FallbackPolicy {
                         .rank(candidates.indexOf(shop) + 1)
                         .shopId(shop.getId())
                         .shopName(shop.getName())
+                        .address(shop.getAddress())
                         .reason(recommendItemReason(reason))
                         .suitableFor("需要先浏览候选店铺公开信息的用户")
                         .uncertainty("缺少模型分析，推荐理由可信度较低。")

@@ -16,6 +16,11 @@ public interface DocumentManagementService {
     String addDocument(Document document, DocumentMetadata metadata);
 
     /**
+     * Persist an imported document without re-ingesting it into the vector store.
+     */
+    void saveDocument(Document document, DocumentMetadata metadata);
+
+    /**
      * 更新文档
      */
     boolean updateDocument(String documentId, Document document, DocumentMetadata metadata);
