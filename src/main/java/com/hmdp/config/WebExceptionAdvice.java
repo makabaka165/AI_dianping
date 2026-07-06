@@ -4,6 +4,7 @@ import cn.dev33.satoken.exception.NotLoginException;
 import cn.dev33.satoken.exception.NotPermissionException;
 import cn.dev33.satoken.exception.SaTokenException;
 import com.hmdp.common.ErrorCode;
+import com.hmdp.ai.infra.AiLogSanitizer;
 import com.hmdp.dto.Result;
 import com.hmdp.exception.BusinessException;
 import lombok.extern.slf4j.Slf4j;
@@ -67,7 +68,7 @@ public class WebExceptionAdvice {
 
     @ExceptionHandler({IllegalArgumentException.class, IllegalStateException.class})
     public Result handleIllegalArgumentException(RuntimeException e) {
-        return Result.fail(ErrorCode.PARAM_ERROR, e.getMessage());
+        return Result.fail(ErrorCode.PARAM_ERROR, safeParameterMessage(e.getMessage()));
     }
 
     @ExceptionHandler(RuntimeException.class)
@@ -81,5 +82,12 @@ public class WebExceptionAdvice {
                 .findFirst()
                 .map(ObjectError::getDefaultMessage)
                 .orElse(ErrorCode.PARAM_ERROR.getMessage());
+    }
+
+    private String safeParameterMessage(String message) {
+        if (message == null || message.trim().isEmpty() || AiLogSanitizer.containsSensitive(message)) {
+            return ErrorCode.PARAM_ERROR.getMessage();
+        }
+        return AiLogSanitizer.safe(message, 100);
     }
 }

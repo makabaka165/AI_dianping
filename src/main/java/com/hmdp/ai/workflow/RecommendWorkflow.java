@@ -268,10 +268,17 @@ public class RecommendWorkflow {
     }
 
     private ShopRecommendResult limitRecommendItems(ShopRecommendResult recommend, int requestedLimit) {
-        if (recommend == null || recommend.getItems() == null || recommend.getItems().size() <= requestedLimit) {
+        if (recommend == null || recommend.getItems() == null) {
             return recommend;
         }
-        recommend.setItems(new ArrayList<>(recommend.getItems().subList(0, requestedLimit)));
+        List<com.hmdp.dto.ai.ShopRecommendationItem> items = recommend.getItems();
+        if (items.size() > requestedLimit) {
+            items = new ArrayList<>(items.subList(0, requestedLimit));
+            recommend.setItems(items);
+        }
+        for (int i = 0; i < items.size(); i++) {
+            items.get(i).setRank(i + 1);
+        }
         return recommend;
     }
 

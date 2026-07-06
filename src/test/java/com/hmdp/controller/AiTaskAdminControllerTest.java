@@ -78,6 +78,7 @@ class AiTaskAdminControllerTest {
                 .taskId("task-1")
                 .type(AiTaskType.BATCH_SHOP_SUMMARY)
                 .status(AiTaskStatus.SUCCESS)
+                .dedupKey("BATCH_SHOP_SUMMARY:{shopLimit=10}:99")
                 .params(new LinkedHashMap<>())
                 .build();
         when(aiTaskService.get("task-1")).thenReturn(Optional.of(task));
@@ -86,7 +87,8 @@ class AiTaskAdminControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.taskId").value("task-1"))
-                .andExpect(jsonPath("$.data.status").value("SUCCESS"));
+                .andExpect(jsonPath("$.data.status").value("SUCCESS"))
+                .andExpect(jsonPath("$.data.dedupKey").doesNotExist());
     }
 
     @Test

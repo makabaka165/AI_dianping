@@ -184,4 +184,29 @@ class QAWorkflowTest {
         verify(shopContextAssembler, never()).buildForShop(anyLong(), anyString());
         verify(modelGateway, never()).generateStructuredAnswer(anyString(), anyString(), anyLong(), anyString(), any());
     }
+
+    @Test
+    void shouldReturnInsufficientEvidenceBeforeCallingModelWhenQAEvidenceEmpty() {
+        ShopAIRequestContext context = ShopAIRequestContext.builder()
+                .userId("u1")
+                .sessionId("s1")
+                .traceId("t1")
+                .build();
+        when(memoryService.shopQAKey(1L, "u1")).thenReturn("qa-memory");
+        when(shopContextAssembler.buildForShop(1L, "service?")).thenReturn(ShopAnalysisContext.builder()
+                .shopId(1L)
+                .evidence(List.of())
+                .build());
+
+        ShopAIResponse response = workflow.execute(context, QAWorkflowRequest.builder()
+                .shopId(1L)
+                .question("service?")
+                .build());
+
+        assertThat(response.getQa().getAnswer()).isEqualTo("当前评价证据不足以判断店铺1的情况。");
+        assertThat(response.getQa().getInsufficientEvidence()).isTrue();
+        assertThat(response.getConfidence()).isEqualTo(0.2);
+        verify(modelGateway, never()).generateStructuredAnswer(anyString(), anyString(), anyLong(), anyString(), any());
+        verify(memoryService, never()).readSummaryMemory(anyString());
+    }
 }

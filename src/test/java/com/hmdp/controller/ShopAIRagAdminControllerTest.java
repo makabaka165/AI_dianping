@@ -175,6 +175,7 @@ class ShopAIRagAdminControllerTest {
                 .taskId("task-1")
                 .type(AiTaskType.RAG_REBUILD_ALL)
                 .status(AiTaskStatus.SUCCESS)
+                .dedupKey("RAG_REBUILD_ALL:{shopLimit=10}:99")
                 .params(new LinkedHashMap<>())
                 .build();
         when(aiTaskService.get("task-1")).thenReturn(Optional.of(task));
@@ -183,7 +184,8 @@ class ShopAIRagAdminControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.taskId").value("task-1"))
-                .andExpect(jsonPath("$.data.status").value("SUCCESS"));
+                .andExpect(jsonPath("$.data.status").value("SUCCESS"))
+                .andExpect(jsonPath("$.data.dedupKey").doesNotExist());
     }
 
     @Test

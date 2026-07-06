@@ -299,6 +299,9 @@ public class QualitySummaryWorkflow {
         result.setPromptVersion(promptVersion);
         result.setModelName(modelName());
         result.setCacheHit(cacheHit);
+        if (cacheHit) {
+            result.setFallbackReason(null);
+        }
         return result;
     }
 

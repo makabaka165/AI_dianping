@@ -157,6 +157,7 @@ class QualitySummaryWorkflowTest {
         assertThat(result.getTraceId()).isEqualTo("trace-new");
         assertThat(result.getMemoryId()).isEqualTo("memory-new");
         assertThat(result.getPromptVersion()).isEqualTo(PromptTemplateRegistry.QUALITY_SUMMARY_VERSION);
+        assertThat(result.getFallbackReason()).isNull();
         assertThat(cached.getTraceId()).isEqualTo("stale-trace");
         assertThat(cached.getMemoryId()).isEqualTo("stale-memory");
     }

@@ -1,6 +1,7 @@
 package com.hmdp.ai.workflow;
 
 import com.hmdp.ai.fallback.FallbackPolicy;
+import com.hmdp.ai.fallback.FallbackReason;
 import com.hmdp.ai.guard.GovernedGeneration;
 import com.hmdp.ai.guard.QualityCheck;
 import com.hmdp.ai.guard.QualityDecision;
@@ -36,6 +37,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -189,8 +191,190 @@ class RecommendWorkflowTest {
                 .build());
 
         assertThat(response.getRecommend().getItems()).extracting("shopId").containsExactly(1L, 2L);
+        assertThat(response.getRecommend().getItems()).extracting("rank").containsExactly(1, 2);
         verify(shopDataPort).findRecommendCandidates("food", 20);
         verify(promptTemplateRegistry).renderRecommend(any(ShopAIRequestContext.class), eq("quiet"), eq("food"), eq(2), anyString());
+    }
+
+    @Test
+    void shouldUseRequestedLimitTimesThreeWhenAboveTwentyCandidates() {
+        ShopAIRequestContext context = ShopAIRequestContext.builder()
+                .userId("u1")
+                .sessionId("s1")
+                .traceId("t1")
+                .build();
+        List<ShopView> candidates = java.util.stream.LongStream.rangeClosed(1, 30)
+                .mapToObj(this::shop)
+                .collect(java.util.stream.Collectors.toList());
+        ShopRecommendResult generated = ShopRecommendResult.builder()
+                .userPreference("quiet")
+                .category("food")
+                .message("generated")
+                .items(List.of(item(1, 1L)))
+                .build();
+
+        when(memoryService.shopRecommendKey("u1")).thenReturn("recommend-memory");
+        when(shopDataPort.findRecommendCandidates("food", 30)).thenReturn(candidates);
+        when(evidenceRetriever.retrieve(anyLong(), eq("quiet"), eq("food"), eq(2))).thenReturn(Collections.emptyList());
+        when(promptTemplateRegistry.renderRecommend(any(ShopAIRequestContext.class), eq("quiet"), eq("food"), eq(10), anyString()))
+                .thenReturn(PromptTemplateRender.builder()
+                        .content("recommend prompt")
+                        .version(PromptTemplateRegistry.RECOMMEND_VERSION)
+                        .variant("stable")
+                        .build());
+        when(modelGateway.generateStructuredRecommendation(eq("recommend-memory"), eq("recommend prompt"), eq("quiet"),
+                eq("food"), eq(candidates), any())).thenReturn(generated);
+        when(qualityGuard.validateRecommend(eq(generated), any(), any(), eq("recommend")))
+                .thenReturn(QualityCheck.builder().decision(QualityDecision.PASS).build());
+
+        ShopAIResponse response = workflow.execute(context, RecommendWorkflowRequest.builder()
+                .userPreference("quiet")
+                .category("food")
+                .limit(10)
+                .build());
+
+        assertThat(response.getRecommend().getItems()).hasSize(1);
+        verify(shopDataPort).findRecommendCandidates("food", 30);
+    }
+
+    @Test
+    void shouldRerankRecommendItemsAfterTruncation() {
+        ShopAIRequestContext context = ShopAIRequestContext.builder()
+                .userId("u1")
+                .sessionId("s1")
+                .traceId("t1")
+                .build();
+        List<ShopView> candidates = List.of(shop(1L), shop(2L), shop(3L));
+        ShopRecommendResult generated = ShopRecommendResult.builder()
+                .userPreference("quiet")
+                .category("food")
+                .message("generated")
+                .items(List.of(item(10, 1L), item(20, 2L), item(30, 3L)))
+                .build();
+
+        when(memoryService.shopRecommendKey("u1")).thenReturn("recommend-memory");
+        when(shopDataPort.findRecommendCandidates("food", 20)).thenReturn(candidates);
+        when(evidenceRetriever.retrieve(anyLong(), eq("quiet"), eq("food"), eq(2))).thenReturn(Collections.emptyList());
+        when(promptTemplateRegistry.renderRecommend(any(ShopAIRequestContext.class), eq("quiet"), eq("food"), eq(2), anyString()))
+                .thenReturn(PromptTemplateRender.builder()
+                        .content("recommend prompt")
+                        .version(PromptTemplateRegistry.RECOMMEND_VERSION)
+                        .variant("stable")
+                        .build());
+        when(modelGateway.generateStructuredRecommendation(eq("recommend-memory"), eq("recommend prompt"), eq("quiet"),
+                eq("food"), eq(candidates), any())).thenReturn(generated);
+        when(qualityGuard.validateRecommend(eq(generated), eq(Set.of(1L, 2L, 3L)), any(), eq("recommend")))
+                .thenReturn(QualityCheck.builder().decision(QualityDecision.PASS).build());
+
+        ShopAIResponse response = workflow.execute(context, RecommendWorkflowRequest.builder()
+                .userPreference("quiet")
+                .category("food")
+                .limit(2)
+                .build());
+
+        assertThat(response.getRecommend().getItems()).extracting("shopId").containsExactly(1L, 2L);
+        assertThat(response.getRecommend().getItems()).extracting("rank").containsExactly(1, 2);
+    }
+
+    @Test
+    void shouldFallbackWhenRecommendationItemsAndMessageRemainEmptyAfterRepair() {
+        ShopAIRequestContext context = ShopAIRequestContext.builder()
+                .userId("u1")
+                .sessionId("s1")
+                .traceId("t1")
+                .build();
+        List<ShopView> candidates = List.of(shop(1L), shop(2L));
+        ShopRecommendResult empty = ShopRecommendResult.builder()
+                .userPreference("quiet")
+                .category("food")
+                .items(Collections.emptyList())
+                .message(" ")
+                .build();
+        ShopRecommendResult fallback = ShopRecommendResult.builder()
+                .userPreference("quiet")
+                .category("food")
+                .message("fallback")
+                .items(List.of(item(1, 1L)))
+                .build();
+
+        when(memoryService.shopRecommendKey("u1")).thenReturn("recommend-memory");
+        when(shopDataPort.findRecommendCandidates("food", 20)).thenReturn(candidates);
+        when(evidenceRetriever.retrieve(anyLong(), eq("quiet"), eq("food"), eq(2))).thenReturn(Collections.emptyList());
+        when(promptTemplateRegistry.renderRecommend(any(ShopAIRequestContext.class), eq("quiet"), eq("food"), eq(2), anyString()))
+                .thenReturn(PromptTemplateRender.builder()
+                        .content("recommend prompt")
+                        .version(PromptTemplateRegistry.RECOMMEND_VERSION)
+                        .variant("stable")
+                        .build());
+        when(modelGateway.generateStructuredRecommendation(eq("recommend-memory"), eq("recommend prompt"), eq("quiet"),
+                eq("food"), eq(candidates), any())).thenReturn(empty);
+        when(modelGateway.repairStructuredRecommendation(eq("recommend-memory"), eq("recommend prompt"), eq("quiet"),
+                eq("food"), eq(candidates), anyString())).thenReturn(empty);
+        when(qualityGuard.validateRecommend(eq(empty), eq(Set.of(1L, 2L)), any(), eq("recommend")))
+                .thenReturn(QualityCheck.builder().decision(QualityDecision.FALLBACK).reason("empty").build());
+        when(fallbackPolicy.fallbackRecommend("quiet", "food", candidates, 2, "recommend", FallbackReason.QUALITY_REJECTED))
+                .thenReturn(fallback);
+
+        ShopAIResponse response = workflow.execute(context, RecommendWorkflowRequest.builder()
+                .userPreference("quiet")
+                .category("food")
+                .limit(2)
+                .build());
+
+        assertThat(response.getRecommend().getMessage()).isEqualTo("fallback");
+        assertThat(response.getDegraded()).isTrue();
+        assertThat(response.getFallbackReason()).isEqualTo(FallbackReason.QUALITY_REJECTED.name());
+        verify(qualityGuard, times(2)).validateRecommend(eq(empty), eq(Set.of(1L, 2L)), any(), eq("recommend"));
+    }
+
+    @Test
+    void shouldFallbackWhenRecommendShopIdOutsideCandidatesAfterRepair() {
+        ShopAIRequestContext context = ShopAIRequestContext.builder()
+                .userId("u1")
+                .sessionId("s1")
+                .traceId("t1")
+                .build();
+        List<ShopView> candidates = List.of(shop(1L), shop(2L));
+        ShopRecommendResult invalid = ShopRecommendResult.builder()
+                .userPreference("quiet")
+                .category("food")
+                .message("invalid")
+                .items(List.of(item(1, 99L)))
+                .build();
+        ShopRecommendResult fallback = ShopRecommendResult.builder()
+                .userPreference("quiet")
+                .category("food")
+                .message("fallback")
+                .items(List.of(item(1, 1L)))
+                .build();
+
+        when(memoryService.shopRecommendKey("u1")).thenReturn("recommend-memory");
+        when(shopDataPort.findRecommendCandidates("food", 20)).thenReturn(candidates);
+        when(evidenceRetriever.retrieve(anyLong(), eq("quiet"), eq("food"), eq(2))).thenReturn(Collections.emptyList());
+        when(promptTemplateRegistry.renderRecommend(any(ShopAIRequestContext.class), eq("quiet"), eq("food"), eq(2), anyString()))
+                .thenReturn(PromptTemplateRender.builder()
+                        .content("recommend prompt")
+                        .version(PromptTemplateRegistry.RECOMMEND_VERSION)
+                        .variant("stable")
+                        .build());
+        when(modelGateway.generateStructuredRecommendation(eq("recommend-memory"), eq("recommend prompt"), eq("quiet"),
+                eq("food"), eq(candidates), any())).thenReturn(invalid);
+        when(modelGateway.repairStructuredRecommendation(eq("recommend-memory"), eq("recommend prompt"), eq("quiet"),
+                eq("food"), eq(candidates), anyString())).thenReturn(invalid);
+        when(qualityGuard.validateRecommend(eq(invalid), eq(Set.of(1L, 2L)), any(), eq("recommend")))
+                .thenReturn(QualityCheck.builder().decision(QualityDecision.FALLBACK).reason("invalid shop").build());
+        when(fallbackPolicy.fallbackRecommend("quiet", "food", candidates, 2, "recommend", FallbackReason.QUALITY_REJECTED))
+                .thenReturn(fallback);
+
+        ShopAIResponse response = workflow.execute(context, RecommendWorkflowRequest.builder()
+                .userPreference("quiet")
+                .category("food")
+                .limit(2)
+                .build());
+
+        assertThat(response.getRecommend().getItems()).extracting("shopId").containsExactly(1L);
+        assertThat(response.getRecommend().getItems()).doesNotContain(item(1, 99L));
+        assertThat(response.getDegraded()).isTrue();
     }
 
     private ShopView shop(Long id) {

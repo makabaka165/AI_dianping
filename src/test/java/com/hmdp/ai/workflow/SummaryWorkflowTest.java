@@ -10,6 +10,8 @@ import com.hmdp.dto.ai.ShopAIRequestContext;
 import com.hmdp.ai.prompt.PromptTemplateRender;
 import com.hmdp.ai.prompt.PromptTemplateRegistry;
 import com.hmdp.ai.workflow.request.SummaryWorkflowRequest;
+import com.hmdp.dto.ai.EvidenceItem;
+import com.hmdp.dto.ai.EvidenceType;
 import com.hmdp.dto.ai.ShopAnalysisContext;
 import com.hmdp.dto.ai.ShopSummaryResult;
 import com.hmdp.ai.infra.AiMetricsService;
@@ -131,6 +133,34 @@ class SummaryWorkflowTest {
     }
 
     @Test
+    void shouldClearFallbackReasonOnSummaryCacheHit() {
+        ShopAnalysisContext analysisContext = context();
+        when(shopContextAssembler.buildForShop(1L, "shop summary")).thenReturn(analysisContext);
+        ShopSummaryResult cached = ShopSummaryResult.builder()
+                .shopId(1L)
+                .coreSummary("cached")
+                .fallbackReason("MODEL_UNAVAILABLE")
+                .build();
+        when(localCacheManager.get(
+                summaryCacheKey(analysisContext),
+                ShopSummaryResult.class,
+                LocalCacheManager.CacheType.AI_RESULT)).thenReturn(cached);
+
+        ShopSummaryResult result = workflow.execute(ShopAIRequestContext.builder()
+                        .userId("u1")
+                        .traceId("trace-new")
+                        .memoryId("memory-new")
+                        .build(),
+                SummaryWorkflowRequest.builder()
+                        .shopId(1L)
+                        .build());
+
+        assertThat(result.getCacheHit()).isTrue();
+        assertThat(result.getFallbackReason()).isNull();
+        assertThat(cached.getFallbackReason()).isEqualTo("MODEL_UNAVAILABLE");
+    }
+
+    @Test
     void shouldWriteSummaryMemoryOnCacheHitWhenRequested() {
         ShopAnalysisContext analysisContext = context();
         when(shopContextAssembler.buildForShop(1L, "shop summary")).thenReturn(analysisContext);
@@ -179,6 +209,35 @@ class SummaryWorkflowTest {
                 .build());
 
         assertThat(result.getConfidence()).isLessThan(0.4);
+        verify(memoryService, never()).writeSummaryMemory(any(), any(), any());
+    }
+
+    @Test
+    void shouldReturnInsufficientEvidenceBeforeCallingModelWhenSummaryEvidenceEmpty() throws Exception {
+        ShopAnalysisContext analysisContext = ShopAnalysisContext.builder()
+                .shopId(1L)
+                .shopName("shop 1")
+                .totalReviews(3)
+                .contextVersion("3:no-evidence")
+                .evidence(Collections.emptyList())
+                .build();
+        when(shopContextAssembler.buildForShop(1L, "shop summary")).thenReturn(analysisContext);
+
+        ShopSummaryResult result = workflow.execute(ShopAIRequestContext.builder()
+                        .userId("u1")
+                        .traceId("trace-new")
+                        .memoryId("memory-new")
+                        .build(),
+                SummaryWorkflowRequest.builder()
+                        .shopId(1L)
+                        .writeMemory(true)
+                        .build());
+
+        assertThat(result.getCoreSummary()).isEqualTo("当前评价证据不足以判断店铺1的情况。");
+        assertThat(result.getConfidence()).isLessThan(0.4);
+        assertThat(result.getEvidence()).isEmpty();
+        verify(promptTemplateRegistry, never()).renderSummary(any(), any(), any());
+        verify(modelGateway, never()).generateStructuredSummary(any(), any());
         verify(memoryService, never()).writeSummaryMemory(any(), any(), any());
     }
 
@@ -262,7 +321,13 @@ class SummaryWorkflowTest {
                 .totalReviews(3)
                 .latestReviewTime(LocalDateTime.of(2026, 1, 2, 3, 4, 5))
                 .contextVersion("3:2026-01-02T03:04:05")
-                .evidence(Collections.emptyList())
+                .evidence(java.util.List.of(EvidenceItem.builder()
+                        .id("review:1")
+                        .type(EvidenceType.REVIEW)
+                        .shopId(1L)
+                        .sourceId(1L)
+                        .snippet("good")
+                        .build()))
                 .build();
     }
 

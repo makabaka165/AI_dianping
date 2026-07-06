@@ -61,7 +61,8 @@ public class QualityBasedContentRetriever implements ContentRetriever {
         try {
             searchResult = embeddingStore.search(searchRequest);
         } catch (Exception e) {
-            log.error("向量数据库搜索失败: {}", e.getMessage(), e);
+            log.warn("Platform policy vector search failed, errorType={}, reason={}",
+                    e.getClass().getSimpleName(), AiLogSanitizer.safe(e.getMessage(), 100));
             return emptyList();
         }
 

@@ -167,6 +167,31 @@ class CompareWorkflowTest {
         verify(modelGateway, never()).generateStructuredComparison(anyString(), anyString(), anyLong(), anyLong(), any(), any());
     }
 
+    @Test
+    void shouldReturnInsufficientCompareBeforeCallingModelWhenEvidenceEmpty() {
+        ShopAIRequestContext context = ShopAIRequestContext.builder()
+                .userId("u1")
+                .sessionId("s1")
+                .traceId("t1")
+                .build();
+        when(memoryService.shopCompareKey("u1", "s1")).thenReturn("compare-memory");
+        when(shopContextAssembler.buildForCompare(1L, "店铺对比", "service"))
+                .thenReturn(ShopAnalysisContext.builder().shopId(1L).evidence(List.of()).build());
+        when(shopContextAssembler.buildForCompare(2L, "店铺对比", "service"))
+                .thenReturn(ShopAnalysisContext.builder().shopId(2L).evidence(List.of()).build());
+
+        ShopAIResponse response = workflow.execute(context, CompareWorkflowRequest.builder()
+                .shopId1(1L)
+                .shopId2(2L)
+                .aspect("service")
+                .build());
+
+        assertThat(response.getCompare().getConclusion()).isEqualTo("当前评价证据不足以判断两家店铺的对比表现。");
+        assertThat(response.getCompare().getWinnerByAspect()).isEqualTo(ShopCompareResult.INSUFFICIENT);
+        assertThat(response.getConfidence()).isEqualTo(0.2);
+        verify(modelGateway, never()).generateStructuredComparison(anyString(), anyString(), anyLong(), anyLong(), any(), any());
+    }
+
     private ShopAnalysisContext contextWithEvidence(Long shopId, Long blogId) {
         return ShopAnalysisContext.builder()
                 .shopId(shopId)

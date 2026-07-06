@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.hmdp.ai.infra.DocumentQualityAssessment;
 import com.hmdp.ai.infra.DocumentQualityAssessor;
 import com.hmdp.ai.infra.DocumentQualityProfile;
+import com.hmdp.ai.infra.AiLogSanitizer;
 import com.hmdp.ai.retrieval.PlatformPolicyVectorDocumentFactory;
 import com.hmdp.entity.AiDocument;
 import com.hmdp.entity.DocumentMetadata;
@@ -212,7 +213,8 @@ public class DocumentManagementServiceImpl implements DocumentManagementService 
                     .build();
             ingestor.ingest(vectorDocument);
         } catch (Exception e) {
-            log.warn("Vector ingestion skipped for document id={}, reason={}", documentId, e.getMessage());
+            log.warn("Document saved but vector write failed, id={}, errorType={}, reason={}",
+                    documentId, e.getClass().getSimpleName(), AiLogSanitizer.safe(e.getMessage(), 100));
         }
     }
 

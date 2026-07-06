@@ -57,7 +57,8 @@ public class AiTaskAdminController {
     @SaCheckPermission("ai:rag:manage")
     public Result getTask(@PathVariable String taskId) {
         Optional<AiTask> task = aiTaskService.get(taskId);
-        return task.map(Result::ok)
+        return task.map(this::publicTask)
+                .map(Result::ok)
                 .orElseGet(() -> Result.fail("任务不存在"));
     }
 
@@ -85,6 +86,26 @@ public class AiTaskAdminController {
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("taskId", taskId);
         return data;
+    }
+
+    private AiTask publicTask(AiTask task) {
+        return AiTask.builder()
+                .taskId(task.getTaskId())
+                .type(task.getType())
+                .status(task.getStatus())
+                .ownerUserId(task.getOwnerUserId())
+                .params(task.getParams())
+                .progressCurrent(task.getProgressCurrent())
+                .progressTotal(task.getProgressTotal())
+                .result(task.getResult())
+                .errorMessage(task.getErrorMessage())
+                .retryCount(task.getRetryCount())
+                .startedAtEpochMillis(task.getStartedAtEpochMillis())
+                .heartbeatAtEpochMillis(task.getHeartbeatAtEpochMillis())
+                .finishedAtEpochMillis(task.getFinishedAtEpochMillis())
+                .createdAtEpochMillis(task.getCreatedAtEpochMillis())
+                .updatedAtEpochMillis(task.getUpdatedAtEpochMillis())
+                .build();
     }
 
     private ServerSentEvent<AiTaskEvent> toSse(String eventName, AiTaskEvent event) {

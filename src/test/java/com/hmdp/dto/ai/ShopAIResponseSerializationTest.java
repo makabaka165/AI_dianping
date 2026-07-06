@@ -30,8 +30,15 @@ class ShopAIResponseSerializationTest {
         assertThat(response.getMemoryId()).isEqualTo("hmdp:memory:shop:qa:1:u1");
         assertThat(summary.getMemoryId()).isEqualTo("hmdp:memory:shop:summary:1:u1");
         assertThat(event.getMemoryId()).isEqualTo("hmdp:memory:ai:chat:u1:s1");
-        assertThat(objectMapper.writeValueAsString(response)).doesNotContain("memoryId");
-        assertThat(objectMapper.writeValueAsString(summary)).doesNotContain("memoryId");
-        assertThat(objectMapper.writeValueAsString(event)).doesNotContain("memoryId");
+        assertNoInternalMemoryKeys(objectMapper.writeValueAsString(response));
+        assertNoInternalMemoryKeys(objectMapper.writeValueAsString(summary));
+        assertNoInternalMemoryKeys(objectMapper.writeValueAsString(event));
+    }
+
+    private void assertNoInternalMemoryKeys(String json) {
+        assertThat(json)
+                .doesNotContain("memoryId")
+                .doesNotContain("memoryKey")
+                .doesNotContain("hmdp:memory");
     }
 }

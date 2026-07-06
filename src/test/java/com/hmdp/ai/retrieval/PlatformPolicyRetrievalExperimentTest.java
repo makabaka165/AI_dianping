@@ -133,6 +133,26 @@ class PlatformPolicyRetrievalExperimentTest {
                 .containsExactly("active-doc");
     }
 
+    @Test
+    void shouldReturnEmptyWhenAllPlatformPolicyChunksAreStale() {
+        InMemoryEmbeddingStore<TextSegment> store = new InMemoryEmbeddingStore<>();
+        addSegment(store, "stale-1", "refund policy exact", DocumentStatus.PUBLISHED);
+        addSegment(store, "stale-2", "refund policy exact", DocumentStatus.PUBLISHED);
+        PlatformPolicyDocumentPort documentPort = new FakePlatformPolicyDocumentPort(Map.of());
+
+        QualityBasedContentRetriever retriever = QualityBasedContentRetriever.builder()
+                .embeddingStore(store)
+                .embeddingModel(embeddingModel)
+                .platformPolicyDocumentPort(documentPort)
+                .minScore(0.0)
+                .maxResults(2)
+                .build();
+
+        List<Content> contents = retriever.retrieve(Query.from("refund policy exact"));
+
+        assertThat(contents).isEmpty();
+    }
+
     private void addSegment(InMemoryEmbeddingStore<TextSegment> store,
                             String documentId,
                             String content,

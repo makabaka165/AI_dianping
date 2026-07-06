@@ -117,6 +117,20 @@ class VoucherOrderServiceImplTest {
     }
 
     @Test
+    void seckillVoucherShouldRejectWhenStreamRequiredAndExecutorShutdown() {
+        ReflectionTestUtils.setField(service, "streamRequired", true);
+        ExecutorService executor = (ExecutorService) ReflectionTestUtils.getField(service, "executor");
+        executor.shutdownNow();
+
+        Result result = service.seckillVoucher(12L);
+
+        assertThat(result.getSuccess()).isFalse();
+        assertThat(result.getErrorMsg()).contains("订单服务暂不可用");
+        verify(currentUserService, never()).requireCurrentUserId();
+        verify(stringRedisTemplate, never()).execute(any(DefaultRedisScript.class), anyList(), anyString(), anyString(), anyString());
+    }
+
+    @Test
     @SuppressWarnings({"unchecked", "rawtypes"})
     void seckillVoucherShouldContinueWhenStreamNotRequiredAndNotReady() {
         ReflectionTestUtils.setField(service, "streamReady", false);
@@ -232,6 +246,28 @@ class VoucherOrderServiceImplTest {
 
         assertThat(service.closeTasks).isEmpty();
         verify(seckillVoucherMapper, never()).deductStock(any());
+    }
+
+    @Test
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void createVoucherOrderShouldCompensateRedisWhenDuplicateActiveOrderExistsButOrderIdMissing() {
+        service.duplicateOnSave = true;
+        VoucherOrder activeOrder = order(2001L, 7L, 12L);
+        activeOrder.setStatus(1);
+        service.ordersById.put(2001L, activeOrder);
+        doReturn(1L).when(stringRedisTemplate).execute(
+                any(DefaultRedisScript.class),
+                eq(List.of("seckill:stock:12", "seckill:order:12", "seckill:compensated:1001")),
+                eq("1001"), eq("7"), eq("0"), eq("604800"));
+
+        service.createVoucherOrder(order(1001L, 7L, 12L));
+
+        verify(stringRedisTemplate).execute(
+                any(DefaultRedisScript.class),
+                eq(List.of("seckill:stock:12", "seckill:order:12", "seckill:compensated:1001")),
+                eq("1001"), eq("7"), eq("0"), eq("604800"));
+        verify(seckillVoucherMapper, never()).deductStock(any());
+        assertThat(service.closeTasks).isEmpty();
     }
 
     @Test

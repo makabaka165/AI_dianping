@@ -3,6 +3,7 @@ package com.hmdp.ai.infra;
 public final class AiLogSanitizer {
 
     private static final int DEFAULT_LIMIT = 120;
+    private static final String REDACTED = "***";
 
     private AiLogSanitizer() {
     }
@@ -15,11 +16,32 @@ public final class AiLogSanitizer {
         if (value == null) {
             return null;
         }
-        String normalized = value.replaceAll("\\s+", " ").trim();
+        String normalized = redact(value).replaceAll("\\s+", " ").trim();
         if (normalized.length() <= limit) {
             return normalized;
         }
         return normalized.substring(0, Math.max(0, limit)) + "...";
+    }
+
+    public static boolean containsSensitive(String value) {
+        if (value == null) {
+            return false;
+        }
+        String text = value.toLowerCase();
+        return text.contains("api_key")
+                || text.contains("apikey")
+                || text.contains("api-key")
+                || text.contains("authorization")
+                || text.contains("password")
+                || text.contains("secret")
+                || text.contains("token")
+                || text.contains("sk-")
+                || text.contains("sql")
+                || text.contains("select ")
+                || text.contains("insert ")
+                || text.contains("update ")
+                || text.contains("delete ")
+                || text.contains(" at com.");
     }
 
     public static String safeKey(String value) {
@@ -30,5 +52,11 @@ public final class AiLogSanitizer {
             return value;
         }
         return value.substring(0, 8) + "***" + value.substring(value.length() - 4);
+    }
+
+    private static String redact(String value) {
+        return value
+                .replaceAll("(?i)(api[_-]?key|authorization|password|secret|token)\\s*[:=]\\s*\\S+", "$1=" + REDACTED)
+                .replaceAll("sk-[A-Za-z0-9_-]{6,}", "sk-" + REDACTED);
     }
 }

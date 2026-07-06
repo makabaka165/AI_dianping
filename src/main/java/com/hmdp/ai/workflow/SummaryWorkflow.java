@@ -82,6 +82,15 @@ public class SummaryWorkflow {
         }
 
         ShopAnalysisContext localContext = shopContextAssembler.buildForShop(shopId, "shop summary");
+        if (localContext.safeEvidence().isEmpty()) {
+            ShopSummaryResult response = attachMetadata(
+                    createInsufficientEvidenceResult(shopId, localContext),
+                    requestContext,
+                    false,
+                    PromptTemplateRegistry.SUMMARY_VERSION);
+            aiMetricsService.recordDuration("summary", System.currentTimeMillis() - start, false);
+            return response;
+        }
         PromptTemplateRender prompt = promptTemplateRegistry.renderSummary(
                 requestContext, localContext, shopContextAssembler.toPromptBlock(localContext));
         String localCacheKey = localSummaryCacheKey(shopId, localContext, prompt.getVersion());
@@ -205,6 +214,21 @@ public class SummaryWorkflow {
                 .build();
     }
 
+    private ShopSummaryResult createInsufficientEvidenceResult(Long shopId, ShopAnalysisContext context) {
+        return ShopSummaryResult.builder()
+                .shopId(shopId)
+                .shopName(context == null ? null : context.getShopName())
+                .coreSummary("当前评价证据不足以判断店铺" + shopId + "的情况。")
+                .totalBlogs(context == null || context.getTotalReviews() == null ? 0 : context.getTotalReviews())
+                .keyPoints(Collections.emptyList())
+                .summaryTime(LocalDateTime.now())
+                .evidence(Collections.emptyList())
+                .confidence(0.2)
+                .degraded(false)
+                .cacheHit(false)
+                .build();
+    }
+
     private String availabilityMessage(Long shopId) {
         if (!shopDataPort.shopExists(shopId)) {
             return "店铺不存在";
@@ -225,6 +249,9 @@ public class SummaryWorkflow {
         result.setPromptVersion(promptVersion);
         result.setModelName(modelName());
         result.setCacheHit(cacheHit);
+        if (cacheHit) {
+            result.setFallbackReason(null);
+        }
         return result;
     }
 

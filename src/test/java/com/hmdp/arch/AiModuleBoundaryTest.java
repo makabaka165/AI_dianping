@@ -11,9 +11,15 @@ import com.tngtech.archunit.lang.ArchCondition;
 import com.tngtech.archunit.lang.ArchRule;
 import com.tngtech.archunit.lang.ConditionEvents;
 import com.tngtech.archunit.lang.SimpleConditionEvent;
+import org.junit.jupiter.api.Test;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.stream.Stream;
 import java.util.Set;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static com.tngtech.archunit.base.DescribedPredicate.not;
 import static com.tngtech.archunit.core.domain.JavaClass.Predicates.assignableTo;
 import static com.tngtech.archunit.core.domain.JavaClass.Predicates.resideInAPackage;
@@ -52,6 +58,63 @@ class AiModuleBoundaryTest {
     @ArchTest
     static final ArchRule ai_slices_should_be_free_of_cycles =
             slices().matching("com.hmdp.ai.(*)..").should().beFreeOfCycles();
+
+    @Test
+    void aiTopLevelPackagesShouldStayWithinCurrentBoundarySet() throws IOException {
+        Set<String> allowedTopLevelPackages = Set.of(
+                "application",
+                "config",
+                "fallback",
+                "guard",
+                "infra",
+                "intent",
+                "memory",
+                "model",
+                "orchestration",
+                "port",
+                "prompt",
+                "quota",
+                "retrieval",
+                "task",
+                "workflow"
+        );
+        try (Stream<Path> paths = Files.list(Path.of("src/main/java/com/hmdp/ai"))) {
+            Set<String> actualTopLevelPackages = paths
+                    .filter(Files::isDirectory)
+                    .map(path -> path.getFileName().toString())
+                    .collect(java.util.stream.Collectors.toSet());
+
+            assertThat(actualTopLevelPackages).isSubsetOf(allowedTopLevelPackages);
+            assertThat(actualTopLevelPackages)
+                    .doesNotContain("architecture", "facade", "domain", "command", "pipeline", "plugin");
+        }
+    }
+
+    @Test
+    void pomShouldNotIntroduceNewSensitiveDependencyFamilies() throws IOException {
+        String pom = Files.readString(Path.of("pom.xml")).toLowerCase();
+
+        assertThat(pom)
+                .doesNotContain("kafka")
+                .doesNotContain("rabbitmq")
+                .doesNotContain("elasticsearch")
+                .doesNotContain("sentinel")
+                .doesNotContain("opentelemetry");
+    }
+
+    @Test
+    void dtoSerializationTestShouldCoverMemoryBoundary() throws IOException {
+        String serializationTest = Files.readString(
+                Path.of("src/test/java/com/hmdp/dto/ai/ShopAIResponseSerializationTest.java"));
+
+        assertThat(serializationTest)
+                .contains("ShopAIResponse")
+                .contains("ShopSummaryResult")
+                .contains("ShopAIStreamEvent")
+                .contains("memoryId")
+                .contains("memoryKey")
+                .contains("hmdp:memory");
+    }
 
     private static ArchCondition<JavaClass> onlyUseAllowedBusinessDependencies() {
         Set<String> allowedPrefixes = Set.of(
