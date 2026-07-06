@@ -7,6 +7,7 @@ import com.hmdp.ai.guard.QualityDecision;
 import com.hmdp.ai.guard.QualityGuard;
 import com.hmdp.ai.memory.MemoryService;
 import com.hmdp.ai.model.ModelGateway;
+import com.hmdp.ai.port.ShopDataPort;
 import com.hmdp.dto.ai.ShopAIRequestContext;
 import com.hmdp.ai.prompt.PromptTemplateRender;
 import com.hmdp.ai.prompt.PromptTemplateRegistry;
@@ -31,8 +32,10 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -43,6 +46,8 @@ class QAWorkflowTest {
 
     @Mock
     private ShopContextAssembler shopContextAssembler;
+    @Mock
+    private ShopDataPort shopDataPort;
     @Mock
     private PromptTemplateRegistry promptTemplateRegistry;
     @Mock
@@ -62,6 +67,7 @@ class QAWorkflowTest {
     void setUp() {
         workflow = new QAWorkflow();
         ReflectionTestUtils.setField(workflow, "shopContextAssembler", shopContextAssembler);
+        ReflectionTestUtils.setField(workflow, "shopDataPort", shopDataPort);
         ReflectionTestUtils.setField(workflow, "promptTemplateRegistry", promptTemplateRegistry);
         ReflectionTestUtils.setField(workflow, "memoryService", memoryService);
         ReflectionTestUtils.setField(workflow, "modelGateway", modelGateway);
@@ -69,6 +75,8 @@ class QAWorkflowTest {
         ReflectionTestUtils.setField(workflow, "fallbackPolicy", fallbackPolicy);
         ReflectionTestUtils.setField(workflow, "governedGeneration", new GovernedGeneration());
         ReflectionTestUtils.setField(workflow, "aiMetricsService", aiMetricsService);
+        lenient().when(shopDataPort.shopExists(anyLong())).thenReturn(true);
+        lenient().when(shopDataPort.getReviewCount(anyLong())).thenReturn(3);
     }
 
     @Test
@@ -133,5 +141,47 @@ class QAWorkflowTest {
         assertThat(response.getMemoryId()).isEqualTo("qa-memory");
         verify(modelGateway).repairStructuredAnswer("qa-memory", "qa prompt", 1L, "服务怎么样", "too generic");
         verify(fallbackPolicy, never()).fallbackText(anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void shouldReturnShopNotFoundBeforeAssemblingContext() {
+        ShopAIRequestContext context = ShopAIRequestContext.builder()
+                .userId("u1")
+                .sessionId("s1")
+                .traceId("t1")
+                .build();
+        when(memoryService.shopQAKey(99L, "u1")).thenReturn("qa-memory");
+        when(shopDataPort.shopExists(99L)).thenReturn(false);
+
+        ShopAIResponse response = workflow.execute(context, QAWorkflowRequest.builder()
+                .shopId(99L)
+                .question("service?")
+                .build());
+
+        assertThat(response.getQa().getAnswer()).isEqualTo("店铺不存在");
+        assertThat(response.getQa().getInsufficientEvidence()).isTrue();
+        verify(shopContextAssembler, never()).buildForShop(anyLong(), anyString());
+        verify(modelGateway, never()).generateStructuredAnswer(anyString(), anyString(), anyLong(), anyString(), any());
+    }
+
+    @Test
+    void shouldReturnNoReviewsBeforeAssemblingContext() {
+        ShopAIRequestContext context = ShopAIRequestContext.builder()
+                .userId("u1")
+                .sessionId("s1")
+                .traceId("t1")
+                .build();
+        when(memoryService.shopQAKey(2L, "u1")).thenReturn("qa-memory");
+        when(shopDataPort.getReviewCount(2L)).thenReturn(0);
+
+        ShopAIResponse response = workflow.execute(context, QAWorkflowRequest.builder()
+                .shopId(2L)
+                .question("service?")
+                .build());
+
+        assertThat(response.getQa().getAnswer()).isEqualTo("暂无评价数据");
+        assertThat(response.getQa().getInsufficientEvidence()).isTrue();
+        verify(shopContextAssembler, never()).buildForShop(anyLong(), anyString());
+        verify(modelGateway, never()).generateStructuredAnswer(anyString(), anyString(), anyLong(), anyString(), any());
     }
 }

@@ -1,4 +1,5 @@
 package com.hmdp.dto.ai;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -12,6 +13,7 @@ import java.util.List;
 @AllArgsConstructor
 public class ShopAIResponse {
     private String sessionId;
+    @JsonIgnore
     private String memoryId;
     private String traceId;
     private ShopAIIntent intent;

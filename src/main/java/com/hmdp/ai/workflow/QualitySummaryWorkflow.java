@@ -86,6 +86,16 @@ public class QualitySummaryWorkflow {
         if (shopId == null || shopId <= 0) {
             throw new IllegalArgumentException("店铺ID必须是正数");
         }
+        String availabilityMessage = availabilityMessage(shopId);
+        if (availabilityMessage != null) {
+            ShopSummaryResult response = attachMetadata(
+                    createUnavailableResult(shopId, availabilityMessage),
+                    requestContext,
+                    false,
+                    PromptTemplateRegistry.QUALITY_SUMMARY_VERSION);
+            aiMetricsService.recordDuration(ANALYSIS_TYPE, System.currentTimeMillis() - start, false);
+            return response;
+        }
         int minLiked = request.getMinLiked() == null ? 5 : Math.max(0, request.getMinLiked());
         int limit = normalizeLimit(request.getLimit(), 10);
         List<ReviewDoc> blogs = reviewDataPort.findQualityReviews(shopId, minLiked, limit);
@@ -253,6 +263,30 @@ public class QualitySummaryWorkflow {
 
     private String safe(String value) {
         return value == null ? "none" : value.replaceAll("[^a-zA-Z0-9_.:-]", "_");
+    }
+
+    private ShopSummaryResult createUnavailableResult(Long shopId, String message) {
+        return ShopSummaryResult.builder()
+                .shopId(shopId)
+                .coreSummary(message)
+                .totalBlogs(0)
+                .keyPoints(Collections.emptyList())
+                .summaryTime(LocalDateTime.now())
+                .evidence(Collections.emptyList())
+                .confidence(0.2)
+                .degraded(false)
+                .cacheHit(false)
+                .build();
+    }
+
+    private String availabilityMessage(Long shopId) {
+        if (!shopDataPort.shopExists(shopId)) {
+            return "店铺不存在";
+        }
+        if (shopDataPort.getReviewCount(shopId) <= 0) {
+            return "暂无评价数据";
+        }
+        return null;
     }
 
     private ShopSummaryResult attachMetadata(ShopSummaryResult source,

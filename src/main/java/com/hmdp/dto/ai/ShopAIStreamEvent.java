@@ -1,4 +1,5 @@
 package com.hmdp.dto.ai;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -17,6 +18,7 @@ public class ShopAIStreamEvent {
     private Integer errorCode;
     private String traceId;
     private String sessionId;
+    @JsonIgnore
     private String memoryId;
     private String promptVersion;
     private ShopAIIntent intent;

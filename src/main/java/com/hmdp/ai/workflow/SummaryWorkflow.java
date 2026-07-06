@@ -5,6 +5,7 @@ import com.hmdp.ai.guard.GovernedGeneration;
 import com.hmdp.ai.guard.QualityGuard;
 import com.hmdp.ai.memory.MemoryService;
 import com.hmdp.ai.model.ModelGateway;
+import com.hmdp.ai.port.ShopDataPort;
 import com.hmdp.dto.ai.ShopAIRequestContext;
 import com.hmdp.ai.prompt.PromptTemplateRender;
 import com.hmdp.ai.prompt.PromptTemplateRegistry;
@@ -37,6 +38,9 @@ public class SummaryWorkflow {
     private ShopContextAssembler shopContextAssembler;
 
     @Resource
+    private ShopDataPort shopDataPort;
+
+    @Resource
     private PromptTemplateRegistry promptTemplateRegistry;
 
     @Resource
@@ -65,6 +69,16 @@ public class SummaryWorkflow {
         Long shopId = request.getShopId();
         if (shopId == null || shopId <= 0) {
             throw new IllegalArgumentException("shopId must be positive");
+        }
+        String availabilityMessage = availabilityMessage(shopId);
+        if (availabilityMessage != null) {
+            ShopSummaryResult response = attachMetadata(
+                    createUnavailableResult(shopId, availabilityMessage),
+                    requestContext,
+                    false,
+                    PromptTemplateRegistry.SUMMARY_VERSION);
+            aiMetricsService.recordDuration("summary", System.currentTimeMillis() - start, false);
+            return response;
         }
 
         ShopAnalysisContext localContext = shopContextAssembler.buildForShop(shopId, "shop summary");
@@ -175,6 +189,30 @@ public class SummaryWorkflow {
                 .degraded(false)
                 .cacheHit(false)
                 .build();
+    }
+
+    private ShopSummaryResult createUnavailableResult(Long shopId, String message) {
+        return ShopSummaryResult.builder()
+                .shopId(shopId)
+                .coreSummary(message)
+                .totalBlogs(0)
+                .keyPoints(Collections.emptyList())
+                .summaryTime(LocalDateTime.now())
+                .evidence(Collections.emptyList())
+                .confidence(0.2)
+                .degraded(false)
+                .cacheHit(false)
+                .build();
+    }
+
+    private String availabilityMessage(Long shopId) {
+        if (!shopDataPort.shopExists(shopId)) {
+            return "店铺不存在";
+        }
+        if (shopDataPort.getReviewCount(shopId) <= 0) {
+            return "暂无评价数据";
+        }
+        return null;
     }
 
     private ShopSummaryResult attachMetadata(ShopSummaryResult source,

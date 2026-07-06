@@ -5,6 +5,7 @@ import com.hmdp.ai.guard.GovernedGeneration;
 import com.hmdp.ai.guard.QualityGuard;
 import com.hmdp.ai.memory.MemoryService;
 import com.hmdp.ai.model.ModelGateway;
+import com.hmdp.ai.port.ShopDataPort;
 import com.hmdp.dto.ai.ShopAIRequestContext;
 import com.hmdp.ai.prompt.PromptTemplateRender;
 import com.hmdp.ai.prompt.PromptTemplateRegistry;
@@ -27,6 +28,7 @@ import java.util.Collections;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.same;
 import static org.mockito.Mockito.verify;
@@ -42,6 +44,9 @@ class SummaryWorkflowTest {
 
     @Mock
     private ShopContextAssembler shopContextAssembler;
+
+    @Mock
+    private ShopDataPort shopDataPort;
 
     @Mock
     private AiMetricsService aiMetricsService;
@@ -71,6 +76,7 @@ class SummaryWorkflowTest {
         workflow = new SummaryWorkflow();
         ReflectionTestUtils.setField(workflow, "localCacheManager", localCacheManager);
         ReflectionTestUtils.setField(workflow, "shopContextAssembler", shopContextAssembler);
+        ReflectionTestUtils.setField(workflow, "shopDataPort", shopDataPort);
         ReflectionTestUtils.setField(workflow, "aiMetricsService", aiMetricsService);
         ReflectionTestUtils.setField(workflow, "memoryService", memoryService);
         ReflectionTestUtils.setField(workflow, "modelGateway", modelGateway);
@@ -86,6 +92,8 @@ class SummaryWorkflowTest {
                         .version(PromptTemplateRegistry.SUMMARY_VERSION)
                         .variant("stable")
                         .build());
+        lenient().when(shopDataPort.shopExists(anyLong())).thenReturn(true);
+        lenient().when(shopDataPort.getReviewCount(anyLong())).thenReturn(3);
     }
 
     @Test
@@ -201,6 +209,49 @@ class SummaryWorkflowTest {
                 .build());
 
         assertThat(result.getDegraded()).isTrue();
+        verify(memoryService, never()).writeSummaryMemory(any(), any(), any());
+    }
+
+    @Test
+    void shouldReturnShopNotFoundBeforeBuildingContext() {
+        when(shopDataPort.shopExists(99L)).thenReturn(false);
+        ShopAIRequestContext requestContext = ShopAIRequestContext.builder()
+                .userId("u1")
+                .traceId("trace-new")
+                .memoryId("memory-new")
+                .build();
+
+        ShopSummaryResult result = workflow.execute(requestContext, SummaryWorkflowRequest.builder()
+                .shopId(99L)
+                .writeMemory(true)
+                .build());
+
+        assertThat(result.getCoreSummary()).isEqualTo("店铺不存在");
+        assertThat(result.getTotalBlogs()).isZero();
+        assertThat(result.getMemoryId()).isEqualTo("memory-new");
+        verify(shopContextAssembler, never()).buildForShop(anyLong(), any());
+        verify(localCacheManager, never()).get(any(), eq(ShopSummaryResult.class), eq(LocalCacheManager.CacheType.AI_RESULT));
+        verify(memoryService, never()).writeSummaryMemory(any(), any(), any());
+    }
+
+    @Test
+    void shouldReturnNoReviewsBeforeBuildingContext() {
+        when(shopDataPort.getReviewCount(2L)).thenReturn(0);
+        ShopAIRequestContext requestContext = ShopAIRequestContext.builder()
+                .userId("u1")
+                .traceId("trace-new")
+                .memoryId("memory-new")
+                .build();
+
+        ShopSummaryResult result = workflow.execute(requestContext, SummaryWorkflowRequest.builder()
+                .shopId(2L)
+                .writeMemory(true)
+                .build());
+
+        assertThat(result.getCoreSummary()).isEqualTo("暂无评价数据");
+        assertThat(result.getTotalBlogs()).isZero();
+        verify(shopContextAssembler, never()).buildForShop(anyLong(), any());
+        verify(localCacheManager, never()).get(any(), eq(ShopSummaryResult.class), eq(LocalCacheManager.CacheType.AI_RESULT));
         verify(memoryService, never()).writeSummaryMemory(any(), any(), any());
     }
 

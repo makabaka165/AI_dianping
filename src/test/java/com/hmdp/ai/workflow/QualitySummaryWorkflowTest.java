@@ -31,6 +31,8 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.same;
 import static org.mockito.ArgumentMatchers.isNull;
@@ -100,6 +102,8 @@ class QualitySummaryWorkflowTest {
                         .version(PromptTemplateRegistry.QUALITY_SUMMARY_VERSION)
                         .variant("stable")
                         .build());
+        lenient().when(shopDataPort.shopExists(anyLong())).thenReturn(true);
+        lenient().when(shopDataPort.getReviewCount(anyLong())).thenReturn(3);
     }
 
     @Test
@@ -220,6 +224,52 @@ class QualitySummaryWorkflowTest {
                 .build());
 
         assertThat(result.getDegraded()).isTrue();
+        verify(memoryService, never()).writeSummaryMemory(any(), any(), any());
+    }
+
+    @Test
+    void shouldReturnShopNotFoundBeforeQueryingQualityReviews() {
+        when(shopDataPort.shopExists(99L)).thenReturn(false);
+        ShopAIRequestContext context = ShopAIRequestContext.builder()
+                .userId("u1")
+                .traceId("trace-new")
+                .memoryId("memory-new")
+                .build();
+
+        ShopSummaryResult result = workflow.execute(context, QualitySummaryWorkflowRequest.builder()
+                .shopId(99L)
+                .minLiked(5)
+                .limit(10)
+                .writeMemory(true)
+                .build());
+
+        assertThat(result.getCoreSummary()).isEqualTo("店铺不存在");
+        assertThat(result.getTotalBlogs()).isZero();
+        verify(reviewDataPort, never()).findQualityReviews(anyLong(), anyInt(), anyInt());
+        verify(summaryWorkflow, never()).execute(any(), any());
+        verify(memoryService, never()).writeSummaryMemory(any(), any(), any());
+    }
+
+    @Test
+    void shouldReturnNoReviewsBeforeQueryingQualityReviews() {
+        when(shopDataPort.getReviewCount(2L)).thenReturn(0);
+        ShopAIRequestContext context = ShopAIRequestContext.builder()
+                .userId("u1")
+                .traceId("trace-new")
+                .memoryId("memory-new")
+                .build();
+
+        ShopSummaryResult result = workflow.execute(context, QualitySummaryWorkflowRequest.builder()
+                .shopId(2L)
+                .minLiked(5)
+                .limit(10)
+                .writeMemory(true)
+                .build());
+
+        assertThat(result.getCoreSummary()).isEqualTo("暂无评价数据");
+        assertThat(result.getTotalBlogs()).isZero();
+        verify(reviewDataPort, never()).findQualityReviews(anyLong(), anyInt(), anyInt());
+        verify(summaryWorkflow, never()).execute(any(), any());
         verify(memoryService, never()).writeSummaryMemory(any(), any(), any());
     }
 

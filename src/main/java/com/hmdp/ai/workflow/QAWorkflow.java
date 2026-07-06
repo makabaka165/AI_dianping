@@ -6,6 +6,7 @@ import com.hmdp.ai.guard.GovernedGeneration;
 import com.hmdp.ai.guard.QualityGuard;
 import com.hmdp.ai.memory.MemoryService;
 import com.hmdp.ai.model.ModelGateway;
+import com.hmdp.ai.port.ShopDataPort;
 import com.hmdp.dto.ai.ShopAIRequestContext;
 import com.hmdp.ai.prompt.PromptTemplateRender;
 import com.hmdp.ai.prompt.PromptTemplateRegistry;
@@ -28,6 +29,9 @@ public class QAWorkflow {
     private static final String ANALYSIS_TYPE = "ask";
     @Resource
     private ShopContextAssembler shopContextAssembler;
+
+    @Resource
+    private ShopDataPort shopDataPort;
 
     @Resource
     private PromptTemplateRegistry promptTemplateRegistry;
@@ -60,6 +64,10 @@ public class QAWorkflow {
         }
         String memoryId = memoryService.shopQAKey(request.getShopId(), context.getUserId());
         context.setMemoryId(memoryId);
+        String availabilityMessage = availabilityMessage(request.getShopId());
+        if (availabilityMessage != null) {
+            return insufficientEvidence(request.getShopId(), request.getQuestion(), context, availabilityMessage);
+        }
         ShopAnalysisContext shopContext = shopContextAssembler.buildForShop(request.getShopId(), request.getQuestion());
         if (shopContext.safeEvidence().isEmpty()) {
             return insufficientEvidence(request.getShopId(), request.getQuestion(), context,
@@ -98,6 +106,18 @@ public class QAWorkflow {
         }
         String memoryId = memoryService.shopQAKey(request.getShopId(), context.getUserId());
         context.setMemoryId(memoryId);
+        String availabilityMessage = availabilityMessage(request.getShopId());
+        if (availabilityMessage != null) {
+            return StreamWorkflowPlan.builder()
+                    .analysisType(ANALYSIS_TYPE)
+                    .memoryId(memoryId)
+                    .directText(availabilityMessage)
+                    .evidence(Collections.emptyList())
+                    .confidence(0.2)
+                    .degraded(false)
+                    .cacheHit(false)
+                    .build();
+        }
         ShopAnalysisContext shopContext = shopContextAssembler.buildForShop(request.getShopId(), request.getQuestion());
         if (shopContext.safeEvidence().isEmpty()) {
             return StreamWorkflowPlan.builder()
@@ -141,6 +161,16 @@ public class QAWorkflow {
                 .insufficientEvidence(true)
                 .build();
         return response(context, Collections.emptyList(), qa, false, 0.2, null, PromptTemplateRegistry.QA_VERSION);
+    }
+
+    private String availabilityMessage(Long shopId) {
+        if (!shopDataPort.shopExists(shopId)) {
+            return "店铺不存在";
+        }
+        if (shopDataPort.getReviewCount(shopId) <= 0) {
+            return "暂无评价数据";
+        }
+        return null;
     }
 
     private ShopAIResponse response(ShopAIRequestContext context,

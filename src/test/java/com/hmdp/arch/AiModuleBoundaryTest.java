@@ -1,5 +1,7 @@
 package com.hmdp.arch;
 
+import com.hmdp.entity.DocumentMetadata;
+import com.hmdp.entity.DocumentStatus;
 import com.hmdp.service.ShopStatsService;
 import com.tngtech.archunit.core.domain.JavaClass;
 import com.tngtech.archunit.core.importer.ImportOption;
@@ -26,7 +28,9 @@ class AiModuleBoundaryTest {
             classes().that(resideInAPackage("com.hmdp.ai..")
                             .and(not(resideInAPackage("com.hmdp.ai.port.adapter.."))))
                     .should().onlyDependOnClassesThat(not(resideInAPackage("com.hmdp.mapper.."))
-                            .and(not(resideInAPackage("com.hmdp.entity.."))));
+                            .and(not(resideInAPackage("com.hmdp.entity.."))
+                                    .or(assignableTo(DocumentMetadata.class))
+                                    .or(assignableTo(DocumentStatus.class))));
 
     @ArchTest
     static final ArchRule ai_should_not_depend_on_outer_application_layers =

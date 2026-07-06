@@ -67,10 +67,11 @@ public class RecommendWorkflow {
         if (isBlank(request.getUserPreference())) {
             throw new IllegalArgumentException("用户偏好不能为空");
         }
-        int safeLimit = normalizeLimit(request.getLimit(), 5);
+        int requestedLimit = normalizeLimit(request.getLimit(), 5);
+        int candidateLimit = candidateLimit(requestedLimit);
         String memoryId = memoryService.shopRecommendKey(context.getUserId());
         context.setMemoryId(memoryId);
-        List<ShopView> candidates = shopDataPort.findRecommendCandidates(request.getCategory(), safeLimit);
+        List<ShopView> candidates = shopDataPort.findRecommendCandidates(request.getCategory(), candidateLimit);
         if (candidates == null || candidates.isEmpty()) {
             ShopRecommendResult recommend = ShopRecommendResult.builder()
                     .userPreference(request.getUserPreference())
@@ -87,7 +88,7 @@ public class RecommendWorkflow {
                 context,
                 request.getUserPreference(),
                 request.getCategory(),
-                safeLimit,
+                requestedLimit,
                 candidateBlock(candidates) + evidenceBlock(evidence));
         Set<Long> candidateShopIds = candidates.stream()
                 .filter(shop -> shop != null && shop.getId() != null)
@@ -100,9 +101,9 @@ public class RecommendWorkflow {
                         request.getCategory(), candidates, reason),
                 recommend -> qualityGuard.validateRecommend(recommend, candidateShopIds, evidence, ANALYSIS_TYPE),
                 reason -> fallbackPolicy.fallbackRecommend(request.getUserPreference(), request.getCategory(),
-                        candidates, safeLimit, ANALYSIS_TYPE, reason),
+                        candidates, requestedLimit, ANALYSIS_TYPE, reason),
                 UnaryOperator.identity());
-        ShopRecommendResult recommend = generated.getValue();
+        ShopRecommendResult recommend = limitRecommendItems(generated.getValue(), requestedLimit);
         boolean degraded = generated.isDegraded();
         String fallbackReason = generated.getFallbackReason() == null ? null : generated.getFallbackReason().name();
         aiMetricsService.recordDuration(ANALYSIS_TYPE, System.currentTimeMillis() - start, degraded);
@@ -116,10 +117,11 @@ public class RecommendWorkflow {
         if (isBlank(request.getUserPreference())) {
             throw new IllegalArgumentException("userPreference must not be blank");
         }
-        int safeLimit = normalizeLimit(request.getLimit(), 5);
+        int requestedLimit = normalizeLimit(request.getLimit(), 5);
+        int candidateLimit = candidateLimit(requestedLimit);
         String memoryId = memoryService.shopRecommendKey(context.getUserId());
         context.setMemoryId(memoryId);
-        List<ShopView> candidates = shopDataPort.findRecommendCandidates(request.getCategory(), safeLimit);
+        List<ShopView> candidates = shopDataPort.findRecommendCandidates(request.getCategory(), candidateLimit);
         if (candidates == null || candidates.isEmpty()) {
             return StreamWorkflowPlan.builder()
                     .analysisType(ANALYSIS_TYPE)
@@ -137,7 +139,7 @@ public class RecommendWorkflow {
                 context,
                 request.getUserPreference(),
                 request.getCategory(),
-                safeLimit,
+                requestedLimit,
                 candidateBlock(candidates) + evidenceBlock(evidence));
         return StreamWorkflowPlan.builder()
                 .analysisType(ANALYSIS_TYPE)
@@ -259,6 +261,18 @@ public class RecommendWorkflow {
             return defaultLimit;
         }
         return Math.min(10, limit);
+    }
+
+    private int candidateLimit(int requestedLimit) {
+        return Math.max(20, requestedLimit * 3);
+    }
+
+    private ShopRecommendResult limitRecommendItems(ShopRecommendResult recommend, int requestedLimit) {
+        if (recommend == null || recommend.getItems() == null || recommend.getItems().size() <= requestedLimit) {
+            return recommend;
+        }
+        recommend.setItems(new ArrayList<>(recommend.getItems().subList(0, requestedLimit)));
+        return recommend;
     }
 
     private boolean isBlank(String value) {

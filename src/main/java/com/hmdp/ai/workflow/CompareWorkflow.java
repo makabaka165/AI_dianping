@@ -5,6 +5,7 @@ import com.hmdp.ai.guard.GovernedGeneration;
 import com.hmdp.ai.guard.QualityGuard;
 import com.hmdp.ai.memory.MemoryService;
 import com.hmdp.ai.model.ModelGateway;
+import com.hmdp.ai.port.ShopDataPort;
 import com.hmdp.dto.ai.ShopAIRequestContext;
 import com.hmdp.ai.prompt.PromptTemplateRender;
 import com.hmdp.ai.prompt.PromptTemplateRegistry;
@@ -29,6 +30,9 @@ public class CompareWorkflow {
 
     @Resource
     private ShopContextAssembler shopContextAssembler;
+
+    @Resource
+    private ShopDataPort shopDataPort;
 
     @Resource
     private PromptTemplateRegistry promptTemplateRegistry;
@@ -56,6 +60,12 @@ public class CompareWorkflow {
         validate(request);
         String memoryId = memoryService.shopCompareKey(context.getUserId(), context.getSessionId());
         context.setMemoryId(memoryId);
+        List<String> availabilityIssues = availabilityIssues(request);
+        if (!availabilityIssues.isEmpty()) {
+            ShopCompareResult compare = unavailableCompare(request, availabilityIssues);
+            return response(context, Collections.emptyList(), compare, false, 0.2, null,
+                    PromptTemplateRegistry.COMPARE_VERSION);
+        }
         ShopAnalysisContext context1 = shopContextAssembler.buildForCompare(request.getShopId1(), "店铺对比", request.getAspect());
         ShopAnalysisContext context2 = shopContextAssembler.buildForCompare(request.getShopId2(), "店铺对比", request.getAspect());
         List<EvidenceItem> evidence = mergeEvidence(context1, context2);
@@ -98,6 +108,18 @@ public class CompareWorkflow {
         validate(request);
         String memoryId = memoryService.shopCompareKey(context.getUserId(), context.getSessionId());
         context.setMemoryId(memoryId);
+        List<String> availabilityIssues = availabilityIssues(request);
+        if (!availabilityIssues.isEmpty()) {
+            return StreamWorkflowPlan.builder()
+                    .analysisType(ANALYSIS_TYPE)
+                    .memoryId(memoryId)
+                    .directText(String.join("；", availabilityIssues))
+                    .evidence(Collections.emptyList())
+                    .confidence(0.2)
+                    .degraded(false)
+                    .cacheHit(false)
+                    .build();
+        }
         ShopAnalysisContext context1 = shopContextAssembler.buildForCompare(request.getShopId1(), "shop compare", request.getAspect());
         ShopAnalysisContext context2 = shopContextAssembler.buildForCompare(request.getShopId2(), "shop compare", request.getAspect());
         List<EvidenceItem> evidence = mergeEvidence(context1, context2);
@@ -139,6 +161,23 @@ public class CompareWorkflow {
         }
     }
 
+    private List<String> availabilityIssues(CompareWorkflowRequest request) {
+        List<String> issues = new ArrayList<>();
+        addAvailabilityIssue(issues, "店铺1", request.getShopId1());
+        addAvailabilityIssue(issues, "店铺2", request.getShopId2());
+        return issues;
+    }
+
+    private void addAvailabilityIssue(List<String> issues, String label, Long shopId) {
+        if (!shopDataPort.shopExists(shopId)) {
+            issues.add(label + "不存在");
+            return;
+        }
+        if (shopDataPort.getReviewCount(shopId) <= 0) {
+            issues.add(label + "暂无评价数据");
+        }
+    }
+
     private List<EvidenceItem> mergeEvidence(ShopAnalysisContext context1, ShopAnalysisContext context2) {
         List<EvidenceItem> evidence = new ArrayList<>();
         evidence.addAll(context1.safeEvidence());
@@ -158,6 +197,22 @@ public class CompareWorkflow {
                 .shop1Pros(Collections.emptyList())
                 .shop2Pros(Collections.emptyList())
                 .riskNotes(List.of("证据不足，不能可靠判断"))
+                .evidenceIds(Collections.emptyList())
+                .build();
+    }
+
+    private ShopCompareResult unavailableCompare(CompareWorkflowRequest request, List<String> issues) {
+        return ShopCompareResult.builder()
+                .shopId1(request.getShopId1())
+                .shopId2(request.getShopId2())
+                .aspect(request.getAspect())
+                .conclusion(String.join("；", issues))
+                .winnerByAspect(ShopCompareResult.INSUFFICIENT)
+                .shop1Score(0)
+                .shop2Score(0)
+                .shop1Pros(Collections.emptyList())
+                .shop2Pros(Collections.emptyList())
+                .riskNotes(issues)
                 .evidenceIds(Collections.emptyList())
                 .build();
     }

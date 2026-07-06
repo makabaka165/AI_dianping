@@ -1,5 +1,6 @@
 package com.hmdp.dto.ai;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.hmdp.dto.ai.EvidenceItem;
 import lombok.Builder;
 import lombok.Data;
@@ -36,6 +37,7 @@ public class ShopSummaryResult {
 
     private String traceId;
 
+    @JsonIgnore
     private String memoryId;
 
     private String promptVersion;

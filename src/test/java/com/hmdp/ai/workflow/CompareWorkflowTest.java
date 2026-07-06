@@ -7,6 +7,7 @@ import com.hmdp.ai.guard.QualityDecision;
 import com.hmdp.ai.guard.QualityGuard;
 import com.hmdp.ai.memory.MemoryService;
 import com.hmdp.ai.model.ModelGateway;
+import com.hmdp.ai.port.ShopDataPort;
 import com.hmdp.dto.ai.ShopAIRequestContext;
 import com.hmdp.ai.prompt.PromptTemplateRender;
 import com.hmdp.ai.prompt.PromptTemplateRegistry;
@@ -31,8 +32,10 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -43,6 +46,8 @@ class CompareWorkflowTest {
 
     @Mock
     private ShopContextAssembler shopContextAssembler;
+    @Mock
+    private ShopDataPort shopDataPort;
     @Mock
     private PromptTemplateRegistry promptTemplateRegistry;
     @Mock
@@ -62,6 +67,7 @@ class CompareWorkflowTest {
     void setUp() {
         workflow = new CompareWorkflow();
         ReflectionTestUtils.setField(workflow, "shopContextAssembler", shopContextAssembler);
+        ReflectionTestUtils.setField(workflow, "shopDataPort", shopDataPort);
         ReflectionTestUtils.setField(workflow, "promptTemplateRegistry", promptTemplateRegistry);
         ReflectionTestUtils.setField(workflow, "memoryService", memoryService);
         ReflectionTestUtils.setField(workflow, "modelGateway", modelGateway);
@@ -69,6 +75,8 @@ class CompareWorkflowTest {
         ReflectionTestUtils.setField(workflow, "fallbackPolicy", fallbackPolicy);
         ReflectionTestUtils.setField(workflow, "governedGeneration", new GovernedGeneration());
         ReflectionTestUtils.setField(workflow, "aiMetricsService", aiMetricsService);
+        lenient().when(shopDataPort.shopExists(anyLong())).thenReturn(true);
+        lenient().when(shopDataPort.getReviewCount(anyLong())).thenReturn(3);
     }
 
     @Test
@@ -131,6 +139,32 @@ class CompareWorkflowTest {
         assertThat(response.getMemoryId()).isEqualTo("compare-memory");
         verify(modelGateway).repairStructuredComparison("compare-memory", "compare prompt", 1L, 2L, "服务", "too generic");
         verify(fallbackPolicy, never()).fallbackText(anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void shouldExplainEachUnavailableShopBeforeAssemblingContext() {
+        ShopAIRequestContext context = ShopAIRequestContext.builder()
+                .userId("u1")
+                .sessionId("s1")
+                .traceId("t1")
+                .build();
+        when(memoryService.shopCompareKey("u1", "s1")).thenReturn("compare-memory");
+        when(shopDataPort.getReviewCount(1L)).thenReturn(0);
+        when(shopDataPort.shopExists(2L)).thenReturn(false);
+
+        ShopAIResponse response = workflow.execute(context, CompareWorkflowRequest.builder()
+                .shopId1(1L)
+                .shopId2(2L)
+                .aspect("service")
+                .build());
+
+        assertThat(response.getCompare().getConclusion())
+                .contains("店铺1暂无评价数据")
+                .contains("店铺2不存在");
+        assertThat(response.getCompare().getWinnerByAspect()).isEqualTo(ShopCompareResult.INSUFFICIENT);
+        assertThat(response.getEvidence()).isEmpty();
+        verify(shopContextAssembler, never()).buildForCompare(anyLong(), anyString(), any());
+        verify(modelGateway, never()).generateStructuredComparison(anyString(), anyString(), anyLong(), anyLong(), any(), any());
     }
 
     private ShopAnalysisContext contextWithEvidence(Long shopId, Long blogId) {

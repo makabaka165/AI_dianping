@@ -130,7 +130,6 @@ ShopSummaryController
 {
   "sessionId": "default",
   "traceId": "9f7c...",
-  "memoryId": "hmdp:memory:shop:qa:1:10001:default",
   "intent": "QA",
   "evidence": [
     {
@@ -294,6 +293,8 @@ Flyway production guidance: local/demo environments may let the application run 
 Redis configuration: business cache, Spring Redis, Redisson, distributed locks, Redis Stream, AI memory, quota, and delayed tasks use the same business Redis on `6379` by default. Production should explicitly set `HMDP_REDIS_HOST`, `HMDP_REDIS_PORT`, `HMDP_REDIS_PASSWORD`, `HMDP_REDIS_DATABASE`, and `HMDP_REDIS_SSL`, keep Spring Redis and Redisson pointed at that same business Redis, keep `hmdp.ai.redisson-fallback=false`, and never log the Redis password.
 
 RAG Redis configuration: vector retrieval uses a separate Redis Stack instance through `rag.redis.host` and `rag.redis.port`, with default port `6380`. Keep RAG Redis Stack separate from the business Redis/Redisson configuration. Keep `rag.review.dimension` aligned with the embedding model dimension; the current value is `1024`. Production should keep `rag.redis.fallback-to-memory=false` to avoid inconsistent in-memory vector indexes across instances.
+
+Platform policy RAG rebuild/compact note: platform FAQ/policy uses the `platform_policy_kb` Redis Stack index and is refreshed by document import or startup auto-import when `rag.data.auto-import=true`. The current LangChain4j `RedisEmbeddingStore` cannot precisely delete old vectors by `documentId`, so physical compaction requires an out-of-band Redis Stack index rebuild, such as deleting/recreating only `platform_policy_kb` during a maintenance window and then re-running the platform policy import. Deleted or superseded documents remain protected at query time by MySQL document status and contentHash filtering, so stale chunks must not be returned by retrieval even when old vectors are still physically present.
 
 Security defaults: forwarded IP and device fingerprint headers are not trusted unless explicitly enabled; mock SMS code exposure is disabled by default. Keep `HMDP_SMS_MOCK_ENABLED=false`, `hmdp.security.device-fingerprint.trust-client-header=false`, and `SA_TOKEN_IS_SHARE=false` in production. Enable forwarded headers only behind real trusted reverse proxies, and set `trusted-proxies` to explicit proxy egress IPs, never `*`, broad CIDRs, or user networks. The `prod`/`production` profile fails startup when mock SMS is enabled, client device fingerprint headers are trusted, Sa-Token token sharing is enabled, or forwarded headers are enabled with empty/wildcard trusted proxies. Defaults are `SA_TOKEN_TIMEOUT=604800`, `SA_TOKEN_ACTIVE_TIMEOUT=7200`, `SA_TOKEN_IS_CONCURRENT=true`, and blog image owner TTL 7 days. For admin or merchant accounts, use shorter session timeouts where possible.
 

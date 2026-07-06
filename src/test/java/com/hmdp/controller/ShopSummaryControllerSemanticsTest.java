@@ -2,6 +2,7 @@ package com.hmdp.controller;
 
 import com.hmdp.ai.application.ShopAIApplicationService;
 import com.hmdp.ai.memory.ChatMemoryKeyManager;
+import com.hmdp.dto.Result;
 import com.hmdp.dto.ai.ShopSummaryResult;
 import com.hmdp.service.CurrentUserService;
 import org.junit.jupiter.api.BeforeEach;
@@ -11,6 +12,9 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.util.Map;
+
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -59,5 +63,22 @@ class ShopSummaryControllerSemanticsTest {
 
         verify(shopAIApplicationService).qualitySummary("100", 1L, 5, 10, true,
                 "/api/shop-summary/{shopId}/quality/with-memory");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void memoryStatusShouldNotExposeRedisKey() {
+        when(keyManager.buildShopQAKey(1L, "100")).thenReturn("hmdp:memory:shop:qa:1:100");
+        when(shopAIApplicationService.getMemoryTtl("hmdp:memory:shop:qa:1:100")).thenReturn(120L);
+        when(shopAIApplicationService.hasMemory("hmdp:memory:shop:qa:1:100")).thenReturn(true);
+        when(shopAIApplicationService.getMemoryMessageCount("hmdp:memory:shop:qa:1:100")).thenReturn(2);
+
+        Result result = controller.getMemoryStatus(1L, "qa");
+        Map<String, Object> data = (Map<String, Object>) result.getData();
+
+        assertThat(data).containsEntry("type", "qa");
+        assertThat(data).containsEntry("exists", true);
+        assertThat(data).containsEntry("messageCount", 2);
+        assertThat(data).doesNotContainKeys("memoryKey", "memoryId");
     }
 }

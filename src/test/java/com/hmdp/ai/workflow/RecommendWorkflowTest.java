@@ -33,6 +33,7 @@ import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
@@ -111,7 +112,7 @@ class RecommendWorkflowTest {
                         .build()))
                 .build();
         when(memoryService.shopRecommendKey("u1")).thenReturn("recommend-memory");
-        when(shopDataPort.findRecommendCandidates("餐厅", 1)).thenReturn(List.of(shop));
+        when(shopDataPort.findRecommendCandidates("餐厅", 20)).thenReturn(List.of(shop));
         when(evidenceRetriever.retrieve(1L, "适合约会", "餐厅", 2)).thenReturn(Collections.emptyList());
         when(promptTemplateRegistry.renderRecommend(any(ShopAIRequestContext.class), eq("适合约会"), eq("餐厅"), eq(1), anyString()))
                 .thenReturn(PromptTemplateRender.builder()
@@ -144,8 +145,74 @@ class RecommendWorkflowTest {
         assertThat(response.getEvidence()).extracting("id").contains("shop_profile:1");
         assertThat(response.getDegraded()).isFalse();
         assertThat(response.getMemoryId()).isEqualTo("recommend-memory");
+        verify(shopDataPort).findRecommendCandidates("餐厅", 20);
         verify(modelGateway).repairStructuredRecommendation("recommend-memory", "recommend prompt", "适合约会", "餐厅",
                 List.of(shop), "too generic");
         verify(fallbackPolicy, never()).fallbackText(anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void shouldUseExpandedCandidatesButReturnRequestedLimit() {
+        ShopAIRequestContext context = ShopAIRequestContext.builder()
+                .userId("u1")
+                .sessionId("s1")
+                .traceId("t1")
+                .build();
+        List<ShopView> candidates = List.of(shop(1L), shop(2L), shop(3L));
+        ShopRecommendResult generated = ShopRecommendResult.builder()
+                .userPreference("quiet")
+                .category("food")
+                .message("generated")
+                .items(List.of(item(1, 1L), item(2, 2L), item(3, 3L)))
+                .build();
+
+        when(memoryService.shopRecommendKey("u1")).thenReturn("recommend-memory");
+        when(shopDataPort.findRecommendCandidates("food", 20)).thenReturn(candidates);
+        when(evidenceRetriever.retrieve(anyLong(), eq("quiet"), eq("food"), eq(2))).thenReturn(Collections.emptyList());
+        when(promptTemplateRegistry.renderRecommend(any(ShopAIRequestContext.class), eq("quiet"), eq("food"), eq(2), anyString()))
+                .thenReturn(PromptTemplateRender.builder()
+                        .content("recommend prompt")
+                        .version(PromptTemplateRegistry.RECOMMEND_VERSION)
+                        .variant("stable")
+                        .build());
+        when(modelGateway.generateStructuredRecommendation(eq("recommend-memory"), eq("recommend prompt"), eq("quiet"),
+                eq("food"), eq(candidates), any())).thenReturn(generated);
+        when(qualityGuard.validateRecommend(eq(generated), eq(Set.of(1L, 2L, 3L)), any(), eq("recommend")))
+                .thenReturn(QualityCheck.builder()
+                        .decision(QualityDecision.PASS)
+                        .build());
+
+        ShopAIResponse response = workflow.execute(context, RecommendWorkflowRequest.builder()
+                .userPreference("quiet")
+                .category("food")
+                .limit(2)
+                .build());
+
+        assertThat(response.getRecommend().getItems()).extracting("shopId").containsExactly(1L, 2L);
+        verify(shopDataPort).findRecommendCandidates("food", 20);
+        verify(promptTemplateRegistry).renderRecommend(any(ShopAIRequestContext.class), eq("quiet"), eq("food"), eq(2), anyString());
+    }
+
+    private ShopView shop(Long id) {
+        return ShopView.builder()
+                .id(id)
+                .name("shop " + id)
+                .area("area")
+                .avgPrice(80L)
+                .sold(100)
+                .comments(30)
+                .score(45)
+                .build();
+    }
+
+    private ShopRecommendationItem item(Integer rank, Long shopId) {
+        return ShopRecommendationItem.builder()
+                .rank(rank)
+                .shopId(shopId)
+                .shopName("shop " + shopId)
+                .reason("reason")
+                .evidenceIds(List.of("shop_profile:" + shopId))
+                .confidence(0.7)
+                .build();
     }
 }
