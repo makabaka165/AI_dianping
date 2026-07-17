@@ -47,7 +47,7 @@ public class BlogEventListener {
     @Resource
     private BlogLikeMapper blogLikeMapper;
 
-    @Resource
+    @Resource(name = "businessRedissonClient")
     private RedissonClient redissonClient;
 
     @Resource

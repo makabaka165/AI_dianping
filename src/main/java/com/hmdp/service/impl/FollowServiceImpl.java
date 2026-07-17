@@ -57,7 +57,7 @@ public class FollowServiceImpl extends ServiceImpl<FollowMapper, Follow> impleme
     @Resource
     private StringRedisTemplate stringRedisTemplate;
 
-    @Resource
+    @Resource(name = "businessRedissonClient")
     private RedissonClient redissonClient;
 
     @Resource

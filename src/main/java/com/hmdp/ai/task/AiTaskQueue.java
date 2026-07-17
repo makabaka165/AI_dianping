@@ -14,7 +14,7 @@ import javax.annotation.Resource;
 @Component
 public class AiTaskQueue {
 
-    @Resource
+    @Resource(name = "memoryRedissonClient")
     private RedissonClient redissonClient;
 
     @Value("${hmdp.ai.task.queue-key:hmdp:ai:task:queue}")

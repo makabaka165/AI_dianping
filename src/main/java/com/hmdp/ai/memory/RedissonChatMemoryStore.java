@@ -2,6 +2,8 @@ package com.hmdp.ai.memory;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.hmdp.ai.domain.memory.MemoryPolicyService;
+import com.hmdp.ai.domain.memory.MemoryKeyCodec;
 import com.hmdp.utils.LocalCacheManager;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
@@ -15,6 +17,7 @@ import org.redisson.api.RBucket;
 import org.redisson.api.RSet;
 import org.redisson.api.RedissonClient;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -38,6 +41,8 @@ public class RedissonChatMemoryStore implements ChatMemoryStore {
     private final RedissonClient redissonClient;
     private final ChatMemoryKeyManager keyManager;
     private final ObjectMapper objectMapper;
+    private final MemoryKeyCodec memoryKeyCodec;
+    private final MemoryPolicyService memoryPolicyService;
 
     @Value("${chat.memory.redis.ttl:7200}")
     private long defaultTtlSeconds;
@@ -72,12 +77,25 @@ public class RedissonChatMemoryStore implements ChatMemoryStore {
     private Map<String, Long> ttlConfigCache;
 
     // ========== 构造函数注入（推荐方式） ==========
-    public RedissonChatMemoryStore(RedissonClient redissonClient,
-                                   ChatMemoryKeyManager keyManager) {
+    @Autowired
+    public RedissonChatMemoryStore(@Qualifier("memoryRedissonClient") RedissonClient redissonClient,
+                                   ChatMemoryKeyManager keyManager,
+                                   MemoryKeyCodec memoryKeyCodec,
+                                   MemoryPolicyService memoryPolicyService) {
         this.redissonClient = redissonClient;
         this.keyManager = keyManager;
         this.objectMapper = new ObjectMapper();
+        this.memoryKeyCodec = memoryKeyCodec;
+        this.memoryPolicyService = memoryPolicyService;
         log.info("RedissonChatMemoryStore 初始化完成");
+    }
+
+    public RedissonChatMemoryStore(RedissonClient redissonClient, ChatMemoryKeyManager keyManager) {
+        this.redissonClient = redissonClient;
+        this.keyManager = keyManager;
+        this.objectMapper = new ObjectMapper();
+        this.memoryKeyCodec = new MemoryKeyCodec();
+        this.memoryPolicyService = new MemoryPolicyService(defaultPolicyTtls());
     }
 
     @PostConstruct
@@ -89,13 +107,6 @@ public class RedissonChatMemoryStore implements ChatMemoryStore {
         ttlConfigCache.put(ChatMemoryKeyManager.SHOP_COMPARE_PREFIX, positiveOrDefault(shopCompareTtlSeconds, 1800L));
         ttlConfigCache.put(ChatMemoryKeyManager.SHOP_RECOMMEND_PREFIX, positiveOrDefault(shopRecommendTtlSeconds, 86400L));
         ttlConfigCache.put(ChatMemoryKeyManager.AI_CHAT_PREFIX, positiveOrDefault(aiChatTtlSeconds, 3600L));
-    }
-
-    // ========== 也支持字段注入（保持兼容） ==========
-
-    @Autowired(required = false)
-    public void setRedissonClient(RedissonClient redissonClient) {
-        // 只在构造函数注入失败时使用
     }
 
     @Autowired(required = false)
@@ -681,6 +692,10 @@ public class RedissonChatMemoryStore implements ChatMemoryStore {
      * 根据功能类型获取TTL（使用本地缓存优化）
      */
     private long getTtlByFunctionType(String key) {
+        java.util.Optional<com.hmdp.ai.domain.memory.MemoryScope> scope = memoryKeyCodec.decode(key);
+        if (scope.isPresent()) {
+            return memoryPolicyService.ttlSeconds(scope.get());
+        }
         String functionType = keyManager.getFunctionType(key);
         
         // 从本地缓存获取TTL配置
@@ -691,6 +706,16 @@ public class RedissonChatMemoryStore implements ChatMemoryStore {
 
         // 如果缓存中没有，则使用默认值
         return defaultTtlSeconds;
+    }
+
+    private static Map<com.hmdp.ai.domain.memory.MemoryType, Long> defaultPolicyTtls() {
+        Map<com.hmdp.ai.domain.memory.MemoryType, Long> values = new java.util.EnumMap<>(com.hmdp.ai.domain.memory.MemoryType.class);
+        values.put(com.hmdp.ai.domain.memory.MemoryType.SHOP_SUMMARY, 3600L);
+        values.put(com.hmdp.ai.domain.memory.MemoryType.SHOP_QA, 7200L);
+        values.put(com.hmdp.ai.domain.memory.MemoryType.SHOP_COMPARE, 1800L);
+        values.put(com.hmdp.ai.domain.memory.MemoryType.SHOP_RECOMMEND, 86400L);
+        values.put(com.hmdp.ai.domain.memory.MemoryType.CONVERSATION, 7200L);
+        return values;
     }
 
     private long positiveOrDefault(long value, long fallback) {

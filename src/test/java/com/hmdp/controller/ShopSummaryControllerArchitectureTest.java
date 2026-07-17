@@ -116,7 +116,7 @@ class ShopSummaryControllerArchitectureTest {
         Profile profile = AITestController.class.getAnnotation(Profile.class);
 
         assertThat(profile).isNotNull();
-        assertThat(profile.value()).containsExactlyInAnyOrder("dev", "test");
+        assertThat(profile.value()).containsExactlyInAnyOrder("local", "dev", "test");
     }
 
     @Test

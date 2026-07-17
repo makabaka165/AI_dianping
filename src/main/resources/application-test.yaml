@@ -1,0 +1,26 @@
+hmdp:
+  ai:
+    redis-health-check: false
+    task:
+      enabled: false
+spring:
+  flyway:
+    enabled: false
+rag:
+  enabled: false
+  data:
+    auto-import: false
+langchain4j:
+  open-ai:
+    chat-model:
+      api-key: test-placeholder
+      log-requests: false
+      log-responses: false
+    streaming-chat-model:
+      api-key: test-placeholder
+      log-requests: false
+      log-responses: false
+    embedding-model:
+      api-key: test-placeholder
+      log-requests: false
+      log-responses: false

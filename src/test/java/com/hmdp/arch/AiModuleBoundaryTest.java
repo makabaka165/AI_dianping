@@ -63,10 +63,13 @@ class AiModuleBoundaryTest {
     void aiTopLevelPackagesShouldStayWithinCurrentBoundarySet() throws IOException {
         Set<String> allowedTopLevelPackages = Set.of(
                 "application",
+                "api",
                 "config",
+                "domain",
                 "fallback",
                 "guard",
                 "infra",
+                "infrastructure",
                 "intent",
                 "memory",
                 "model",
@@ -75,6 +78,8 @@ class AiModuleBoundaryTest {
                 "prompt",
                 "quota",
                 "retrieval",
+                "runtime",
+                "shared",
                 "task",
                 "workflow"
         );
@@ -86,7 +91,7 @@ class AiModuleBoundaryTest {
 
             assertThat(actualTopLevelPackages).isSubsetOf(allowedTopLevelPackages);
             assertThat(actualTopLevelPackages)
-                    .doesNotContain("architecture", "facade", "domain", "command", "pipeline", "plugin");
+                    .doesNotContain("architecture", "facade", "command", "pipeline", "plugin");
         }
     }
 

@@ -14,7 +14,7 @@ public class AiTaskEventPublisher {
 
     static final String TOPIC_PREFIX = "hmdp:ai:task:events:";
 
-    @Resource
+    @Resource(name = "memoryRedissonClient")
     private RedissonClient redissonClient;
 
     private final ObjectMapper objectMapper = new ObjectMapper();

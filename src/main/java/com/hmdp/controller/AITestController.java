@@ -25,7 +25,7 @@ import java.util.Map;
  */
 @RestController
 @RequestMapping("/api/ai/test")
-@Profile({"dev", "test"})
+@Profile({"local", "dev", "test"})
 @SaCheckPermission("ai:test")
 @Slf4j
 public class AITestController {

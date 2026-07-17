@@ -27,7 +27,7 @@ import java.util.concurrent.TimeoutException;
 @Slf4j
 public class AiTaskStreamService {
 
-    @Resource
+    @Resource(name = "memoryRedissonClient")
     private RedissonClient redissonClient;
 
     @Resource

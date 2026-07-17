@@ -24,7 +24,7 @@ import java.util.concurrent.TimeUnit;
 @Slf4j
 public class AiTaskRepository {
 
-    @Resource
+    @Resource(name = "memoryRedissonClient")
     private RedissonClient redissonClient;
 
     @Value("${hmdp.ai.task.result-ttl-hours:24}")

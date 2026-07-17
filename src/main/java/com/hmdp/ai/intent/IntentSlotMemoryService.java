@@ -20,7 +20,7 @@ public class IntentSlotMemoryService {
     private static final long TTL_MINUTES = 30L;
     private static final long PENDING_TTL_MINUTES = 10L;
 
-    @Resource
+    @Resource(name = "memoryRedissonClient")
     private RedissonClient redissonClient;
 
     private final ObjectMapper objectMapper = new ObjectMapper();

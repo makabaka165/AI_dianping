@@ -121,7 +121,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     @Resource
     private SeckillVoucherMapper seckillVoucherMapper;
 
-    @Resource
+    @Resource(name = "businessRedissonClient")
     private RedissonClient redissonClient;
 
     @Lazy

@@ -1,15 +1,4 @@
 hmdp:
-  redis:
-    redisson:
-      host: ${HMDP_REDIS_HOST:${spring.redis.host:127.0.0.1}}
-      port: ${HMDP_REDIS_PORT:${spring.redis.port:6379}}
-      password: ${HMDP_REDIS_PASSWORD:${spring.redis.password:}}
-      database: ${HMDP_REDIS_DATABASE:${spring.redis.database:0}}
-      ssl: ${HMDP_REDIS_SSL:false}
-      timeout-millis: ${HMDP_REDIS_TIMEOUT_MILLIS:3000}
-      connect-timeout-millis: ${HMDP_REDIS_CONNECT_TIMEOUT_MILLIS:3000}
-      retry-attempts: ${HMDP_REDIS_RETRY_ATTEMPTS:3}
-      retry-interval-millis: ${HMDP_REDIS_RETRY_INTERVAL_MILLIS:1500}
   cache:
     ttl-jitter-minutes: 5
     mutex:
@@ -55,6 +44,24 @@ hmdp:
       fetch-growth-factor: ${HMDP_SHOP_NEARBY_FETCH_GROWTH_FACTOR:2}
       max-scan-size: ${HMDP_SHOP_NEARBY_MAX_SCAN_SIZE:200}
   ai:
+    content-policy:
+      blocked-patterns: ${AI_CONTENT_BLOCKED_PATTERNS:}
+    redis:
+      business:
+        host: ${REDIS_HOST:127.0.0.1}
+        port: ${REDIS_PORT:6379}
+        password: ${REDIS_PASSWORD:}
+        database: ${REDIS_DATABASE:0}
+      memory:
+        host: ${MEMORY_REDIS_HOST:127.0.0.1}
+        port: ${MEMORY_REDIS_PORT:6379}
+        password: ${MEMORY_REDIS_PASSWORD:}
+        database: ${MEMORY_REDIS_DATABASE:1}
+      vector:
+        host: ${VECTOR_REDIS_HOST:127.0.0.1}
+        port: ${VECTOR_REDIS_PORT:6380}
+        password: ${VECTOR_REDIS_PASSWORD:}
+        database: ${VECTOR_REDIS_DATABASE:0}
     redis-health-check: true
     redisson-fallback: false
     model:
@@ -124,13 +131,15 @@ server:
   port: 8081
 
 spring:
+  profiles:
+    default: local
   application:
     name: hmdp
   datasource:
     driver-class-name: com.mysql.jdbc.Driver
-    url: ${MYSQL_URL:${DB_URL:jdbc:mysql://127.0.0.1:3306/hmdp?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true}}
-    username: ${MYSQL_USERNAME:${DB_USERNAME:root}}
-    password: ${MYSQL_PASSWORD:${DB_PASSWORD:}}
+    url: ${DB_URL:jdbc:mysql://127.0.0.1:3306/hmdp?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true}
+    username: ${DB_USERNAME:root}
+    password: ${DB_PASSWORD:}
   redis:
     host: ${REDIS_HOST:127.0.0.1}
     port: ${REDIS_PORT:6379}
@@ -183,8 +192,8 @@ management:
 langchain4j:
   open-ai:
     chat-model:
-      base-url: ${AI_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
-      api-key: ${API_KEY:${DASHSCOPE_API_KEY:}}
+      base-url: ${AI_CHAT_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
+      api-key: ${AI_CHAT_API_KEY:}
       model-name: ${AI_CHAT_MODEL:qwen-plus}
       temperature: ${AI_CHAT_TEMPERATURE:0.3}
       repair-temperature: ${AI_REPAIR_TEMPERATURE:0.1}
@@ -192,16 +201,16 @@ langchain4j:
       log-requests: ${AI_LOG_REQUESTS:false}
       log-responses: ${AI_LOG_RESPONSES:false}
     streaming-chat-model:
-      api-key: ${AI_STREAM_API_KEY:${API_KEY:${DASHSCOPE_API_KEY:}}}
-      base-url: ${AI_STREAM_BASE_URL:${AI_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}}
+      api-key: ${AI_CHAT_API_KEY:}
+      base-url: ${AI_CHAT_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
       model-name: ${AI_STREAM_MODEL:${AI_CHAT_MODEL:qwen-plus}}
       temperature: ${AI_STREAM_TEMPERATURE:${AI_CHAT_TEMPERATURE:0.3}}
       max-tokens: ${AI_STREAM_MAX_TOKENS:${AI_CHAT_MAX_TOKENS:1000}}
       log-requests: ${AI_LOG_REQUESTS:false}
       log-responses: ${AI_LOG_RESPONSES:false}
     embedding-model:
-      base-url: ${AI_EMBEDDING_BASE_URL:${AI_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}}
-      api-key: ${AI_EMBEDDING_API_KEY:${API_KEY:${DASHSCOPE_API_KEY:}}}
+      base-url: ${AI_EMBEDDING_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
+      api-key: ${AI_EMBEDDING_API_KEY:}
       model-name: ${AI_EMBEDDING_MODEL:text-embedding-v3}
       log-requests: ${AI_LOG_REQUESTS:false}
       log-responses: ${AI_LOG_RESPONSES:false}
@@ -223,7 +232,7 @@ chat:
 rag:
   enabled: ${RAG_ENABLED:true}
   data:
-    auto-import: true
+    auto-import: ${RAG_DATA_AUTO_IMPORT:false}
   review:
     enabled: true
     index-name: shop_review_kb
@@ -238,7 +247,14 @@ rag:
     index-name: platform_policy_kb
     dimension: 1024
   redis:
-    host: ${RAG_REDIS_HOST:127.0.0.1}
-    port: ${RAG_REDIS_PORT:6380}
+    host: ${VECTOR_REDIS_HOST:127.0.0.1}
+    port: ${VECTOR_REDIS_PORT:6380}
+    password: ${VECTOR_REDIS_PASSWORD:}
     dimension: ${RAG_REDIS_DIMENSION:1024}
     fallback-to-memory: ${RAG_REDIS_FALLBACK_TO_MEMORY:false}
+
+minio:
+  endpoint: ${MINIO_ENDPOINT:http://127.0.0.1:9000}
+  access-key: ${MINIO_ACCESS_KEY:minioadmin}
+  secret-key: ${MINIO_SECRET_KEY:minioadmin}
+  bucket: ${MINIO_BUCKET:hmdp-ai}

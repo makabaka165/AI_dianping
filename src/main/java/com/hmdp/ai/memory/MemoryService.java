@@ -36,7 +36,7 @@ public class MemoryService {
     @Resource
     private RedissonChatMemoryStore chatMemoryStore;
 
-    @Resource
+    @Resource(name = "memoryRedissonClient")
     private RedissonClient redissonClient;
 
     @Resource

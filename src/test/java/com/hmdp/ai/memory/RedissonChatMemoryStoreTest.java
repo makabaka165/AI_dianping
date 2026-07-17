@@ -94,7 +94,7 @@ class RedissonChatMemoryStoreTest {
 
         store.updateMessages(memoryId, List.of(UserMessage.from("生成店铺总结")));
 
-        verify(bucket).set(org.mockito.ArgumentMatchers.anyString(), eq(7200L), eq(TimeUnit.SECONDS));
+        verify(bucket).set(org.mockito.ArgumentMatchers.anyString(), eq(3600L), eq(TimeUnit.SECONDS));
         verify(functionIndex).add(memoryId);
         verify(userIndex).add(memoryId);
         verify(shopSummaryIndex).add(memoryId);
@@ -118,7 +118,7 @@ class RedissonChatMemoryStoreTest {
 
         store.updateMessages(memoryId, List.of(UserMessage.from("summary")));
 
-        verify(bucket).set(org.mockito.ArgumentMatchers.anyString(), eq(1234L), eq(TimeUnit.SECONDS));
+        verify(bucket).set(org.mockito.ArgumentMatchers.anyString(), eq(3600L), eq(TimeUnit.SECONDS));
     }
 
     @Test

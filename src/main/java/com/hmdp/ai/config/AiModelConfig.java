@@ -145,14 +145,6 @@ public class AiModelConfig {
     private volatile long platformPolicyNextRetryAt = 0L;
 
     @Bean
-    public RedissonChatMemoryStore chatMemoryStore(
-            RedissonClient redissonClient,
-            ChatMemoryKeyManager keyManager) {
-        log.info("初始化 RedissonChatMemoryStore");
-        return new RedissonChatMemoryStore(redissonClient, keyManager);
-    }
-
-    @Bean
     public ChatMemoryProvider chatMemoryProvider(RedissonChatMemoryStore chatMemoryStore) {
         log.info("初始化 ChatMemoryProvider，最大消息数: {}", maxMessages);
 

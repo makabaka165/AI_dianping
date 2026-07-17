@@ -1,14 +1,13 @@
 package com.hmdp.controller;
 
 import cn.dev33.satoken.annotation.SaCheckPermission;
+import com.hmdp.ai.infrastructure.parser.ParserRegistry;
 import com.hmdp.dto.Result;
 import com.hmdp.entity.DocumentMetadata;
 import com.hmdp.entity.DocumentStatus;
 import com.hmdp.service.DocumentManagementService;
 import com.hmdp.service.impl.DocumentManagementServiceImpl;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.tika.Tika;
-import org.apache.tika.exception.TikaException;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -20,7 +19,6 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.List;
@@ -33,16 +31,17 @@ import java.util.Set;
 @RequestMapping("/document")
 public class DocumentManagementController {
 
-    private static final Set<String> ALLOWED_EXTENSIONS = Set.of("txt", "md", "pdf", "doc", "docx");
+    private static final Set<String> ALLOWED_EXTENSIONS = Set.of("txt", "md", "pdf", "docx", "xlsx", "html", "htm");
 
     private final DocumentManagementService documentManagementService;
-    private final Tika tika = new Tika();
+    private final ParserRegistry parserRegistry;
 
     @Value("${rag.document.max-upload-bytes:5242880}")
     private long maxUploadBytes;
 
-    public DocumentManagementController(DocumentManagementService documentManagementService) {
+    public DocumentManagementController(DocumentManagementService documentManagementService, ParserRegistry parserRegistry) {
         this.documentManagementService = documentManagementService;
+        this.parserRegistry = parserRegistry;
     }
 
     @GetMapping("/list")
@@ -131,7 +130,8 @@ public class DocumentManagementController {
             if (!ALLOWED_EXTENSIONS.contains(fileType)) {
                 return Result.fail("不支持的文件类型");
             }
-            String content = parseContent(file, fileType);
+            ParserRegistry.ParseResult parseResult = parserRegistry.parse(file.getBytes(), safeFilename, file.getContentType());
+            String content = parseResult.getDocument().getPlainText();
             if (content == null || content.trim().isEmpty()) {
                 return Result.fail("文档内容不能为空");
             }
@@ -153,6 +153,8 @@ public class DocumentManagementController {
             resultData.put("title", savedMetadata.getTitle());
             resultData.put("wordCount", savedMetadata.getWordCount());
             resultData.put("qualityScore", savedMetadata.getQualityScore());
+            resultData.put("sha256", parseResult.getSha256());
+            resultData.put("mimeType", parseResult.getMimeType());
             boolean ragIndexed = documentManagementService instanceof DocumentManagementServiceImpl
                     && ((DocumentManagementServiceImpl) documentManagementService).isRagIngestionAvailable();
             resultData.put("ragIndexed", ragIndexed);
@@ -179,13 +181,6 @@ public class DocumentManagementController {
             log.error("Delete document failed, documentId={}", documentId, e);
             return Result.fail("删除文档失败");
         }
-    }
-
-    private String parseContent(MultipartFile file, String fileType) throws IOException, TikaException {
-        if ("txt".equals(fileType) || "md".equals(fileType)) {
-            return new String(file.getBytes(), StandardCharsets.UTF_8);
-        }
-        return tika.parseToString(file.getInputStream());
     }
 
     private String getFileType(String filename) {

@@ -30,7 +30,7 @@ public class CacheClient {
     private final CacheProperties cacheProperties;
 
     public CacheClient(StringRedisTemplate stringRedisTemplate,
-                       RedissonClient redissonClient,
+                       @Qualifier("businessRedissonClient") RedissonClient redissonClient,
                        @Qualifier("cacheRebuildExecutor") ThreadPoolTaskExecutor cacheRebuildExecutor,
                        CacheProperties cacheProperties) {
         this.stringRedisTemplate = stringRedisTemplate;

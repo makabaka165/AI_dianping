@@ -1,0 +1,19 @@
+spring:
+  datasource:
+    url: ${DB_URL:jdbc:mysql://127.0.0.1:3306/hmdp?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true}
+    username: ${DB_USERNAME:root}
+    password: ${DB_PASSWORD:}
+logging:
+  level:
+    com.hmdp: info
+langchain4j:
+  open-ai:
+    chat-model:
+      log-requests: false
+      log-responses: false
+    streaming-chat-model:
+      log-requests: false
+      log-responses: false
+    embedding-model:
+      log-requests: false
+      log-responses: false

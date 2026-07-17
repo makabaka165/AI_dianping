@@ -17,7 +17,7 @@ public class AiResultCacheService {
     private static final long TTL_SECONDS = 3600L;
     private static final int SCAN_BATCH_SIZE = 100;
 
-    @Resource
+    @Resource(name = "memoryRedissonClient")
     private RedissonClient redissonClient;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
