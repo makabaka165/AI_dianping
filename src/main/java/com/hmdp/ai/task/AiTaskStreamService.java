@@ -15,6 +15,7 @@ import reactor.core.publisher.Sinks;
 
 import javax.annotation.Resource;
 import java.time.Duration;
+import java.util.concurrent.TimeoutException;
 
 /**
  * Bridges per-task Redisson topics to local SSE streams. The stream registers the topic listener before reading the
@@ -56,7 +57,7 @@ public class AiTaskStreamService {
             return sink.asFlux()
                     .doOnSubscribe(subscription -> emitSnapshot(taskId, sink))
                     .timeout(timeout())
-                    .onErrorResume(throwable -> Flux.just(timeoutEvent(taskId)))
+                    .onErrorResume(TimeoutException.class, throwable -> Flux.just(timeoutEvent(taskId)))
                     .doFinally(signalType -> topic.removeListener(listenerId));
         });
     }
@@ -93,10 +94,22 @@ public class AiTaskStreamService {
     }
 
     private AiTaskEvent timeoutEvent(String taskId) {
+        AiTaskEvent event;
+        try {
+            event = repository.find(taskId)
+                    .map(this::fromTask)
+                    .orElseGet(() -> emptyEvent(taskId));
+        } catch (RuntimeException e) {
+            log.warn("Read AI task snapshot after SSE timeout failed, taskId={}", taskId, e);
+            event = emptyEvent(taskId);
+        }
+        event.setErrorMessage("AI task stream timed out; task status is unchanged");
+        return event;
+    }
+
+    private AiTaskEvent emptyEvent(String taskId) {
         return AiTaskEvent.builder()
                 .taskId(taskId)
-                .status(AiTaskStatus.FAILED)
-                .errorMessage("AI task stream timed out")
                 .timestampEpochMillis(System.currentTimeMillis())
                 .build();
     }

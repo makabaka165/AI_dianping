@@ -17,6 +17,8 @@ import com.hmdp.service.CurrentUserService;
 import com.hmdp.service.IFollowService;
 import com.hmdp.service.IUserService;
 import lombok.extern.slf4j.Slf4j;
+import org.redisson.api.RLock;
+import org.redisson.api.RedissonClient;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -50,9 +52,13 @@ public class FollowServiceImpl extends ServiceImpl<FollowMapper, Follow> impleme
     private static final int BLOG_NOT_DELETED = 0;
     private static final int DEFAULT_COMMON_PAGE_SIZE = 20;
     private static final int MAX_COMMON_PAGE_SIZE = 100;
+    private static final String FOLLOW_CACHE_LOCK_PREFIX = "lock:follow:cache:";
 
     @Resource
     private StringRedisTemplate stringRedisTemplate;
+
+    @Resource
+    private RedissonClient redissonClient;
 
     @Resource
     private IUserService userService;
@@ -215,8 +221,17 @@ public class FollowServiceImpl extends ServiceImpl<FollowMapper, Follow> impleme
     }
 
     protected boolean ensureFollowCacheLoaded(Long userId) {
+        RLock lock = null;
+        boolean locked = false;
         try {
             Boolean loaded = stringRedisTemplate.hasKey(loadedKey(userId));
+            if (Boolean.TRUE.equals(loaded)) {
+                return true;
+            }
+            lock = redissonClient.getLock(FOLLOW_CACHE_LOCK_PREFIX + userId);
+            lock.lock();
+            locked = true;
+            loaded = stringRedisTemplate.hasKey(loadedKey(userId));
             if (Boolean.TRUE.equals(loaded)) {
                 return true;
             }
@@ -226,6 +241,8 @@ public class FollowServiceImpl extends ServiceImpl<FollowMapper, Follow> impleme
         } catch (RuntimeException e) {
             log.warn("rebuild follow cache failed, userId={}", userId, e);
             return false;
+        } finally {
+            unlockQuietly(lock, locked);
         }
     }
 
@@ -246,18 +263,29 @@ public class FollowServiceImpl extends ServiceImpl<FollowMapper, Follow> impleme
     }
 
     private void syncFollowCache(Long userId, Long followUserId, boolean follow) {
+        RLock lock = null;
+        boolean locked = false;
         try {
+            lock = redissonClient.getLock(FOLLOW_CACHE_LOCK_PREFIX + userId);
+            lock.lock();
+            locked = true;
+            if (!Boolean.TRUE.equals(stringRedisTemplate.hasKey(loadedKey(userId)))) {
+                rebuildFollowCache(userId, queryFolloweeIdsFromDb(userId));
+                return;
+            }
             String key = followKey(userId);
             if (follow) {
                 stringRedisTemplate.opsForSet().add(key, followUserId.toString());
-                stringRedisTemplate.expire(key, FOLLOW_CACHE_TTL, TimeUnit.MINUTES);
             } else {
                 stringRedisTemplate.opsForSet().remove(key, followUserId.toString());
             }
+            stringRedisTemplate.expire(key, FOLLOW_CACHE_TTL, TimeUnit.MINUTES);
             markFollowCacheLoaded(userId);
         } catch (RuntimeException e) {
             log.warn("sync follow cache failed, userId={}, followUserId={}, follow={}",
                     userId, followUserId, follow, e);
+        } finally {
+            unlockQuietly(lock, locked);
         }
     }
 
@@ -364,5 +392,18 @@ public class FollowServiceImpl extends ServiceImpl<FollowMapper, Follow> impleme
 
     private String loadedKey(Long userId) {
         return FOLLOW_LOADED_KEY + userId;
+    }
+
+    private void unlockQuietly(RLock lock, boolean locked) {
+        if (!locked || lock == null) {
+            return;
+        }
+        try {
+            if (lock.isHeldByCurrentThread()) {
+                lock.unlock();
+            }
+        } catch (RuntimeException e) {
+            log.warn("release follow cache lock failed", e);
+        }
     }
 }

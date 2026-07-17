@@ -117,18 +117,21 @@ public class RedissonChatMemoryStore implements ChatMemoryStore {
     @Override
     public List<ChatMessage> getMessages(Object memoryId) {
         String key = memoryId.toString();
+        String json;
 
         try {
-            // 获取Redis中指定key的字符串值
             RBucket<String> bucket = redissonClient.getBucket(key);
-            // 从Redis中获取序列化后的JSON字符串
-            String json = bucket.get();
+            json = bucket.get();
+        } catch (RuntimeException e) {
+            log.error("读取记忆失败: {}", getShortKey(key), e);
+            return new ArrayList<>();
+        }
 
+        if (json == null || json.isEmpty()) {
+            return new ArrayList<>();
+        }
 
-            if (json == null || json.isEmpty()) {
-                return new ArrayList<>();
-            }
-
+        try {
             //将从Redis获取的JSON字符串反序列化为SimpleChatMessage对象列表
             //通过 getTypeFactory().constructCollectionType 指定目标类型为包含SimpleChatMessage元素的List集合
             //将json转换为java对象
@@ -146,16 +149,17 @@ public class RedissonChatMemoryStore implements ChatMemoryStore {
             }
 
             return messages;
-
-        } catch (Exception e) {
-            log.error("获取记忆失败: {}", getShortKey(key), e);
-            // 发生错误时清除可能损坏的数据
+        } catch (JsonProcessingException e) {
+            log.error("记忆数据格式损坏: {}", getShortKey(key), e);
             try {
                 deleteMessages(memoryId);
                 log.info("已清理损坏的记忆数据: {}", getShortKey(key));
             } catch (Exception cleanupError) {
                 log.warn("清理损坏数据失败: {}", getShortKey(key));
             }
+            return new ArrayList<>();
+        } catch (RuntimeException e) {
+            log.error("转换记忆失败: {}", getShortKey(key), e);
             return new ArrayList<>();
         }
     }

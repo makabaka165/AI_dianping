@@ -183,10 +183,10 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
 
         recordShopOperation("update", id, buildUpdateAuditDetail(request), true, null);
         runAfterCommit(() -> {
-            stringRedisTemplate.delete(CACHE_SHOP_KEY + id);
-            shopAICacheInvalidationService.clearShopRelatedCaches(id);
+            runCacheSyncAction(() -> cacheClient.deleteWithMutex(CACHE_SHOP_KEY, id));
+            runCacheSyncAction(() -> shopAICacheInvalidationService.clearShopRelatedCaches(id));
             runGeoSyncAction(() -> shopGeoIndexService.refreshShopGeoIndex(oldShop, getById(id)));
-            updateShopExistsCache(id, true);
+            runCacheSyncAction(() -> updateShopExistsCache(id, true));
         });
         return Result.ok();
     }
@@ -483,14 +483,17 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
         if ((x == null) != (y == null)) {
             return "x and y must be provided together";
         }
-        if (x != null && (x < -180 || x > 180)) {
+        if (x != null && (!Double.isFinite(x) || x < -180 || x > 180)) {
             return "x must be between -180 and 180";
         }
-        if (y != null && (y < -90 || y > 90)) {
+        if (y != null && (!Double.isFinite(y) || y < -90 || y > 90)) {
             return "y must be between -90 and 90";
         }
         if ((lastDistance == null) != (lastId == null)) {
             return "lastDistance and lastId must be provided together";
+        }
+        if (lastDistance != null && !Double.isFinite(lastDistance)) {
+            return "lastDistance must be finite";
         }
         if (lastDistance != null && lastDistance < 0) {
             return "lastDistance must be greater than or equal to 0";

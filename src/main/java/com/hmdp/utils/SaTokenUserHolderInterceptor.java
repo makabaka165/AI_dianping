@@ -30,13 +30,15 @@ public class SaTokenUserHolderInterceptor implements HandlerInterceptor {
 
         Long userId = StpUtil.getLoginIdAsLong();
         User user = userService.getById(userId);
-        if (user != null) {
-            if (Integer.valueOf(USER_STATUS_DISABLED).equals(user.getStatus())) {
-                StpUtil.logout(userId);
-                throw new BusinessException(ErrorCode.ACCOUNT_DISABLED);
-            }
-            UserHolder.saveUser(BeanUtil.copyProperties(user, UserDTO.class));
+        if (user == null) {
+            StpUtil.logout(userId);
+            throw new BusinessException(ErrorCode.UNAUTHORIZED);
         }
+        if (Integer.valueOf(USER_STATUS_DISABLED).equals(user.getStatus())) {
+            StpUtil.logout(userId);
+            throw new BusinessException(ErrorCode.ACCOUNT_DISABLED);
+        }
+        UserHolder.saveUser(BeanUtil.copyProperties(user, UserDTO.class));
         return true;
     }
 

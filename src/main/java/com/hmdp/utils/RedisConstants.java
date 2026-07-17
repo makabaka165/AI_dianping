@@ -12,6 +12,7 @@ public class RedisConstants {
     public static final Long LOGIN_CODE_DAILY_LIMIT = 10L;
     public static final Long LOGIN_CODE_IP_MINUTE_LIMIT = 30L;
     public static final Long LOGIN_FAIL_LIMIT = 5L;
+    public static final Long LOGIN_PHONE_FAIL_LIMIT = 20L;
     public static final Long LOGIN_FAIL_WINDOW_MINUTES = 15L;
     public static final Long LOGIN_BLOCK_MINUTES = 15L;
     public static final Long CACHE_NULL_TTL = 2L;

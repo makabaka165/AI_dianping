@@ -110,7 +110,6 @@ public class CacheClient {
         try {
             locked = lock.tryLock(
                     cacheProperties.getMutex().getWaitTimeoutMillis(),
-                    lockLeaseMillis(),
                     TimeUnit.MILLISECONDS
             );
             if (!locked) {
@@ -137,6 +136,19 @@ public class CacheClient {
             Thread.currentThread().interrupt();
             log.warn("获取缓存互斥锁被中断，key={}", key, e);
             throw new CacheBusyException("cache mutex interrupted, please retry later");
+        } finally {
+            unlockQuietly(lock, locked);
+        }
+    }
+
+    public <ID> void deleteWithMutex(String keyPrefix, ID id) {
+        String key = keyPrefix + id;
+        RLock lock = redissonClient.getLock(LOCK_SHOP_KEY + id);
+        boolean locked = false;
+        try {
+            lock.lock();
+            locked = true;
+            stringRedisTemplate.delete(key);
         } finally {
             unlockQuietly(lock, locked);
         }
@@ -189,7 +201,6 @@ public class CacheClient {
                 try {
                     locked = lock.tryLock(
                             cacheProperties.getMutex().getWaitTimeoutMillis(),
-                            lockLeaseMillis(),
                             TimeUnit.MILLISECONDS
                     );
                     if (!locked) {
@@ -246,10 +257,6 @@ public class CacheClient {
         long logicalSeconds = Math.max(1L, unit.toSeconds(time));
         long minSeconds = TimeUnit.MINUTES.toSeconds(cacheProperties.getLogical().getMinPhysicalTtlMinutes());
         return Math.max(logicalSeconds * 2, minSeconds);
-    }
-
-    private long lockLeaseMillis() {
-        return TimeUnit.SECONDS.toMillis(cacheProperties.getMutex().getLeaseTimeSeconds());
     }
 
     private void unlockQuietly(RLock lock, boolean locked) {

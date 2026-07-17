@@ -156,6 +156,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     private volatile boolean running = false;
     private volatile boolean streamReady = false;
     private volatile boolean consumersStarted = false;
+    private volatile boolean shuttingDown = false;
 
     @Override
     public Result seckillVoucher(Long voucherId) {
@@ -359,27 +360,54 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
 
     @PostConstruct
     public void init() {
+        shuttingDown = false;
         if (!initializeStreamAndGroup()) {
             log.error("优惠券订单处理服务启动失败，Redis Stream不可用");
             return;
         }
-        initializeCloseOrderQueue();
-        running = true;
-        executor = createExecutor("voucher-order-handler", effectiveWorkerThreads());
-        closeOrderExecutor = createExecutor("voucher-order-close-handler", effectiveCloseWorkerThreads());
-        for (int i = 0; i < effectiveWorkerThreads(); i++) {
-            submitConsumerLoop(executor, new VoucherOrderHandler(i + 1));
+        try {
+            startConsumersIfNeeded();
+        } catch (RuntimeException e) {
+            log.error("优惠券订单消费者启动失败，将等待健康检查重试", e);
         }
-        for (int i = 0; i < effectiveCloseWorkerThreads(); i++) {
-            submitConsumerLoop(closeOrderExecutor, new VoucherOrderCloseHandler(i + 1));
+    }
+
+    protected synchronized void startConsumersIfNeeded() {
+        if (shuttingDown || consumersStarted) {
+            return;
         }
-        consumersStarted = true;
+        try {
+            initializeCloseOrderQueue();
+            executor = createExecutor("voucher-order-handler", effectiveWorkerThreads());
+            closeOrderExecutor = createExecutor("voucher-order-close-handler", effectiveCloseWorkerThreads());
+            running = true;
+            for (int i = 0; i < effectiveWorkerThreads(); i++) {
+                submitConsumerLoop(executor, new VoucherOrderHandler(i + 1));
+            }
+            for (int i = 0; i < effectiveCloseWorkerThreads(); i++) {
+                submitConsumerLoop(closeOrderExecutor, new VoucherOrderCloseHandler(i + 1));
+            }
+            consumersStarted = true;
+        } catch (RuntimeException e) {
+            rollbackConsumerStartup();
+            throw e;
+        }
         log.info("优惠券订单处理服务启动成功，consumer={}, workerThreads={}, closeWorkerThreads={}",
                 consumerName, effectiveWorkerThreads(), effectiveCloseWorkerThreads());
     }
 
+    private void rollbackConsumerStartup() {
+        running = false;
+        consumersStarted = false;
+        shutdownExecutor(closeOrderExecutor, "优惠券订单关闭服务启动回滚");
+        shutdownExecutor(executor, "优惠券订单处理服务启动回滚");
+        closeOrderExecutor = null;
+        executor = null;
+    }
+
     @PreDestroy
-    public void destroy() {
+    public synchronized void destroy() {
+        shuttingDown = true;
         running = false;
         consumersStarted = false;
         shutdownExecutor(closeOrderExecutor, "优惠券订单关闭服务");
@@ -429,7 +457,9 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         try {
             boolean ready = verifyStreamAndGroup() || initializeStreamAndGroup();
             streamReady = ready;
-            if (!ready) {
+            if (ready) {
+                startConsumersIfNeeded();
+            } else {
                 log.warn("秒杀订单Stream健康检查失败，health={}", getOrderConsumerHealth());
             }
         } catch (Exception e) {
@@ -930,6 +960,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
 
     protected void acknowledgeMessage(MapRecord<String, Object, Object> record) {
         stringRedisTemplate.opsForStream().acknowledge(STREAM_KEY, GROUP_NAME, record.getId());
+        stringRedisTemplate.opsForStream().delete(STREAM_KEY, record.getId());
     }
 
     protected PendingMessage findPendingMessage(RecordId recordId) {
@@ -1099,6 +1130,8 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         } catch (InterruptedException e) {
             targetExecutor.shutdownNow();
             Thread.currentThread().interrupt();
+        } catch (RuntimeException e) {
+            log.warn("关闭{}失败，consumer={}", name, consumerName, e);
         }
     }
 

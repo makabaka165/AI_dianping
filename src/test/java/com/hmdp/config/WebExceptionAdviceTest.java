@@ -31,4 +31,14 @@ class WebExceptionAdviceTest {
         assertThat(result.getCode()).isEqualTo(ErrorCode.PARAM_ERROR.getCode());
         assertThat(result.getErrorMsg()).isEqualTo("shopId must be positive");
     }
+
+    @Test
+    void illegalStateExceptionShouldReturnSystemErrorWithoutInternalMessage() {
+        Result result = advice.handleIllegalStateException(
+                new IllegalStateException("Read AI task failed: redis.internal:6379"));
+
+        assertThat(result.getCode()).isEqualTo(ErrorCode.SYSTEM_ERROR.getCode());
+        assertThat(result.getErrorMsg()).isEqualTo(ErrorCode.SYSTEM_ERROR.getMessage());
+        assertThat(result.getErrorMsg()).doesNotContain("redis.internal");
+    }
 }

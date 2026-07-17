@@ -12,12 +12,14 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.redisson.api.RLock;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -25,6 +27,9 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -44,8 +49,14 @@ class AiTaskWorkerTest {
     @Mock
     private AiTaskEventPublisher eventPublisher;
 
+    @Mock
+    private RLock taskLock;
+
     @BeforeEach
-    void setUp() {
+    void setUp() throws InterruptedException {
+        lenient().when(repository.executionLock(any(String.class))).thenReturn(taskLock);
+        lenient().when(taskLock.tryLock(1L, TimeUnit.SECONDS)).thenReturn(true);
+        lenient().when(taskLock.isHeldByCurrentThread()).thenReturn(true);
     }
 
     @Test
@@ -78,6 +89,25 @@ class AiTaskWorkerTest {
         verify(repository).clearInflight("dedup-1");
         verify(eventPublisher, times(2)).publish(any(AiTaskEvent.class));
         verify(aiMetricsService).recordDuration(eq("ai_task"), anyLong(), eq(false));
+        verify(aiMetricsService).increment("ai.task.count", "ai_task", false);
+    }
+
+    @Test
+    void processShouldKeepSuccessWhenEventAndMetricsPublishingFail() throws Exception {
+        AiTask task = task(AiTaskType.RAG_REBUILD_SHOP, params("shopId", 7));
+        AiTaskHandler handler = handler(AiTaskType.RAG_REBUILD_SHOP);
+        AiTaskWorker worker = workerWith(handler);
+        when(repository.find("task-1")).thenReturn(Optional.of(task));
+        when(handler.handle(eq(task), any(AiTaskProgressReporter.class))).thenReturn("ok");
+        doThrow(new IllegalStateException("topic down")).when(eventPublisher).publish(any(AiTaskEvent.class));
+        doThrow(new IllegalStateException("metrics down"))
+                .when(aiMetricsService).recordDuration(eq("ai_task"), anyLong(), eq(false));
+
+        worker.process("task-1");
+
+        assertThat(task.getStatus()).isEqualTo(AiTaskStatus.SUCCESS);
+        assertThat(task.getResult()).isEqualTo("ok");
+        verify(repository).clearInflight("dedup-1");
         verify(aiMetricsService).increment("ai.task.count", "ai_task", false);
     }
 
@@ -155,6 +185,45 @@ class AiTaskWorkerTest {
         assertThat(task.getErrorMessage()).contains("Unsupported AI task type");
         verify(repository, times(2)).update(any(AiTask.class));
         verify(repository).clearInflight("dedup-1");
+    }
+
+    @Test
+    void processShouldSkipTaskThatIsAlreadyTerminal() throws Exception {
+        AiTask task = task(AiTaskType.RAG_REBUILD_SHOP, params("shopId", 7));
+        task.setStatus(AiTaskStatus.SUCCESS);
+        AiTaskHandler handler = handler(AiTaskType.RAG_REBUILD_SHOP);
+        AiTaskWorker worker = workerWith(handler);
+        when(repository.find("task-1")).thenReturn(Optional.of(task));
+
+        worker.process("task-1");
+
+        verify(handler, never()).handle(any(AiTask.class), any(AiTaskProgressReporter.class));
+        verify(repository, never()).update(any(AiTask.class));
+    }
+
+    @Test
+    void processShouldRequeueDuplicateEntryWhileExecutionLockIsHeld() throws Exception {
+        AiTaskHandler handler = handler(AiTaskType.RAG_REBUILD_SHOP);
+        AiTaskWorker worker = workerWith(handler);
+        when(taskLock.tryLock(1L, TimeUnit.SECONDS)).thenReturn(false);
+
+        worker.process("task-1");
+
+        verify(queue).enqueue("task-1");
+        verify(repository, never()).find("task-1");
+        verify(handler, never()).handle(any(AiTask.class), any(AiTaskProgressReporter.class));
+    }
+
+    @Test
+    void processShouldRequeueWhenTaskLookupFailsBeforeExecution() throws Exception {
+        AiTaskWorker worker = workerWith(handler(AiTaskType.RAG_REBUILD_SHOP));
+        when(repository.find("task-1")).thenThrow(new IllegalStateException("redis down"));
+
+        assertThatThrownBy(() -> worker.process("task-1"))
+                .isInstanceOf(IllegalStateException.class);
+
+        verify(queue).enqueue("task-1");
+        verify(taskLock).unlock();
     }
 
     @Test

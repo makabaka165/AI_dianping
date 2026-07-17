@@ -43,6 +43,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -160,7 +161,6 @@ class UserServiceImplTest {
         MockHttpServletRequest loginRequest = new MockHttpServletRequest();
         RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(loginRequest));
         when(requestContextResolver.getDeviceFingerprint(loginRequest)).thenReturn("resolver-device");
-        when(stringRedisTemplate.hasKey(LOGIN_BLOCK_KEY + PHONE + ":resolver-device")).thenReturn(false);
         when(userMapper.selectOne(any())).thenReturn(new User()
                 .setId(7L)
                 .setPhone(PHONE)
@@ -189,7 +189,6 @@ class UserServiceImplTest {
         MockHttpServletRequest request = new MockHttpServletRequest();
         RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
         when(requestContextResolver.getDeviceFingerprint(any(HttpServletRequest.class))).thenReturn("resolver-device");
-        when(stringRedisTemplate.hasKey(LOGIN_BLOCK_KEY + PHONE + ":resolver-device")).thenReturn(false);
         when(stringRedisTemplate.execute(any(DefaultRedisScript.class), anyList(), anyString()))
                 .thenReturn(1L);
 
@@ -201,7 +200,29 @@ class UserServiceImplTest {
 
         assertThat(result.getSuccess()).isFalse();
         ArgumentCaptor<List> keysCaptor = ArgumentCaptor.forClass(List.class);
-        verify(stringRedisTemplate).execute(any(DefaultRedisScript.class), keysCaptor.capture(), anyString());
-        assertThat(keysCaptor.getValue()).containsExactly(LOGIN_FAIL_COUNT_KEY + PHONE + ":resolver-device");
+        verify(stringRedisTemplate, times(2)).execute(any(DefaultRedisScript.class), keysCaptor.capture(), anyString());
+        assertThat(keysCaptor.getAllValues()).containsExactly(
+                List.of(LOGIN_FAIL_COUNT_KEY + "device:" + PHONE + ":resolver-device"),
+                List.of(LOGIN_FAIL_COUNT_KEY + "phone:" + PHONE)
+        );
+    }
+
+    @Test
+    void loginFailureShouldBlockPhoneAfterGlobalLimitAcrossDeviceFingerprints() {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+        when(requestContextResolver.getDeviceFingerprint(any(HttpServletRequest.class))).thenReturn("rotated-user-agent");
+        when(stringRedisTemplate.execute(any(DefaultRedisScript.class), anyList(), anyString()))
+                .thenReturn(1L, 20L);
+
+        LoginFormDTO loginForm = new LoginFormDTO();
+        loginForm.setPhone(PHONE);
+        loginForm.setCode("");
+
+        Result result = userService.login(loginForm, null);
+
+        assertThat(result.getSuccess()).isFalse();
+        assertThat(result.getCode()).isEqualTo(ErrorCode.LOGIN_BLOCKED.getCode());
+        verify(valueOperations).set(LOGIN_BLOCK_KEY + "phone:" + PHONE, "1", 15L, TimeUnit.MINUTES);
     }
 }

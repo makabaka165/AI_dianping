@@ -6,6 +6,7 @@ import com.hmdp.dto.ai.AiTaskEvent;
 import com.hmdp.dto.ai.AiTaskStatus;
 import com.hmdp.dto.ai.AiTaskType;
 import lombok.extern.slf4j.Slf4j;
+import org.redisson.api.RLock;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -17,11 +18,14 @@ import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 @Component
 @Slf4j
 public class AiTaskWorker {
+
+    private static final long EXECUTION_LOCK_WAIT_SECONDS = 1L;
 
     @Resource
     private AiTaskQueue queue;
@@ -85,10 +89,46 @@ public class AiTaskWorker {
     }
 
     void process(String taskId) {
-        AiTask task = repository.find(taskId).orElse(null);
-        if (task == null) {
+        RLock lock;
+        try {
+            lock = repository.executionLock(taskId);
+        } catch (RuntimeException e) {
+            requeueTask(taskId);
+            throw e;
+        }
+        boolean locked;
+        try {
+            locked = lock.tryLock(EXECUTION_LOCK_WAIT_SECONDS, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            requeueTask(taskId);
+            Thread.currentThread().interrupt();
+            return;
+        } catch (RuntimeException e) {
+            requeueTask(taskId);
+            throw e;
+        }
+        if (!locked) {
+            requeueTask(taskId);
             return;
         }
+        try {
+            AiTask task;
+            try {
+                task = repository.find(taskId).orElse(null);
+            } catch (RuntimeException e) {
+                requeueTask(taskId);
+                throw e;
+            }
+            if (task == null || task.getStatus() != AiTaskStatus.PENDING) {
+                return;
+            }
+            executeTask(taskId, task);
+        } finally {
+            unlockQuietly(lock);
+        }
+    }
+
+    private void executeTask(String taskId, AiTask task) {
         long start = System.currentTimeMillis();
         boolean failed = false;
         try {
@@ -116,6 +156,30 @@ public class AiTaskWorker {
             repository.clearInflight(task.getDedupKey());
             publishEvent(task);
             recordMetrics(System.currentTimeMillis() - start, failed);
+        }
+    }
+
+    private void requeueTask(String taskId) {
+        if (taskId == null || taskId.trim().isEmpty()) {
+            return;
+        }
+        try {
+            queue.enqueue(taskId);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            log.warn("Requeue AI task interrupted, taskId={}", taskId, e);
+        } catch (RuntimeException e) {
+            log.warn("Requeue AI task failed, taskId={}", taskId, e);
+        }
+    }
+
+    private void unlockQuietly(RLock lock) {
+        try {
+            if (lock != null && lock.isHeldByCurrentThread()) {
+                lock.unlock();
+            }
+        } catch (RuntimeException e) {
+            log.warn("Release AI task execution lock failed", e);
         }
     }
 
@@ -147,14 +211,26 @@ public class AiTaskWorker {
     }
 
     private void recordMetrics(long durationMillis, boolean failed) {
-        if (aiMetricsService != null) {
+        if (aiMetricsService == null) {
+            return;
+        }
+        try {
             aiMetricsService.recordDuration("ai_task", durationMillis, failed);
+        } catch (RuntimeException e) {
+            log.warn("Record AI task duration metric failed", e);
+        }
+        try {
             aiMetricsService.increment("ai.task.count", "ai_task", failed);
+        } catch (RuntimeException e) {
+            log.warn("Record AI task count metric failed", e);
         }
     }
 
     private void publishEvent(AiTask task) {
-        if (eventPublisher != null && task != null) {
+        if (eventPublisher == null || task == null) {
+            return;
+        }
+        try {
             eventPublisher.publish(AiTaskEvent.builder()
                     .taskId(task.getTaskId())
                     .status(task.getStatus())
@@ -163,6 +239,8 @@ public class AiTaskWorker {
                     .errorMessage(task.getErrorMessage())
                     .timestampEpochMillis(System.currentTimeMillis())
                     .build());
+        } catch (RuntimeException e) {
+            log.warn("Publish AI task event failed, taskId={}", task.getTaskId(), e);
         }
     }
 

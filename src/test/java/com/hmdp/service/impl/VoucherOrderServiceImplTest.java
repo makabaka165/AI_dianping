@@ -19,6 +19,7 @@ import org.springframework.data.redis.connection.stream.PendingMessage;
 import org.springframework.data.redis.connection.stream.RecordId;
 import org.springframework.data.redis.core.HashOperations;
 import org.springframework.data.redis.core.SetOperations;
+import org.springframework.data.redis.core.StreamOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -58,6 +59,9 @@ class VoucherOrderServiceImplTest {
 
     @Mock
     private SeckillVoucherMapper seckillVoucherMapper;
+
+    @Mock
+    private StreamOperations<String, Object, Object> streamOperations;
 
     private TestableVoucherOrderServiceImpl service;
 
@@ -158,6 +162,7 @@ class VoucherOrderServiceImplTest {
 
     @Test
     void initShouldSubmitConfiguredConsumerLoops() {
+        prepareForConsumerStart();
         service.streamInitResult = true;
         ReflectionTestUtils.setField(service, "workerThreads", 2);
         ReflectionTestUtils.setField(service, "closeWorkerThreads", 3);
@@ -169,6 +174,100 @@ class VoucherOrderServiceImplTest {
         assertThat(service.getOrderConsumerHealth()).containsEntry("workerThreads", 2);
         assertThat(service.getOrderConsumerHealth()).containsEntry("closeWorkerThreads", 3);
         service.destroy();
+    }
+
+    @Test
+    void healthCheckShouldStartConsumersAfterStartupRedisFailureAndOnlyStartOnce() {
+        prepareForConsumerStart();
+        ReflectionTestUtils.setField(service, "streamHealthCheckEnabled", true);
+        ReflectionTestUtils.setField(service, "workerThreads", 2);
+        ReflectionTestUtils.setField(service, "closeWorkerThreads", 1);
+        service.streamInitResult = false;
+
+        service.init();
+
+        assertThat(service.submittedConsumerLoops).isZero();
+        assertThat(service.submittedCloseLoops).isZero();
+
+        service.streamVerifyResult = true;
+        service.refreshOrderStreamHealth();
+        service.refreshOrderStreamHealth();
+
+        assertThat(service.submittedConsumerLoops).isEqualTo(2);
+        assertThat(service.submittedCloseLoops).isEqualTo(1);
+        assertThat(service.isOrderStreamReady()).isTrue();
+        service.destroy();
+    }
+
+    @Test
+    void consumerStartupFailureShouldRollbackBothExecutorsAndReadiness() {
+        prepareForConsumerStart();
+        ReflectionTestUtils.setField(service, "workerThreads", 2);
+        ReflectionTestUtils.setField(service, "closeWorkerThreads", 1);
+        service.failConsumerLoopSubmissionAt = 2;
+
+        assertThatThrownBy(service::startConsumersIfNeeded)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("submit consumer loop failed");
+
+        assertThat(service.getOrderConsumerHealth())
+                .containsEntry("running", false)
+                .containsEntry("consumersStarted", false);
+        assertThat(service.isOrderServiceReady()).isFalse();
+        assertThat(service.createdExecutors).isNotEmpty().allMatch(ExecutorService::isShutdown);
+        assertThat(ReflectionTestUtils.getField(service, "executor")).isNull();
+        assertThat(ReflectionTestUtils.getField(service, "closeOrderExecutor")).isNull();
+    }
+
+    @Test
+    void initShouldRemainAvailableForHealthCheckRetryAfterConsumerStartupFailure() {
+        prepareForConsumerStart();
+        ReflectionTestUtils.setField(service, "streamHealthCheckEnabled", true);
+        ReflectionTestUtils.setField(service, "workerThreads", 1);
+        ReflectionTestUtils.setField(service, "closeWorkerThreads", 1);
+        service.streamInitResult = true;
+        service.failConsumerLoopSubmissionAt = 1;
+
+        service.init();
+
+        assertThat(service.isOrderServiceReady()).isFalse();
+        assertThat(service.getOrderConsumerHealth())
+                .containsEntry("running", false)
+                .containsEntry("consumersStarted", false);
+
+        service.failConsumerLoopSubmissionAt = -1;
+        service.streamVerifyResult = true;
+        service.refreshOrderStreamHealth();
+
+        assertThat(service.isOrderServiceReady()).isTrue();
+        service.destroy();
+    }
+
+    @Test
+    void acknowledgeShouldDeleteProcessedEntryAfterAck() {
+        MapRecord<String, Object, Object> record = record("1-0", Map.of("id", "1001"));
+        when(stringRedisTemplate.opsForStream()).thenReturn(streamOperations);
+
+        service.acknowledgeUsingBase(record);
+
+        verify(streamOperations).acknowledge(VoucherOrderServiceImpl.STREAM_KEY,
+                VoucherOrderServiceImpl.GROUP_NAME, record.getId());
+        verify(streamOperations).delete(VoucherOrderServiceImpl.STREAM_KEY, record.getId());
+    }
+
+    @Test
+    void acknowledgeFailureShouldNotDeleteUnacknowledgedEntry() {
+        MapRecord<String, Object, Object> record = record("1-0", Map.of("id", "1001"));
+        when(stringRedisTemplate.opsForStream()).thenReturn(streamOperations);
+        when(streamOperations.acknowledge(VoucherOrderServiceImpl.STREAM_KEY,
+                VoucherOrderServiceImpl.GROUP_NAME, record.getId()))
+                .thenThrow(new IllegalStateException("redis ack failed"));
+
+        assertThatThrownBy(() -> service.acknowledgeUsingBase(record))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("redis ack failed");
+
+        verify(streamOperations, never()).delete(VoucherOrderServiceImpl.STREAM_KEY, record.getId());
     }
 
     @Test
@@ -684,6 +783,16 @@ class VoucherOrderServiceImplTest {
         return MapRecord.create(VoucherOrderServiceImpl.STREAM_KEY, value).withId(RecordId.of(id));
     }
 
+    private void prepareForConsumerStart() {
+        ExecutorService existingExecutor = (ExecutorService) ReflectionTestUtils.getField(service, "executor");
+        if (existingExecutor != null) {
+            existingExecutor.shutdownNow();
+        }
+        ReflectionTestUtils.setField(service, "running", false);
+        ReflectionTestUtils.setField(service, "consumersStarted", false);
+        ReflectionTestUtils.setField(service, "shuttingDown", false);
+    }
+
     private static class TestableVoucherOrderServiceImpl extends VoucherOrderServiceImpl {
         private final List<VoucherOrder> savedOrders = new ArrayList<>();
         private final List<MapRecord<String, Object, Object>> processedRecords = new ArrayList<>();
@@ -703,11 +812,15 @@ class VoucherOrderServiceImplTest {
         private boolean duplicateOnSave = false;
         private boolean failProcessing = false;
         private boolean streamInitResult = true;
+        private boolean streamVerifyResult = false;
         private boolean redisRestoreResult = true;
         private boolean forcePayUpdateFailure = false;
         private VoucherOrder orderAfterForcedPayUpdateFailure;
         private int submittedConsumerLoops = 0;
         private int submittedCloseLoops = 0;
+        private int consumerLoopSubmissionAttempts = 0;
+        private int failConsumerLoopSubmissionAt = -1;
+        private final List<ExecutorService> createdExecutors = new ArrayList<>();
         private PendingMessage pendingMessage;
 
         @Override
@@ -717,12 +830,23 @@ class VoucherOrderServiceImplTest {
         }
 
         @Override
+        protected boolean verifyStreamAndGroup() {
+            return streamVerifyResult;
+        }
+
+        @Override
         protected ExecutorService createExecutor(String threadNamePrefix, int threads) {
-            return java.util.concurrent.Executors.newFixedThreadPool(threads);
+            ExecutorService created = java.util.concurrent.Executors.newFixedThreadPool(threads);
+            createdExecutors.add(created);
+            return created;
         }
 
         @Override
         protected void submitConsumerLoop(ExecutorService targetExecutor, Runnable task) {
+            consumerLoopSubmissionAttempts++;
+            if (consumerLoopSubmissionAttempts == failConsumerLoopSubmissionAt) {
+                throw new IllegalStateException("submit consumer loop failed");
+            }
             String className = task.getClass().getSimpleName();
             if (className.contains("VoucherOrderCloseHandler")) {
                 submittedCloseLoops++;
@@ -756,6 +880,10 @@ class VoucherOrderServiceImplTest {
         @Override
         protected void acknowledgeMessage(MapRecord<String, Object, Object> record) {
             ackedRecords.add(record);
+        }
+
+        private void acknowledgeUsingBase(MapRecord<String, Object, Object> record) {
+            super.acknowledgeMessage(record);
         }
 
         @Override

@@ -1,10 +1,14 @@
 package com.hmdp.ai.task;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.hmdp.ai.infra.AiLogSanitizer;
 import com.hmdp.dto.ai.AiTask;
 import com.hmdp.dto.ai.AiTaskStatus;
+import lombok.extern.slf4j.Slf4j;
 import org.redisson.api.RBucket;
+import org.redisson.api.RLock;
 import org.redisson.api.RSet;
 import org.redisson.api.RedissonClient;
 import org.springframework.beans.factory.annotation.Value;
@@ -17,6 +21,7 @@ import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 
 @Repository
+@Slf4j
 public class AiTaskRepository {
 
     @Resource
@@ -49,16 +54,30 @@ public class AiTaskRepository {
         if (taskId == null || taskId.trim().isEmpty()) {
             return Optional.empty();
         }
+        String json;
         try {
             RBucket<String> bucket = redissonClient.getBucket(taskKey(taskId));
-            String json = bucket.get();
-            if (json == null || json.trim().isEmpty()) {
-                return Optional.empty();
-            }
-            return Optional.of(objectMapper.readValue(json, AiTask.class));
-        } catch (Exception e) {
+            json = bucket.get();
+        } catch (RuntimeException e) {
+            throw new IllegalStateException("Read AI task failed", e);
+        }
+        if (json == null || json.trim().isEmpty()) {
             return Optional.empty();
         }
+        try {
+            return Optional.of(objectMapper.readValue(json, AiTask.class));
+        } catch (JsonProcessingException e) {
+            log.error("AI task data is corrupt, taskId={}, error={}",
+                    AiLogSanitizer.safe(taskId, 64), e.getClass().getSimpleName());
+            return Optional.empty();
+        }
+    }
+
+    public RLock executionLock(String taskId) {
+        if (taskId == null || taskId.trim().isEmpty()) {
+            throw new IllegalArgumentException("taskId must not be blank");
+        }
+        return redissonClient.getLock(bucketPrefix + "lock:" + taskId);
     }
 
     public void update(AiTask task) {
@@ -126,7 +145,7 @@ public class AiTaskRepository {
         if (oldStatus != null && oldStatus != newStatus) {
             redissonClient.getSet(statusIndexKey(oldStatus)).remove(taskId);
         }
-        if (newStatus != null) {
+        if (newStatus == AiTaskStatus.PENDING || newStatus == AiTaskStatus.RUNNING) {
             redissonClient.getSet(statusIndexKey(newStatus)).add(taskId);
         }
     }

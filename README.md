@@ -92,7 +92,7 @@ ShopSummaryController
 
 ## AI 观测与 Prompt 灰度
 
-- `/actuator/prometheus` 暴露 Prometheus 指标；默认只暴露 `health`、`info`、`prometheus`。
+- 默认只暴露 `health`、`info`；需要 Prometheus 时设置 `MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE=health,info,prometheus`。
 - AI 指标包括请求耗时、模型耗时、估算 token、缓存命中、降级次数、质量拒绝、证据数量、RAG 搜索和索引统计。
 - AI 入口增加用户级配额，默认每用户每分钟 10 次、每天 200 次；系统级 `ModelGateway` RateLimiter 仍作为全局保护。
 - `ModelGateway` 会按模型调用记录估算输入/输出 token；该估算用于成本趋势，不等同于供应商精确计费。
@@ -122,7 +122,7 @@ ShopSummaryController
 | `POST` | `/api/shop-summary/{shopId}/with-memory` | 生成总结并写入 summary memory |
 | `POST` | `/api/shop-summary/admin/rag/shops/{shopId}/rebuild` | 管理端回补单店评价 RAG 索引 |
 | `POST` | `/api/shop-summary/admin/rag/rebuild` | 管理端回补全部评价 RAG 索引 |
-| `GET` | `/actuator/prometheus` | Prometheus 指标 |
+| `GET` | `/actuator/prometheus` | Prometheus 指标（需显式启用） |
 
 结构化响应示例：
 

@@ -6,6 +6,7 @@ import com.hmdp.dto.ai.AiTaskEvent;
 import com.hmdp.dto.ai.AiTaskStatus;
 import com.hmdp.dto.ai.AiTaskType;
 import lombok.extern.slf4j.Slf4j;
+import org.redisson.api.RLock;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
@@ -40,6 +41,9 @@ public class AiTaskService {
     @Value("${hmdp.ai.task.running-timeout-minutes:30}")
     private long runningTimeoutMinutes = 30L;
 
+    @Value("${hmdp.ai.task.pending-timeout-minutes:30}")
+    private long pendingTimeoutMinutes = 30L;
+
     @Value("${hmdp.ai.task.max-retry-count:3}")
     private int maxRetryCount = 3;
 
@@ -70,17 +74,21 @@ public class AiTaskService {
                 .createdAtEpochMillis(now)
                 .updatedAtEpochMillis(now)
                 .build();
+        boolean saved = false;
         try {
             repository.save(task);
+            saved = true;
             queue.enqueue(taskId);
             recordIncrement("ai.task.submitted", false);
             return taskId;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            repository.clearInflight(dedupKey);
+            markSubmissionFailed(task, saved, "AI task enqueue interrupted");
+            clearInflightQuietly(dedupKey);
             throw new IllegalStateException("Submit AI task interrupted", e);
         } catch (RuntimeException e) {
-            repository.clearInflight(dedupKey);
+            markSubmissionFailed(task, saved, "AI task enqueue failed");
+            clearInflightQuietly(dedupKey);
             throw e;
         }
     }
@@ -95,7 +103,31 @@ public class AiTaskService {
         if (!stuckScanEnabled) {
             return;
         }
-        recoverStuckRunningTasks(System.currentTimeMillis());
+        long nowMillis = System.currentTimeMillis();
+        try {
+            recoverStuckPendingTasks(nowMillis);
+        } catch (RuntimeException e) {
+            log.warn("Recover stuck PENDING AI tasks failed", e);
+        }
+        try {
+            recoverStuckRunningTasks(nowMillis);
+        } catch (RuntimeException e) {
+            log.warn("Recover stuck RUNNING AI tasks failed", e);
+        }
+    }
+
+    int recoverStuckPendingTasks(long nowMillis) {
+        List<AiTask> pendingTasks = repository.findByStatus(AiTaskStatus.PENDING, effectiveStuckScanLimit());
+        int recovered = 0;
+        for (AiTask task : pendingTasks) {
+            if (task == null || !isPendingTimeout(task, nowMillis)) {
+                continue;
+            }
+            if (recoverOnePendingTask(task, nowMillis)) {
+                recovered++;
+            }
+        }
+        return recovered;
     }
 
     int recoverStuckRunningTasks(long nowMillis) {
@@ -105,15 +137,67 @@ public class AiTaskService {
             if (task == null || !isHeartbeatTimeout(task, nowMillis)) {
                 continue;
             }
-            recoverOneTask(task, nowMillis);
-            recovered++;
+            if (recoverOneTask(task, nowMillis)) {
+                recovered++;
+            }
         }
         return recovered;
     }
 
-    private void recoverOneTask(AiTask task, long nowMillis) {
+    private boolean recoverOneTask(AiTask candidate, long nowMillis) {
+        RLock lock = repository.executionLock(candidate.getTaskId());
+        if (!lock.tryLock()) {
+            return false;
+        }
+        try {
+            AiTask task = repository.find(candidate.getTaskId()).orElse(null);
+            if (task == null || task.getStatus() != AiTaskStatus.RUNNING || !isHeartbeatTimeout(task, nowMillis)) {
+                return false;
+            }
+            recoverLockedTask(task, nowMillis);
+            return true;
+        } catch (RuntimeException e) {
+            log.warn("Recover AI task failed, taskId={}", candidate.getTaskId(), e);
+            return false;
+        } finally {
+            unlockQuietly(lock);
+        }
+    }
+
+    private boolean recoverOnePendingTask(AiTask candidate, long nowMillis) {
+        RLock lock = repository.executionLock(candidate.getTaskId());
+        if (!lock.tryLock()) {
+            return false;
+        }
+        try {
+            AiTask task = repository.find(candidate.getTaskId()).orElse(null);
+            if (task == null || task.getStatus() != AiTaskStatus.PENDING || !isPendingTimeout(task, nowMillis)) {
+                return false;
+            }
+            task.setErrorMessage("task pending timeout, requeued");
+            repository.update(task);
+            try {
+                queue.enqueue(task.getTaskId());
+                publishEvent(task);
+                recordIncrement("ai.task.pending.requeued", false);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                failRequeue(task, nowMillis, "task pending timeout, requeue interrupted");
+            } catch (RuntimeException e) {
+                log.warn("Requeue pending AI task failed, taskId={}", task.getTaskId(), e);
+                failRequeue(task, nowMillis, "task pending timeout, requeue failed");
+            }
+            return true;
+        } catch (RuntimeException e) {
+            log.warn("Recover pending AI task failed, taskId={}", candidate.getTaskId(), e);
+            return false;
+        } finally {
+            unlockQuietly(lock);
+        }
+    }
+
+    private void recoverLockedTask(AiTask task, long nowMillis) {
         int retryCount = task.getRetryCount() == null ? 0 : task.getRetryCount();
-        repository.clearInflight(task.getDedupKey());
         if (retryCount < effectiveMaxRetryCount()) {
             task.setRetryCount(retryCount + 1);
             task.setStatus(AiTaskStatus.PENDING);
@@ -128,12 +212,10 @@ public class AiTaskService {
                 recordIncrement("ai.task.requeued", false);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                task.setStatus(AiTaskStatus.FAILED);
-                task.setFinishedAtEpochMillis(nowMillis);
-                task.setErrorMessage("task heartbeat timeout, requeue interrupted");
-                repository.update(task);
-                publishEvent(task);
-                recordIncrement("ai.task.requeue.failed", true);
+                failRequeue(task, nowMillis, "task heartbeat timeout, requeue interrupted");
+            } catch (RuntimeException e) {
+                log.warn("Requeue timed-out AI task failed, taskId={}", task.getTaskId(), e);
+                failRequeue(task, nowMillis, "task heartbeat timeout, requeue failed");
             }
             return;
         }
@@ -141,8 +223,53 @@ public class AiTaskService {
         task.setFinishedAtEpochMillis(nowMillis);
         task.setErrorMessage("task heartbeat timeout, max retry exceeded");
         repository.update(task);
+        clearInflightQuietly(task.getDedupKey());
         publishEvent(task);
         recordIncrement("ai.task.timeout.failed", true);
+    }
+
+    private void failRequeue(AiTask task, long nowMillis, String message) {
+        task.setStatus(AiTaskStatus.FAILED);
+        task.setFinishedAtEpochMillis(nowMillis);
+        task.setErrorMessage(message);
+        repository.update(task);
+        clearInflightQuietly(task.getDedupKey());
+        publishEvent(task);
+        recordIncrement("ai.task.requeue.failed", true);
+    }
+
+    private void markSubmissionFailed(AiTask task, boolean saved, String message) {
+        if (!saved || task == null) {
+            return;
+        }
+        task.setStatus(AiTaskStatus.FAILED);
+        task.setErrorMessage(message);
+        task.setFinishedAtEpochMillis(System.currentTimeMillis());
+        try {
+            repository.update(task);
+            publishEvent(task);
+            recordIncrement("ai.task.submit.failed", true);
+        } catch (RuntimeException e) {
+            log.warn("Persist failed AI task submission state failed, taskId={}", task.getTaskId(), e);
+        }
+    }
+
+    private void clearInflightQuietly(String dedupKey) {
+        try {
+            repository.clearInflight(dedupKey);
+        } catch (RuntimeException e) {
+            log.warn("Clear failed AI task inflight key failed", e);
+        }
+    }
+
+    private void unlockQuietly(RLock lock) {
+        try {
+            if (lock != null && lock.isHeldByCurrentThread()) {
+                lock.unlock();
+            }
+        } catch (RuntimeException e) {
+            log.warn("Release AI task recovery lock failed", e);
+        }
     }
 
     private boolean isHeartbeatTimeout(AiTask task, long nowMillis) {
@@ -151,6 +278,14 @@ public class AiTaskService {
                 : task.getHeartbeatAtEpochMillis();
         long timeoutMillis = Math.max(1L, runningTimeoutMinutes) * 60_000L;
         return heartbeatAt > 0 && nowMillis - heartbeatAt >= timeoutMillis;
+    }
+
+    private boolean isPendingTimeout(AiTask task, long nowMillis) {
+        Long updatedAt = task.getUpdatedAtEpochMillis();
+        Long createdAt = task.getCreatedAtEpochMillis();
+        long pendingAt = updatedAt == null ? createdAt == null ? 0L : createdAt : updatedAt;
+        long timeoutMillis = Math.max(1L, pendingTimeoutMinutes) * 60_000L;
+        return pendingAt > 0 && nowMillis - pendingAt >= timeoutMillis;
     }
 
     static String dedupKey(AiTaskType type, Map<String, Object> params, String ownerUserId) {
@@ -172,8 +307,13 @@ public class AiTaskService {
     }
 
     private void recordIncrement(String metric, boolean failed) {
-        if (aiMetricsService != null) {
+        if (aiMetricsService == null) {
+            return;
+        }
+        try {
             aiMetricsService.increment(metric, "ai_task", failed);
+        } catch (RuntimeException e) {
+            log.warn("Record AI task metric failed, metric={}", metric, e);
         }
     }
 
@@ -186,7 +326,10 @@ public class AiTaskService {
     }
 
     private void publishEvent(AiTask task) {
-        if (eventPublisher != null && task != null) {
+        if (eventPublisher == null || task == null) {
+            return;
+        }
+        try {
             eventPublisher.publish(AiTaskEvent.builder()
                     .taskId(task.getTaskId())
                     .status(task.getStatus())
@@ -195,6 +338,8 @@ public class AiTaskService {
                     .errorMessage(task.getErrorMessage())
                     .timestampEpochMillis(System.currentTimeMillis())
                     .build());
+        } catch (RuntimeException e) {
+            log.warn("Publish AI task event failed, taskId={}", task.getTaskId(), e);
         }
     }
 }

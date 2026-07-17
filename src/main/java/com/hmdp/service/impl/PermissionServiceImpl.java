@@ -14,6 +14,7 @@ import com.hmdp.service.IPermissionService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import javax.annotation.Resource;
 import java.util.Arrays;
@@ -109,6 +110,7 @@ public class PermissionServiceImpl implements IPermissionService {
     }
 
     @Override
+    @Transactional
     public void assignRole(Long userId, String roleKey) {
         if (userId == null || StrUtil.isBlank(roleKey)) {
             throw new IllegalArgumentException("用户ID和角色不能为空");

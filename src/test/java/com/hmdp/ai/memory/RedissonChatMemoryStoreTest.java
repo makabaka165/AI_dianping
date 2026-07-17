@@ -145,6 +145,28 @@ class RedissonChatMemoryStoreTest {
     }
 
     @Test
+    void getMessagesShouldNotDeleteMemoryOnTransientRedisReadFailure() {
+        String memoryId = "hmdp:memory:ai:chat:u1:s1";
+        when(redissonClient.<String>getBucket(memoryId)).thenReturn(bucket);
+        when(bucket.get()).thenThrow(new IllegalStateException("redis down"));
+
+        assertThat(store.getMessages(memoryId)).isEmpty();
+
+        verify(bucket, never()).delete();
+    }
+
+    @Test
+    void getMessagesShouldDeleteConfirmedCorruptJson() {
+        String memoryId = "hmdp:memory:ai:chat:u1:s1";
+        when(redissonClient.<String>getBucket(memoryId)).thenReturn(bucket);
+        when(bucket.get()).thenReturn("{not-json");
+
+        assertThat(store.getMessages(memoryId)).isEmpty();
+
+        verify(bucket).delete();
+    }
+
+    @Test
     void getIndexedMemoryIdsShouldRemoveStaleMembers() {
         String indexKey = "hmdp:memory:index:user:u1";
         when(keyManager.buildUserIndexKey("u1")).thenReturn(indexKey);

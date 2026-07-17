@@ -46,6 +46,7 @@ hmdp:
       enabled: ${HMDP_SMS_MOCK_ENABLED:false}
     log-code: false
   upload:
+    image-dir: ${HMDP_IMAGE_UPLOAD_DIR:D:/lesson/nginx-1.18.0/html/hmdp/imgs/}
     blog-image:
       owner-ttl-days: 7
   shop:
@@ -94,6 +95,7 @@ hmdp:
       stream-timeout-minutes: ${HMDP_AI_TASK_STREAM_TIMEOUT_MINUTES:10}
       heartbeat-interval-seconds: ${HMDP_AI_TASK_HEARTBEAT_INTERVAL_SECONDS:30}
       running-timeout-minutes: ${HMDP_AI_TASK_RUNNING_TIMEOUT_MINUTES:30}
+      pending-timeout-minutes: ${HMDP_AI_TASK_PENDING_TIMEOUT_MINUTES:30}
       max-retry-count: ${HMDP_AI_TASK_MAX_RETRY_COUNT:3}
       stuck-scan-enabled: ${HMDP_AI_TASK_STUCK_SCAN_ENABLED:true}
       stuck-scan-fixed-delay-millis: ${HMDP_AI_TASK_STUCK_SCAN_FIXED_DELAY_MILLIS:60000}
@@ -173,7 +175,7 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info,prometheus
+        include: ${MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE:health,info}
   endpoint:
     health:
       show-details: never

@@ -66,9 +66,15 @@ public class WebExceptionAdvice {
                 .orElse(ErrorCode.PARAM_ERROR.getMessage()));
     }
 
-    @ExceptionHandler({IllegalArgumentException.class, IllegalStateException.class})
-    public Result handleIllegalArgumentException(RuntimeException e) {
+    @ExceptionHandler(IllegalArgumentException.class)
+    public Result handleIllegalArgumentException(IllegalArgumentException e) {
         return Result.fail(ErrorCode.PARAM_ERROR, safeParameterMessage(e.getMessage()));
+    }
+
+    @ExceptionHandler(IllegalStateException.class)
+    public Result handleIllegalStateException(IllegalStateException e) {
+        log.error(e.toString(), e);
+        return Result.fail(ErrorCode.SYSTEM_ERROR);
     }
 
     @ExceptionHandler(RuntimeException.class)

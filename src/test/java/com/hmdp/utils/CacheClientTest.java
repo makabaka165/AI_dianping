@@ -24,6 +24,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -52,7 +53,7 @@ class CacheClientTest {
     void setUp() {
         cacheProperties = new CacheProperties();
         cacheClient = new CacheClient(stringRedisTemplate, redissonClient, cacheRebuildExecutor, cacheProperties);
-        when(stringRedisTemplate.opsForValue()).thenReturn(valueOperations);
+        lenient().when(stringRedisTemplate.opsForValue()).thenReturn(valueOperations);
     }
 
     @Test
@@ -90,7 +91,7 @@ class CacheClientTest {
     void queryWithMutexShouldRebuildCacheWhenLockAcquired() throws InterruptedException {
         when(valueOperations.get("cache:shop:1")).thenReturn(null);
         when(redissonClient.getLock("lock:shop:1")).thenReturn(lock);
-        when(lock.tryLock(anyLong(), anyLong(), eq(TimeUnit.MILLISECONDS))).thenReturn(true);
+        when(lock.tryLock(anyLong(), eq(TimeUnit.MILLISECONDS))).thenReturn(true);
         when(lock.isHeldByCurrentThread()).thenReturn(true);
         AtomicInteger dbCalls = new AtomicInteger();
 
@@ -115,7 +116,7 @@ class CacheClientTest {
         when(valueOperations.get("cache:shop:1"))
                 .thenReturn(null, null, JSONUtil.toJsonStr(shop(1L)));
         when(redissonClient.getLock("lock:shop:1")).thenReturn(lock);
-        when(lock.tryLock(anyLong(), anyLong(), eq(TimeUnit.MILLISECONDS))).thenReturn(false);
+        when(lock.tryLock(anyLong(), eq(TimeUnit.MILLISECONDS))).thenReturn(false);
         AtomicInteger dbCalls = new AtomicInteger();
 
         Shop result = cacheClient.queryWithMutex(
@@ -140,7 +141,7 @@ class CacheClientTest {
         cacheProperties.getMutex().getRetryAfterFail().setFallbackToDb(false);
         when(valueOperations.get("cache:shop:1")).thenReturn(null);
         when(redissonClient.getLock("lock:shop:1")).thenReturn(lock);
-        when(lock.tryLock(anyLong(), anyLong(), eq(TimeUnit.MILLISECONDS))).thenReturn(false);
+        when(lock.tryLock(anyLong(), eq(TimeUnit.MILLISECONDS))).thenReturn(false);
         AtomicInteger dbCalls = new AtomicInteger();
 
         assertThatThrownBy(() -> cacheClient.queryWithMutex(
@@ -164,7 +165,7 @@ class CacheClientTest {
         cacheProperties.getMutex().getRetryAfterFail().setFallbackToDb(true);
         when(valueOperations.get("cache:shop:1")).thenReturn(null);
         when(redissonClient.getLock("lock:shop:1")).thenReturn(lock);
-        when(lock.tryLock(anyLong(), anyLong(), eq(TimeUnit.MILLISECONDS))).thenReturn(false);
+        when(lock.tryLock(anyLong(), eq(TimeUnit.MILLISECONDS))).thenReturn(false);
         AtomicInteger dbCalls = new AtomicInteger();
 
         Shop result = cacheClient.queryWithMutex(
@@ -186,7 +187,7 @@ class CacheClientTest {
     void queryWithMutexShouldPreserveInterruptAndSkipDbWhenInterrupted() throws InterruptedException {
         when(valueOperations.get("cache:shop:1")).thenReturn(null);
         when(redissonClient.getLock("lock:shop:1")).thenReturn(lock);
-        when(lock.tryLock(anyLong(), anyLong(), eq(TimeUnit.MILLISECONDS))).thenThrow(new InterruptedException("stop"));
+        when(lock.tryLock(anyLong(), eq(TimeUnit.MILLISECONDS))).thenThrow(new InterruptedException("stop"));
         AtomicInteger dbCalls = new AtomicInteger();
 
         try {
@@ -219,6 +220,18 @@ class CacheClientTest {
         RedisData redisData = JSONUtil.toBean(jsonCaptor.getValue(), RedisData.class);
         assertThat(redisData.getExpireTime()).isNotNull();
         assertThat(ttlCaptor.getValue()).isEqualTo(TimeUnit.MINUTES.toSeconds(10));
+    }
+
+    @Test
+    void deleteWithMutexShouldWaitForRebuildAndDeleteCachedValue() {
+        when(redissonClient.getLock("lock:shop:1")).thenReturn(lock);
+        when(lock.isHeldByCurrentThread()).thenReturn(true);
+
+        cacheClient.deleteWithMutex("cache:shop:", 1L);
+
+        verify(lock).lock();
+        verify(stringRedisTemplate).delete("cache:shop:1");
+        verify(lock).unlock();
     }
 
     private Shop shop(Long id) {

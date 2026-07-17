@@ -3,12 +3,16 @@ package com.hmdp.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.hmdp.config.BlogProperties;
 import com.hmdp.entity.Blog;
+import com.hmdp.entity.BlogLike;
 import com.hmdp.entity.Follow;
 import com.hmdp.event.BlogLikeChangedEvent;
 import com.hmdp.event.BlogPublishedEvent;
+import com.hmdp.mapper.BlogLikeMapper;
 import com.hmdp.mapper.BlogMapper;
 import com.hmdp.service.IFollowService;
 import lombok.extern.slf4j.Slf4j;
+import org.redisson.api.RLock;
+import org.redisson.api.RedissonClient;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
@@ -16,6 +20,7 @@ import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
 import javax.annotation.Resource;
+import java.time.ZoneId;
 import java.util.List;
 
 import static com.hmdp.utils.RedisConstants.BLOG_HOT_KEY;
@@ -28,6 +33,7 @@ public class BlogEventListener {
 
     private static final int BLOG_STATUS_PUBLISHED = 1;
     private static final int BLOG_NOT_DELETED = 0;
+    private static final String BLOG_LIKE_CACHE_LOCK_PREFIX = "lock:blog:like-cache:";
 
     @Resource
     private StringRedisTemplate stringRedisTemplate;
@@ -37,6 +43,12 @@ public class BlogEventListener {
 
     @Resource
     private BlogMapper blogMapper;
+
+    @Resource
+    private BlogLikeMapper blogLikeMapper;
+
+    @Resource
+    private RedissonClient redissonClient;
 
     @Resource
     private BlogProperties blogProperties;
@@ -61,21 +73,56 @@ public class BlogEventListener {
     @Async("blogEventExecutor")
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onBlogLikeChanged(BlogLikeChangedEvent event) {
+        RLock lock = null;
+        boolean locked = false;
         try {
-            String key = BLOG_LIKED_KEY + event.getBlogId();
-            if (event.isLiked()) {
+            lock = redissonClient.getLock(BLOG_LIKE_CACHE_LOCK_PREFIX + event.getBlogId());
+            lock.lock();
+            locked = true;
+            BlogLike currentLike = blogLikeMapper.selectOne(new QueryWrapper<BlogLike>()
+                    .select("id", "create_time")
+                    .eq("blog_id", event.getBlogId())
+                    .eq("user_id", event.getUserId())
+                    .last("LIMIT 1"));
+            String likedKey = BLOG_LIKED_KEY + event.getBlogId();
+            if (currentLike != null) {
                 stringRedisTemplate.opsForZSet().add(
-                        key,
+                        likedKey,
                         event.getUserId().toString(),
-                        event.getEventTimeMillis()
+                        likeScore(currentLike, event.getEventTimeMillis())
                 );
             } else {
-                stringRedisTemplate.opsForZSet().remove(key, event.getUserId().toString());
+                stringRedisTemplate.opsForZSet().remove(likedKey, event.getUserId().toString());
             }
             updateHotBlogScore(event.getBlogId());
         } catch (RuntimeException e) {
             log.warn("handle blog like event failed, blogId={}, userId={}",
                     event.getBlogId(), event.getUserId(), e);
+        } finally {
+            unlockQuietly(lock, locked);
+        }
+    }
+
+    private double likeScore(BlogLike currentLike, long fallback) {
+        if (currentLike.getCreateTime() == null) {
+            return fallback;
+        }
+        return currentLike.getCreateTime()
+                .atZone(ZoneId.systemDefault())
+                .toInstant()
+                .toEpochMilli();
+    }
+
+    private void unlockQuietly(RLock lock, boolean locked) {
+        if (!locked || lock == null) {
+            return;
+        }
+        try {
+            if (lock.isHeldByCurrentThread()) {
+                lock.unlock();
+            }
+        } catch (RuntimeException e) {
+            log.warn("release blog like cache lock failed", e);
         }
     }
 

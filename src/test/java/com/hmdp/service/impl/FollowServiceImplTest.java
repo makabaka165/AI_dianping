@@ -17,6 +17,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.redisson.api.RLock;
+import org.redisson.api.RedissonClient;
 import org.springframework.data.redis.core.SetOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
@@ -53,6 +55,12 @@ class FollowServiceImplTest {
     private StringRedisTemplate stringRedisTemplate;
 
     @Mock
+    private RedissonClient redissonClient;
+
+    @Mock
+    private RLock followCacheLock;
+
+    @Mock
     private SetOperations<String, String> setOperations;
 
     @Mock
@@ -78,6 +86,7 @@ class FollowServiceImplTest {
         BlogProperties blogProperties = new BlogProperties();
         blogProperties.setFeedInboxMaxSize(100);
         ReflectionTestUtils.setField(followService, "stringRedisTemplate", stringRedisTemplate);
+        ReflectionTestUtils.setField(followService, "redissonClient", redissonClient);
         ReflectionTestUtils.setField(followService, "userService", userService);
         ReflectionTestUtils.setField(followService, "currentUserService", currentUserService);
         ReflectionTestUtils.setField(followService, "blogMapper", blogMapper);
@@ -86,6 +95,8 @@ class FollowServiceImplTest {
         lenient().when(stringRedisTemplate.opsForSet()).thenReturn(setOperations);
         lenient().when(stringRedisTemplate.opsForValue()).thenReturn(valueOperations);
         lenient().when(stringRedisTemplate.opsForZSet()).thenReturn(zSetOperations);
+        lenient().when(redissonClient.getLock(anyString())).thenReturn(followCacheLock);
+        lenient().when(followCacheLock.isHeldByCurrentThread()).thenReturn(true);
     }
 
     @Test
@@ -107,6 +118,7 @@ class FollowServiceImplTest {
         when(currentUserService.requireCurrentUserId()).thenReturn(1L);
         when(userService.getById(2L)).thenReturn(user(2L, 1));
         followService.insertIgnoreResult = 0;
+        when(stringRedisTemplate.hasKey(FOLLOW_LOADED_KEY + 1L)).thenReturn(true);
 
         Result result = followService.follow(2L);
 
@@ -142,6 +154,7 @@ class FollowServiceImplTest {
     @Test
     void unfollowShouldBeIdempotentAndCleanFeed() {
         when(currentUserService.requireCurrentUserId()).thenReturn(1L);
+        when(stringRedisTemplate.hasKey(FOLLOW_LOADED_KEY + 1L)).thenReturn(true);
         when(blogMapper.selectList(any())).thenReturn(List.of(
                 blog(10L, 2L),
                 blog(11L, 2L)
@@ -152,7 +165,23 @@ class FollowServiceImplTest {
         assertThat(result.getSuccess()).isTrue();
         assertThat(followService.removeCalled).isTrue();
         verify(setOperations).remove(FOLLOW_KEY + 1L, "2");
+        verify(stringRedisTemplate).expire(FOLLOW_KEY + 1L, FOLLOW_CACHE_TTL, TimeUnit.MINUTES);
         verify(zSetOperations).remove(eq(FEED_KEY + 1L), eq("10"), eq("11"));
+        verify(valueOperations).set(FOLLOW_LOADED_KEY + 1L, "1", FOLLOW_CACHE_TTL, TimeUnit.MINUTES);
+    }
+
+    @Test
+    void followShouldRebuildCompleteSetWhenCacheIsCold() {
+        when(currentUserService.requireCurrentUserId()).thenReturn(1L);
+        when(userService.getById(3L)).thenReturn(user(3L, 1));
+        when(stringRedisTemplate.hasKey(FOLLOW_LOADED_KEY + 1L)).thenReturn(false);
+        followService.db.put(1L, new LinkedHashSet<>(Collections.singletonList(2L)));
+
+        Result result = followService.follow(3L);
+
+        assertThat(result.getSuccess()).isTrue();
+        verify(stringRedisTemplate).delete(FOLLOW_KEY + 1L);
+        verify(setOperations).add(FOLLOW_KEY + 1L, "2", "3");
         verify(valueOperations).set(FOLLOW_LOADED_KEY + 1L, "1", FOLLOW_CACHE_TTL, TimeUnit.MINUTES);
     }
 

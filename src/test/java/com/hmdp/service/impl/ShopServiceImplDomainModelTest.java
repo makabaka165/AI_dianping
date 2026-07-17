@@ -34,6 +34,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -177,7 +178,7 @@ class ShopServiceImplDomainModelTest {
 
         assertThat(result.getSuccess()).isFalse();
         assertThat(result.getCode()).isEqualTo(ErrorCode.SHOP_UPDATE_CONFLICT.getCode());
-        verify(stringRedisTemplate, never()).delete(any(String.class));
+        verify(cacheClient, never()).deleteWithMutex(anyString(), any());
     }
 
     @Test
@@ -194,7 +195,7 @@ class ShopServiceImplDomainModelTest {
 
         assertThat(result.getSuccess()).isFalse();
         assertThat(result.getCode()).isEqualTo(ErrorCode.SHOP_UPDATE_CONFLICT.getCode());
-        verify(stringRedisTemplate, never()).delete(any(String.class));
+        verify(cacheClient, never()).deleteWithMutex(anyString(), any());
     }
 
     @Test
@@ -208,7 +209,24 @@ class ShopServiceImplDomainModelTest {
 
         assertThat(result.getSuccess()).isTrue();
         assertThat(shopService.db.get(100L).getVersion()).isEqualTo(1);
-        verify(stringRedisTemplate).delete(CACHE_SHOP_KEY + 100L);
+        verify(cacheClient).deleteWithMutex(CACHE_SHOP_KEY, 100L);
+        verify(shopAICacheInvalidationService).clearShopRelatedCaches(100L);
+        verify(shopGeoIndexService).refreshShopGeoIndex(eq(oldShop), any(Shop.class));
+        verify(shopStatsService).updateShopExistsCache(100L, true);
+    }
+
+    @Test
+    void updateShopShouldContinueOtherSyncActionsWhenDetailCacheEvictionFails() {
+        Shop oldShop = oldShop();
+        shopService.db.put(100L, oldShop);
+        when(currentUserService.requireCurrentUserId()).thenReturn(1L);
+        when(permissionService.hasRole(1L, "admin")).thenReturn(true);
+        doThrow(new IllegalStateException("redis down"))
+                .when(cacheClient).deleteWithMutex(CACHE_SHOP_KEY, 100L);
+
+        Result result = shopService.updateShop(updateRequest());
+
+        assertThat(result.getSuccess()).isTrue();
         verify(shopAICacheInvalidationService).clearShopRelatedCaches(100L);
         verify(shopGeoIndexService).refreshShopGeoIndex(eq(oldShop), any(Shop.class));
         verify(shopStatsService).updateShopExistsCache(100L, true);

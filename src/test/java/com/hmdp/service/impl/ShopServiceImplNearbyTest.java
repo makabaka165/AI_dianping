@@ -74,6 +74,19 @@ class ShopServiceImplNearbyTest {
     }
 
     @Test
+    void queryShopByTypeShouldRejectNonFiniteCoordinatesAndCursor() {
+        Result nanCoordinate = query(1, 1, Double.NaN, 30.31, null, null, "distance");
+        Result infiniteCoordinate = query(1, 1, 120.15, Double.POSITIVE_INFINITY,
+                null, null, "distance");
+        Result infiniteCursor = query(1, 2, 120.15, 30.31,
+                Double.POSITIVE_INFINITY, 1L, "distance");
+
+        assertThat(nanCoordinate.getCode()).isEqualTo(ErrorCode.PARAM_ERROR.getCode());
+        assertThat(infiniteCoordinate.getCode()).isEqualTo(ErrorCode.PARAM_ERROR.getCode());
+        assertThat(infiniteCursor.getCode()).isEqualTo(ErrorCode.PARAM_ERROR.getCode());
+    }
+
+    @Test
     void geoPageQueryShouldUseMeterMetricAndKeepDistanceOrder() {
         when(stringRedisTemplate.opsForGeo()).thenReturn(geoOperations);
         when(geoOperations.search(eq(SHOP_GEO_KEY + 1), any(GeoReference.class), any(Distance.class), any()))

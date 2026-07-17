@@ -21,6 +21,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.lenient;
 
 @ExtendWith(MockitoExtension.class)
 class AiTaskStreamServiceTest {
@@ -42,7 +43,7 @@ class AiTaskStreamServiceTest {
         ReflectionTestUtils.setField(service, "redissonClient", redissonClient);
         ReflectionTestUtils.setField(service, "repository", repository);
         ReflectionTestUtils.setField(service, "streamTimeoutMinutes", 1L);
-        when(redissonClient.getTopic("hmdp:ai:task:events:task-1")).thenReturn(topic);
+        lenient().when(redissonClient.getTopic("hmdp:ai:task:events:task-1")).thenReturn(topic);
     }
 
     @Test
@@ -76,6 +77,29 @@ class AiTaskStreamServiceTest {
         assertThat(events).extracting(AiTaskEvent::getStatus)
                 .containsExactly(AiTaskStatus.RUNNING, AiTaskStatus.SUCCESS);
         verify(topic).removeListener(7);
+    }
+
+    @Test
+    void streamTimeoutShouldKeepRepositoryTaskStatus() {
+        when(repository.find("task-1")).thenReturn(Optional.of(task(AiTaskStatus.RUNNING, 1, 2)));
+
+        AiTaskEvent event = ReflectionTestUtils.invokeMethod(service, "timeoutEvent", "task-1");
+
+        assertThat(event).isNotNull();
+        assertThat(event.getStatus()).isEqualTo(AiTaskStatus.RUNNING);
+        assertThat(event.getErrorMessage()).contains("status is unchanged");
+    }
+
+    @Test
+    void streamTimeoutShouldStillEmitNeutralEventWhenRepositoryReadFails() {
+        when(repository.find("task-1")).thenThrow(new IllegalStateException("redis down"));
+
+        AiTaskEvent event = ReflectionTestUtils.invokeMethod(service, "timeoutEvent", "task-1");
+
+        assertThat(event).isNotNull();
+        assertThat(event.getTaskId()).isEqualTo("task-1");
+        assertThat(event.getStatus()).isNull();
+        assertThat(event.getErrorMessage()).contains("status is unchanged");
     }
 
     private AiTask task(AiTaskStatus status, Integer current, Integer total) {

@@ -276,41 +276,61 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
     }
 
     private Result checkLoginBlocked(String phone, String deviceFingerprint) {
-        String blockKey = loginBlockKey(phone, deviceFingerprint);
-        Boolean blocked = stringRedisTemplate.hasKey(blockKey);
-        if (!Boolean.TRUE.equals(blocked)) {
+        String deviceBlockKey = loginDeviceBlockKey(phone, deviceFingerprint);
+        String phoneBlockKey = loginPhoneBlockKey(phone);
+        Boolean deviceBlocked = stringRedisTemplate.hasKey(deviceBlockKey);
+        Boolean phoneBlocked = stringRedisTemplate.hasKey(phoneBlockKey);
+        if (!Boolean.TRUE.equals(deviceBlocked) && !Boolean.TRUE.equals(phoneBlocked)) {
             return null;
         }
-        Long ttl = stringRedisTemplate.getExpire(blockKey, TimeUnit.SECONDS);
+        long deviceTtl = ttlSeconds(deviceBlockKey, deviceBlocked);
+        long phoneTtl = ttlSeconds(phoneBlockKey, phoneBlocked);
         return Result.fail(ErrorCode.LOGIN_BLOCKED,
-                "login temporarily blocked, retry after " + Math.max(ttl == null ? 0 : ttl, 1) + " seconds");
+                "login temporarily blocked, retry after " + Math.max(Math.max(deviceTtl, phoneTtl), 1) + " seconds");
     }
 
     private Result recordCaptchaFailure(String phone, String deviceFingerprint, String reason,
                                         ErrorCode errorCode, String message) {
-        int failCount = increaseLoginFail(phone, deviceFingerprint);
+        LoginFailureState failure = increaseLoginFail(phone, deviceFingerprint);
+        int failCount = failure.failCount;
         loginLogService.recordLogin(null, phone, false, reason, null,
                 deviceFingerprint, calcRiskLevel(failCount), failCount);
-        if (failCount >= LOGIN_FAIL_LIMIT) {
+        if (failure.blocked) {
             return Result.fail(ErrorCode.LOGIN_BLOCKED,
                     "login temporarily blocked after too many failures");
         }
         return Result.fail(errorCode, message);
     }
 
-    private int increaseLoginFail(String phone, String deviceFingerprint) {
-        Long count = incrementWithExpire(loginFailCountKey(phone, deviceFingerprint),
+    private LoginFailureState increaseLoginFail(String phone, String deviceFingerprint) {
+        Long deviceCount = incrementWithExpire(loginDeviceFailCountKey(phone, deviceFingerprint),
                 LOGIN_FAIL_WINDOW_MINUTES, TimeUnit.MINUTES);
-        int failCount = count == null ? 0 : count.intValue();
-        if (failCount >= LOGIN_FAIL_LIMIT) {
-            stringRedisTemplate.opsForValue().set(loginBlockKey(phone, deviceFingerprint), "1",
+        Long phoneCount = incrementWithExpire(loginPhoneFailCountKey(phone),
+                LOGIN_FAIL_WINDOW_MINUTES, TimeUnit.MINUTES);
+        int deviceFailCount = deviceCount == null ? 0 : deviceCount.intValue();
+        int phoneFailCount = phoneCount == null ? 0 : phoneCount.intValue();
+        boolean deviceBlocked = deviceFailCount >= LOGIN_FAIL_LIMIT;
+        boolean phoneBlocked = phoneFailCount >= LOGIN_PHONE_FAIL_LIMIT;
+        if (deviceBlocked) {
+            stringRedisTemplate.opsForValue().set(loginDeviceBlockKey(phone, deviceFingerprint), "1",
                     LOGIN_BLOCK_MINUTES, TimeUnit.MINUTES);
         }
-        return failCount;
+        if (phoneBlocked) {
+            stringRedisTemplate.opsForValue().set(loginPhoneBlockKey(phone), "1",
+                    LOGIN_BLOCK_MINUTES, TimeUnit.MINUTES);
+        }
+        return new LoginFailureState(Math.max(deviceFailCount, phoneFailCount), deviceBlocked || phoneBlocked);
     }
 
     private int getFailCount(String phone, String deviceFingerprint) {
-        String value = stringRedisTemplate.opsForValue().get(loginFailCountKey(phone, deviceFingerprint));
+        return Math.max(
+                readFailCount(loginDeviceFailCountKey(phone, deviceFingerprint)),
+                readFailCount(loginPhoneFailCountKey(phone))
+        );
+    }
+
+    private int readFailCount(String key) {
+        String value = stringRedisTemplate.opsForValue().get(key);
         if (StrUtil.isBlank(value)) {
             return 0;
         }
@@ -322,8 +342,10 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
     }
 
     private void clearLoginFail(String phone, String deviceFingerprint) {
-        stringRedisTemplate.delete(loginFailCountKey(phone, deviceFingerprint));
-        stringRedisTemplate.delete(loginBlockKey(phone, deviceFingerprint));
+        stringRedisTemplate.delete(loginDeviceFailCountKey(phone, deviceFingerprint));
+        stringRedisTemplate.delete(loginDeviceBlockKey(phone, deviceFingerprint));
+        stringRedisTemplate.delete(loginPhoneFailCountKey(phone));
+        stringRedisTemplate.delete(loginPhoneBlockKey(phone));
     }
 
     private int calcRiskLevel(int failCount) {
@@ -346,12 +368,28 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
         return count == null ? 0 : count;
     }
 
-    private String loginFailCountKey(String phone, String deviceFingerprint) {
-        return LOGIN_FAIL_COUNT_KEY + phone + ":" + deviceFingerprint;
+    private long ttlSeconds(String key, Boolean present) {
+        if (!Boolean.TRUE.equals(present)) {
+            return 0L;
+        }
+        Long ttl = stringRedisTemplate.getExpire(key, TimeUnit.SECONDS);
+        return ttl == null ? 0L : ttl;
     }
 
-    private String loginBlockKey(String phone, String deviceFingerprint) {
-        return LOGIN_BLOCK_KEY + phone + ":" + deviceFingerprint;
+    private String loginDeviceFailCountKey(String phone, String deviceFingerprint) {
+        return LOGIN_FAIL_COUNT_KEY + "device:" + phone + ":" + deviceFingerprint;
+    }
+
+    private String loginPhoneFailCountKey(String phone) {
+        return LOGIN_FAIL_COUNT_KEY + "phone:" + phone;
+    }
+
+    private String loginDeviceBlockKey(String phone, String deviceFingerprint) {
+        return LOGIN_BLOCK_KEY + "device:" + phone + ":" + deviceFingerprint;
+    }
+
+    private String loginPhoneBlockKey(String phone) {
+        return LOGIN_BLOCK_KEY + "phone:" + phone;
     }
 
     private String normalizeToken(String token) {
@@ -363,5 +401,15 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
             return trimmed.substring(7).trim();
         }
         return trimmed;
+    }
+
+    private static class LoginFailureState {
+        private final int failCount;
+        private final boolean blocked;
+
+        private LoginFailureState(int failCount, boolean blocked) {
+            this.failCount = failCount;
+            this.blocked = blocked;
+        }
     }
 }

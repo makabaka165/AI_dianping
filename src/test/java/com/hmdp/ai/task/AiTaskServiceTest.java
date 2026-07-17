@@ -10,6 +10,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.redisson.api.RLock;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.LinkedHashMap;
@@ -17,8 +18,11 @@ import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -38,6 +42,9 @@ class AiTaskServiceTest {
     @Mock
     private AiTaskEventPublisher eventPublisher;
 
+    @Mock
+    private RLock taskLock;
+
     private AiTaskService service;
 
     @BeforeEach
@@ -48,8 +55,12 @@ class AiTaskServiceTest {
         ReflectionTestUtils.setField(service, "aiMetricsService", aiMetricsService);
         ReflectionTestUtils.setField(service, "eventPublisher", eventPublisher);
         ReflectionTestUtils.setField(service, "runningTimeoutMinutes", 30L);
+        ReflectionTestUtils.setField(service, "pendingTimeoutMinutes", 30L);
         ReflectionTestUtils.setField(service, "maxRetryCount", 3);
         ReflectionTestUtils.setField(service, "stuckScanLimit", 100);
+        lenient().when(repository.executionLock(anyString())).thenReturn(taskLock);
+        lenient().when(taskLock.tryLock()).thenReturn(true);
+        lenient().when(taskLock.isHeldByCurrentThread()).thenReturn(true);
     }
 
     @Test
@@ -74,6 +85,20 @@ class AiTaskServiceTest {
     }
 
     @Test
+    void submitShouldRemainSuccessfulWhenMetricsRecordingFailsAfterEnqueue() throws Exception {
+        when(repository.tryRegisterInflight(anyString(), anyString())).thenReturn(Optional.empty());
+        doThrow(new IllegalStateException("metrics down"))
+                .when(aiMetricsService).increment("ai.task.submitted", "ai_task", false);
+
+        String taskId = service.submit(AiTaskType.RAG_REBUILD_ALL, Map.of("shopLimit", 10), "7");
+
+        assertThat(taskId).isNotBlank();
+        verify(queue).enqueue(taskId);
+        verify(repository, never()).update(org.mockito.ArgumentMatchers.any());
+        verify(repository, never()).clearInflight(anyString());
+    }
+
+    @Test
     void submitShouldReturnExistingTaskIdWhenDedupHit() throws Exception {
         Map<String, Object> params = params("shopId", 7L, "limit", 20);
         when(repository.tryRegisterInflight(anyString(), anyString())).thenReturn(Optional.of("existing-task"));
@@ -84,6 +109,23 @@ class AiTaskServiceTest {
         verify(repository, never()).save(org.mockito.ArgumentMatchers.any(AiTask.class));
         verify(queue, never()).enqueue(org.mockito.ArgumentMatchers.anyString());
         verify(aiMetricsService).increment("ai.task.dedup", "ai_task", false);
+    }
+
+    @Test
+    void submitShouldMarkSavedTaskFailedWhenEnqueueFails() throws Exception {
+        when(repository.tryRegisterInflight(anyString(), anyString())).thenReturn(Optional.empty());
+        doThrow(new IllegalStateException("redis queue down")).when(queue).enqueue(anyString());
+
+        assertThatThrownBy(() -> service.submit(AiTaskType.RAG_REBUILD_ALL, Map.of("shopLimit", 10), "7"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("redis queue down");
+
+        verify(repository).update(org.mockito.ArgumentMatchers.argThat(task ->
+                task.getStatus() == AiTaskStatus.FAILED
+                        && "AI task enqueue failed".equals(task.getErrorMessage())
+                        && task.getFinishedAtEpochMillis() != null));
+        verify(repository).clearInflight(anyString());
+        verify(aiMetricsService).increment("ai.task.submit.failed", "ai_task", true);
     }
 
     @Test
@@ -109,10 +151,58 @@ class AiTaskServiceTest {
     }
 
     @Test
+    void recoverStuckPendingTasksShouldIgnoreFreshTask() throws Exception {
+        AiTask fresh = pendingTask("fresh", now() - 60_000L);
+        when(repository.findByStatus(AiTaskStatus.PENDING, 100)).thenReturn(java.util.List.of(fresh));
+
+        assertThat(service.recoverStuckPendingTasks(now())).isZero();
+
+        verify(queue, never()).enqueue(anyString());
+        verify(repository, never()).find("fresh");
+    }
+
+    @Test
+    void recoverStuckPendingTasksShouldRequeueTimedOutTaskAndKeepDedupRegistration() throws Exception {
+        long now = now();
+        AiTask stuck = pendingTask("stuck-pending", now - 31 * 60_000L);
+        when(repository.findByStatus(AiTaskStatus.PENDING, 100)).thenReturn(java.util.List.of(stuck));
+        when(repository.find("stuck-pending")).thenReturn(Optional.of(stuck));
+
+        int recovered = service.recoverStuckPendingTasks(now);
+
+        assertThat(recovered).isEqualTo(1);
+        assertThat(stuck.getStatus()).isEqualTo(AiTaskStatus.PENDING);
+        assertThat(stuck.getErrorMessage()).isEqualTo("task pending timeout, requeued");
+        verify(repository).update(stuck);
+        verify(queue).enqueue("stuck-pending");
+        verify(repository, never()).clearInflight("dedup-stuck-pending");
+        verify(aiMetricsService).increment("ai.task.pending.requeued", "ai_task", false);
+    }
+
+    @Test
+    void recoverStuckPendingTasksShouldFailTaskWhenQueueRemainsUnavailable() throws Exception {
+        long now = now();
+        AiTask stuck = pendingTask("stuck-pending", now - 31 * 60_000L);
+        when(repository.findByStatus(AiTaskStatus.PENDING, 100)).thenReturn(java.util.List.of(stuck));
+        when(repository.find("stuck-pending")).thenReturn(Optional.of(stuck));
+        doThrow(new IllegalStateException("redis queue down")).when(queue).enqueue("stuck-pending");
+
+        int recovered = service.recoverStuckPendingTasks(now);
+
+        assertThat(recovered).isEqualTo(1);
+        assertThat(stuck.getStatus()).isEqualTo(AiTaskStatus.FAILED);
+        assertThat(stuck.getErrorMessage()).isEqualTo("task pending timeout, requeue failed");
+        verify(repository, org.mockito.Mockito.times(2)).update(stuck);
+        verify(repository).clearInflight("dedup-stuck-pending");
+        verify(aiMetricsService).increment("ai.task.requeue.failed", "ai_task", true);
+    }
+
+    @Test
     void recoverStuckRunningTasksShouldRequeueTimedOutTaskUnderRetryLimit() throws Exception {
         long now = now();
         AiTask stuck = runningTask("stuck", now - 31 * 60_000L, 1);
         when(repository.findByStatus(AiTaskStatus.RUNNING, 100)).thenReturn(java.util.List.of(stuck));
+        when(repository.find("stuck")).thenReturn(Optional.of(stuck));
 
         int recovered = service.recoverStuckRunningTasks(now);
 
@@ -120,7 +210,7 @@ class AiTaskServiceTest {
         assertThat(stuck.getStatus()).isEqualTo(AiTaskStatus.PENDING);
         assertThat(stuck.getRetryCount()).isEqualTo(2);
         assertThat(stuck.getErrorMessage()).isEqualTo("task heartbeat timeout, requeued");
-        verify(repository).clearInflight("dedup-stuck");
+        verify(repository, never()).clearInflight("dedup-stuck");
         verify(repository).update(stuck);
         verify(queue).enqueue("stuck");
         verify(eventPublisher).publish(org.mockito.ArgumentMatchers.any());
@@ -128,10 +218,30 @@ class AiTaskServiceTest {
     }
 
     @Test
+    void recoverStuckRunningTasksShouldFailTaskWhenRequeueIsUnavailable() throws Exception {
+        long now = now();
+        AiTask stuck = runningTask("stuck", now - 31 * 60_000L, 1);
+        when(repository.findByStatus(AiTaskStatus.RUNNING, 100)).thenReturn(java.util.List.of(stuck));
+        when(repository.find("stuck")).thenReturn(Optional.of(stuck));
+        doThrow(new IllegalStateException("redis queue down")).when(queue).enqueue("stuck");
+
+        int recovered = service.recoverStuckRunningTasks(now);
+
+        assertThat(recovered).isEqualTo(1);
+        assertThat(stuck.getStatus()).isEqualTo(AiTaskStatus.FAILED);
+        assertThat(stuck.getFinishedAtEpochMillis()).isEqualTo(now);
+        assertThat(stuck.getErrorMessage()).isEqualTo("task heartbeat timeout, requeue failed");
+        verify(repository, org.mockito.Mockito.times(2)).update(stuck);
+        verify(repository).clearInflight("dedup-stuck");
+        verify(aiMetricsService).increment("ai.task.requeue.failed", "ai_task", true);
+    }
+
+    @Test
     void recoverStuckRunningTasksShouldFailTimedOutTaskAfterRetryLimit() throws InterruptedException {
         long now = now();
         AiTask stuck = runningTask("stuck", now - 31 * 60_000L, 3);
         when(repository.findByStatus(AiTaskStatus.RUNNING, 100)).thenReturn(java.util.List.of(stuck));
+        when(repository.find("stuck")).thenReturn(Optional.of(stuck));
 
         int recovered = service.recoverStuckRunningTasks(now);
 
@@ -142,6 +252,19 @@ class AiTaskServiceTest {
         verify(repository).clearInflight("dedup-stuck");
         verify(queue, never()).enqueue(anyString());
         verify(aiMetricsService).increment("ai.task.timeout.failed", "ai_task", true);
+    }
+
+    @Test
+    void recoverStuckRunningTasksShouldSkipTaskStillOwnedByWorker() throws Exception {
+        long now = now();
+        AiTask stuck = runningTask("stuck", now - 31 * 60_000L, 1);
+        when(repository.findByStatus(AiTaskStatus.RUNNING, 100)).thenReturn(java.util.List.of(stuck));
+        when(taskLock.tryLock()).thenReturn(false);
+
+        assertThat(service.recoverStuckRunningTasks(now)).isZero();
+
+        verify(repository, never()).find("stuck");
+        verify(queue, never()).enqueue(anyString());
     }
 
     private Map<String, Object> params(Object... values) {
@@ -161,6 +284,18 @@ class AiTaskServiceTest {
                 .retryCount(retryCount)
                 .heartbeatAtEpochMillis(heartbeatAt)
                 .updatedAtEpochMillis(heartbeatAt)
+                .build();
+    }
+
+    private AiTask pendingTask(String taskId, long updatedAt) {
+        return AiTask.builder()
+                .taskId(taskId)
+                .type(AiTaskType.RAG_REBUILD_SHOP)
+                .status(AiTaskStatus.PENDING)
+                .dedupKey("dedup-" + taskId)
+                .retryCount(0)
+                .createdAtEpochMillis(updatedAt)
+                .updatedAtEpochMillis(updatedAt)
                 .build();
     }
 
