@@ -107,6 +107,7 @@ class ToolExecutionPipelineTest {
                                            ToolIdempotencyPort idempotency, ToolAuditPort audit) {
         return new ToolExecutionPipeline(repository,
                 new LocalSkillRegistry(Collections.singletonList(new TestSkill())),
+                Collections.emptyList(),
                 new ToolPermissionService(), rateLimit, budget, idempotency, audit,
                 new JsonSchemaValidationService(mapper), mapper, executor,
                 new ToolReliabilityExecutor(mapper));

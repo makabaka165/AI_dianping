@@ -13,6 +13,7 @@ import com.hmdp.ai.shared.id.AiIdGenerator;
 import org.springframework.stereotype.Component;
 
 import java.util.Collections;
+import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
@@ -31,7 +32,7 @@ public class ToolNodeExecutor implements NodeExecutor {
 
     @Override
     public Set<WorkflowNodeType> supportedTypes() {
-        return Collections.singleton(WorkflowNodeType.TOOL);
+        return EnumSet.of(WorkflowNodeType.TOOL, WorkflowNodeType.MCP_TOOL);
     }
 
     @Override

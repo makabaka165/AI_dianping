@@ -1,0 +1,3 @@
+package com.hmdp.ai.infrastructure.sandbox;
+import com.fasterxml.jackson.databind.JsonNode;import com.hmdp.ai.domain.artifact.ArtifactReference;import com.hmdp.ai.domain.run.ExecutionContext;import java.nio.file.Path;import java.util.List;
+public interface SandboxExecutor {SandboxExecution execute(Path workspace,JsonNode configuration,JsonNode input,ExecutionContext context,int timeoutMs);final class SandboxExecution {private final JsonNode data;private final List<ArtifactReference>artifacts;public SandboxExecution(JsonNode data,List<ArtifactReference>artifacts){this.data=data;this.artifacts=artifacts;}public JsonNode getData(){return data;}public List<ArtifactReference>getArtifacts(){return artifacts;}}}

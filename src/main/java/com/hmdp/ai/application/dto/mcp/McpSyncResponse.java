@@ -1,0 +1,1 @@
+package com.hmdp.ai.application.dto.mcp;public final class McpSyncResponse {private final String serverId;private final int synchronizedTools;public McpSyncResponse(String serverId,int synchronizedTools){this.serverId=serverId;this.synchronizedTools=synchronizedTools;}public String getServerId(){return serverId;}public int getSynchronizedTools(){return synchronizedTools;}}

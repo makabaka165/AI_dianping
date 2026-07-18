@@ -29,8 +29,8 @@ public class ToolReliabilityExecutor {
         this.mapper = mapper;
     }
 
-    public Callable<JsonNode> decorate(ToolDefinition definition, ToolInvocation invocation,
-                                       Callable<JsonNode> operation) {
+    public <T> Callable<T> decorate(ToolDefinition definition, ToolInvocation invocation,
+                                    Callable<T> operation) {
         JsonNode retryPolicy = read(definition.getRetryPolicyJson());
         JsonNode configuration = read(definition.getConfigurationJson());
         String key = invocation.getContext().getTenantId() + ':' + definition.getProtocol().name() + ':'
@@ -60,7 +60,7 @@ public class ToolReliabilityExecutor {
         CircuitBreaker breaker = circuitBreakers.circuitBreaker(key, circuitConfig);
         Bulkhead bulkhead = bulkheads.bulkhead(key, bulkheadConfig);
         Retry retry = retries.retry(key, retryConfig);
-        Callable<JsonNode> decorated = Bulkhead.decorateCallable(bulkhead, operation);
+        Callable<T> decorated = Bulkhead.decorateCallable(bulkhead, operation);
         decorated = CircuitBreaker.decorateCallable(breaker, decorated);
         return Retry.decorateCallable(retry, decorated);
     }

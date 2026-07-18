@@ -16,7 +16,6 @@ import java.util.Set;
 public class CoreNodeExecutor implements NodeExecutor {
     private static final Set<WorkflowNodeType> TYPES = EnumSet.of(
             WorkflowNodeType.START, WorkflowNodeType.END, WorkflowNodeType.QUERY_REWRITE,
-            WorkflowNodeType.EXTERNAL_SEARCH, WorkflowNodeType.MCP_TOOL, WorkflowNodeType.DIFY_WORKFLOW,
             WorkflowNodeType.DOCUMENT_PARSE, WorkflowNodeType.TEXT_TRANSFORM,
             WorkflowNodeType.LONG_TEXT_MAP_REDUCE, WorkflowNodeType.DATA_TRANSFORM,
             WorkflowNodeType.JOIN, WorkflowNodeType.ARTIFACT_GENERATE);
@@ -55,12 +54,6 @@ public class CoreNodeExecutor implements NodeExecutor {
             }
             updates.put("longTextChunks", chunks);
             output.put("chunkCount", chunks.size());
-        } else if (type == WorkflowNodeType.EXTERNAL_SEARCH) {
-            return NodeExecutionResult.failure("EXTERNAL_SEARCH_PROVIDER_NOT_CONFIGURED", false);
-        } else if (type == WorkflowNodeType.MCP_TOOL) {
-            return NodeExecutionResult.failure("MCP_PROVIDER_NOT_CONFIGURED", false);
-        } else if (type == WorkflowNodeType.DIFY_WORKFLOW) {
-            return NodeExecutionResult.failure("DIFY_PROVIDER_NOT_CONFIGURED", false);
         } else if (type == WorkflowNodeType.DOCUMENT_PARSE) {
             return NodeExecutionResult.failure("DOCUMENT_INPUT_REQUIRED", false);
         }

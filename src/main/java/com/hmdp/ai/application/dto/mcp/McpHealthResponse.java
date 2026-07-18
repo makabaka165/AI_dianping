@@ -1,0 +1,1 @@
+package com.hmdp.ai.application.dto.mcp;public final class McpHealthResponse {private final String serverId,healthStatus;public McpHealthResponse(String serverId,String healthStatus){this.serverId=serverId;this.healthStatus=healthStatus;}public String getServerId(){return serverId;}public String getHealthStatus(){return healthStatus;}}

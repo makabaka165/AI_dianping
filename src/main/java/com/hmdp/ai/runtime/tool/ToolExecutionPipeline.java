@@ -10,6 +10,7 @@ import com.hmdp.ai.domain.tool.ToolDefinitionRepository;
 import com.hmdp.ai.domain.tool.ToolIdempotencyPort;
 import com.hmdp.ai.domain.tool.ToolInvocation;
 import com.hmdp.ai.domain.tool.ToolProtocol;
+import com.hmdp.ai.domain.tool.ToolProtocolAdapter;
 import com.hmdp.ai.domain.tool.ToolRateLimitPort;
 import com.hmdp.ai.domain.tool.ToolResult;
 import com.hmdp.ai.domain.tool.ToolRiskLevel;
@@ -23,6 +24,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
+import java.util.List;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
@@ -37,6 +39,7 @@ public class ToolExecutionPipeline {
 
     private final ToolDefinitionRepository definitions;
     private final LocalSkillRegistry skills;
+    private final List<ToolProtocolAdapter> protocolAdapters;
     private final ToolPermissionService permissions;
     private final ToolRateLimitPort rateLimits;
     private final ToolBudgetPort budgets;
@@ -48,6 +51,7 @@ public class ToolExecutionPipeline {
     private final ToolReliabilityExecutor reliability;
 
     public ToolExecutionPipeline(ToolDefinitionRepository definitions, LocalSkillRegistry skills,
+                                 List<ToolProtocolAdapter> protocolAdapters,
                                  ToolPermissionService permissions, ToolRateLimitPort rateLimits,
                                  ToolBudgetPort budgets, ToolIdempotencyPort idempotency, ToolAuditPort audit,
                                  JsonSchemaValidationService schemas, ObjectMapper mapper,
@@ -55,6 +59,7 @@ public class ToolExecutionPipeline {
                                  ToolReliabilityExecutor reliability) {
         this.definitions = definitions;
         this.skills = skills;
+        this.protocolAdapters = protocolAdapters;
         this.permissions = permissions;
         this.rateLimits = rateLimits;
         this.budgets = budgets;
@@ -92,7 +97,9 @@ public class ToolExecutionPipeline {
         } else {
             result = executeAuthorized(definition, invocation, started);
         }
-        audit.record(definition, invocation, result, started, System.currentTimeMillis() - started);
+        if (definition != null) {
+            audit.record(definition, invocation, result, started, System.currentTimeMillis() - started);
+        }
         return result;
     }
 
@@ -133,18 +140,17 @@ public class ToolExecutionPipeline {
 
     private ToolResult invoke(ToolDefinition definition, ToolInvocation invocation, JsonNode configuration,
                               long started) {
-        if (definition.getProtocol() != ToolProtocol.LOCAL_SKILL) {
-            return ToolResult.failure(ToolCallStatus.FAILED, "TOOL_PROTOCOL_NOT_AVAILABLE",
-                    "tool protocol adapter is not configured", false);
-        }
-        Callable<JsonNode> operation = () -> skills.require(definition.getCode(), definition.getVersion())
-                .execute(invocation.getContext(), invocation.getInput());
-        Callable<JsonNode> decorated = reliability.decorate(definition, invocation, operation);
-        Future<JsonNode> future = executor.submit(decorated);
+        Callable<ToolResult> operation = () -> executeProtocol(definition, invocation, configuration);
+        Callable<ToolResult> decorated = reliability.decorate(definition, invocation, operation);
+        Future<ToolResult> future = executor.submit(decorated);
         try {
             long remainingMs = Duration.between(Instant.now(), invocation.getContext().getDeadline()).toMillis();
             long timeoutMs = Math.max(1, Math.min(definition.getTimeoutMs(), remainingMs));
-            JsonNode data = future.get(timeoutMs, TimeUnit.MILLISECONDS);
+            ToolResult protocolResult = future.get(timeoutMs, TimeUnit.MILLISECONDS);
+            if (protocolResult.getStatus() != ToolCallStatus.SUCCEEDED) {
+                return protocolResult;
+            }
+            JsonNode data = protocolResult.getData();
             int resultLimit = Math.max(1024, Math.min(configuration.path("maxResultBytes")
                             .asInt(DEFAULT_MAX_RESULT_BYTES),
                     (int) Math.min(Integer.MAX_VALUE,
@@ -155,7 +161,8 @@ public class ToolExecutionPipeline {
             }
             ValidationResult validation = schemas.validateValue(definition.getOutputSchema(), data, "toolOutput");
             return validation.isValid()
-                    ? ToolResult.success(data, System.currentTimeMillis() - started)
+                    ? ToolResult.success(data, protocolResult.getCitations(), protocolResult.getArtifacts(),
+                    protocolResult.getWarnings(), protocolResult.getUsage())
                     : ToolResult.failure(ToolCallStatus.FAILED, "TOOL_OUTPUT_SCHEMA_INVALID",
                     "tool output schema validation failed", false);
         } catch (TimeoutException e) {
@@ -169,6 +176,20 @@ public class ToolExecutionPipeline {
             return ToolResult.failure(ToolCallStatus.FAILED, "TOOL_EXECUTION_FAILED",
                     "tool execution failed", false);
         }
+    }
+
+    private ToolResult executeProtocol(ToolDefinition definition, ToolInvocation invocation, JsonNode configuration) {
+        if (definition.getProtocol() == ToolProtocol.LOCAL_SKILL) {
+            JsonNode data = skills.require(definition.getCode(), definition.getVersion())
+                    .execute(invocation.getContext(), invocation.getInput());
+            return ToolResult.success(data, 0);
+        }
+        return protocolAdapters.stream()
+                .filter(adapter -> adapter.protocol() == definition.getProtocol())
+                .findFirst()
+                .map(adapter -> adapter.execute(definition, invocation, configuration))
+                .orElseGet(() -> ToolResult.failure(ToolCallStatus.FAILED, "TOOL_PROTOCOL_NOT_AVAILABLE",
+                        "tool protocol adapter is not configured", false));
     }
 
     private boolean requiresApproval(ToolDefinition definition) {

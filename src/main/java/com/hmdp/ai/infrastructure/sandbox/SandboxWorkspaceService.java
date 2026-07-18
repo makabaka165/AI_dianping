@@ -1,0 +1,9 @@
+package com.hmdp.ai.infrastructure.sandbox;
+
+import org.springframework.beans.factory.annotation.Value;import org.springframework.scheduling.annotation.Scheduled;import org.springframework.stereotype.Component;
+import java.nio.file.*;import java.time.*;import java.util.Comparator;
+@Component public class SandboxWorkspaceService {private final Path root;private final Duration ttl;public SandboxWorkspaceService(@Value("${ai.sandbox.root:${java.io.tmpdir}/hmdp-ai-sandbox}")String root,@Value("${ai.sandbox.ttl-hours:24}")long ttlHours){this.root=Paths.get(root).toAbsolutePath().normalize();this.ttl=Duration.ofHours(Math.max(1,ttlHours));}
+    public Path create(String runId){try{String safe=runId.replaceAll("[^A-Za-z0-9_-]","_");if(safe.isEmpty())throw new IllegalArgumentException("SANDBOX_RUN_ID_INVALID");Path path=root.resolve(safe).normalize();ensure(path);Files.createDirectories(path);return path;}catch(Exception e){throw new IllegalStateException("SANDBOX_WORKSPACE_CREATE_FAILED",e);}}
+    public void delete(Path path){try{ensure(path);if(!Files.exists(path))return;try(java.util.stream.Stream<Path>s=Files.walk(path)){s.sorted(Comparator.reverseOrder()).forEach(p->{try{Files.deleteIfExists(p);}catch(Exception ignored){}});}}catch(Exception ignored){}}
+    @Scheduled(fixedDelayString="${ai.sandbox.cleanup-ms:3600000}") public void cleanup(){if(!Files.isDirectory(root))return;Instant cutoff=Instant.now().minus(ttl);try(java.util.stream.Stream<Path>s=Files.list(root)){s.filter(Files::isDirectory).filter(p->{try{return Files.getLastModifiedTime(p).toInstant().isBefore(cutoff);}catch(Exception e){return false;}}).forEach(this::delete);}catch(Exception ignored){}}
+    private void ensure(Path path){if(!path.toAbsolutePath().normalize().startsWith(root))throw new IllegalArgumentException("SANDBOX_PATH_TRAVERSAL");}}
