@@ -37,4 +37,8 @@ public class Result {
     public static Result fail(ErrorCode errorCode, String errorMsg){
         return new Result(false, errorCode.getCode(), errorMsg, null, null);
     }
+
+    public static Result fail(ErrorCode errorCode, String errorMsg, Object data){
+        return new Result(false, errorCode.getCode(), errorMsg, data, null);
+    }
 }

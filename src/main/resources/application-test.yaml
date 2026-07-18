@@ -3,6 +3,8 @@ hmdp:
     redis-health-check: false
     task:
       enabled: false
+    runtime:
+      recovery-enabled: false
 spring:
   flyway:
     enabled: false

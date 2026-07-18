@@ -70,6 +70,12 @@ hmdp:
       max-concurrent-calls: ${HMDP_AI_MAX_CONCURRENT_CALLS:8}
       rate-limit-period-seconds: ${HMDP_AI_RATE_LIMIT_PERIOD_SECONDS:1}
       rate-limit-permits: ${HMDP_AI_RATE_LIMIT_PERMITS:2}
+    runtime:
+      core-threads: ${AI_RUNTIME_CORE_THREADS:2}
+      max-threads: ${AI_RUNTIME_MAX_THREADS:8}
+      queue-capacity: ${AI_RUNTIME_QUEUE_CAPACITY:200}
+      recovery-batch-size: ${AI_RUNTIME_RECOVERY_BATCH_SIZE:100}
+      recovery-enabled: ${AI_RUNTIME_RECOVERY_ENABLED:true}
     quota:
       enabled: ${HMDP_AI_QUOTA_ENABLED:true}
       minute-permits: ${HMDP_AI_QUOTA_MINUTE_PERMITS:10}

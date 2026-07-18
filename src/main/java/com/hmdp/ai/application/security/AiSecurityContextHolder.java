@@ -1,4 +1,4 @@
-package com.hmdp.ai.shared.security;
+package com.hmdp.ai.application.security;
 
 import com.hmdp.ai.domain.security.AiSecurityContext;
 

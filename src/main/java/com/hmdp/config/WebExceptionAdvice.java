@@ -4,6 +4,8 @@ import cn.dev33.satoken.exception.NotLoginException;
 import cn.dev33.satoken.exception.NotPermissionException;
 import cn.dev33.satoken.exception.SaTokenException;
 import com.hmdp.common.ErrorCode;
+import com.hmdp.ai.api.dto.AiErrorDetails;
+import com.hmdp.ai.shared.exception.AiPlatformException;
 import com.hmdp.ai.infra.AiLogSanitizer;
 import com.hmdp.dto.Result;
 import com.hmdp.exception.BusinessException;
@@ -22,6 +24,12 @@ import javax.validation.ConstraintViolationException;
 @Slf4j
 @RestControllerAdvice
 public class WebExceptionAdvice {
+
+    @ExceptionHandler(AiPlatformException.class)
+    public Result handleAiPlatformException(AiPlatformException e) {
+        Object details = e.getIssues().isEmpty() ? null : new AiErrorDetails(e.getIssues());
+        return Result.fail(e.getErrorCode(), e.getMessage(), details);
+    }
 
     @ExceptionHandler(NotLoginException.class)
     public Result handleNotLoginException(NotLoginException e) {

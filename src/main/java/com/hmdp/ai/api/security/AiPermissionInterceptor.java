@@ -3,7 +3,7 @@ package com.hmdp.ai.api.security;
 import cn.dev33.satoken.stp.StpUtil;
 import com.hmdp.ai.application.security.AiAuthorizationService;
 import com.hmdp.ai.domain.security.*;
-import com.hmdp.ai.shared.security.AiSecurityContextHolder;
+import com.hmdp.ai.application.security.AiSecurityContextHolder;
 import org.springframework.core.annotation.AnnotatedElementUtils;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
