@@ -17,6 +17,8 @@ import com.hmdp.ai.domain.run.RunStatus;
 import com.hmdp.ai.infra.AiLogSanitizer;
 import com.hmdp.ai.application.agent.event.RunEventPublisher;
 import com.hmdp.ai.domain.run.RunLifecycleEventPayload;
+import com.hmdp.ai.domain.run.WorkflowWaitEventPayload;
+import com.hmdp.ai.runtime.workflow.WorkflowPausedException;
 import com.hmdp.common.ErrorCode;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -133,6 +135,16 @@ public class DefaultAgentRuntime implements AgentRuntime {
             events.publish(tenantId, workspaceId, runId, "run.completed",
                     new RunLifecycleEventPayload(runId, RunStatus.COMPLETED, null, null,
                             "run completed"), true);
+        } catch (WorkflowPausedException paused) {
+            if (nodeRunId != null) {
+                nodeRuns.waitForResume(tenantId, workspaceId, nodeRunId,
+                        "{\"waitingNode\":\"" + paused.getNodeCode() + "\"}");
+            }
+            String eventType = paused.getRunStatus() == RunStatus.WAITING_FOR_APPROVAL
+                    ? "approval.required" : "feedback.required";
+            events.publish(tenantId, workspaceId, runId, eventType,
+                    new WorkflowWaitEventPayload(runId, paused.getRunStatus(), paused.getNodeCode(),
+                            paused.getResumeToken(), paused.getExpiresAt(), paused.getQuestions()), true);
         } catch (Exception e) {
             fail(tenantId, workspaceId, runId, nodeRunId, e);
         }

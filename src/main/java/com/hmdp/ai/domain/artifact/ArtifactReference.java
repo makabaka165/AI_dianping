@@ -1,5 +1,8 @@
 package com.hmdp.ai.domain.artifact;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonProperty;
+
 public final class ArtifactReference {
     private final String artifactId;
     private final String name;
@@ -7,7 +10,12 @@ public final class ArtifactReference {
     private final long sizeBytes;
     private final String downloadPath;
 
-    public ArtifactReference(String artifactId, String name, String contentType, long sizeBytes, String downloadPath) {
+    @JsonCreator
+    public ArtifactReference(@JsonProperty("artifactId") String artifactId,
+                             @JsonProperty("name") String name,
+                             @JsonProperty("contentType") String contentType,
+                             @JsonProperty("sizeBytes") long sizeBytes,
+                             @JsonProperty("downloadPath") String downloadPath) {
         this.artifactId = artifactId;
         this.name = name;
         this.contentType = contentType;

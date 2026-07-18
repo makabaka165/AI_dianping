@@ -17,6 +17,9 @@ public interface RunRepository {
 
     boolean cancel(String tenantId, String workspaceId, String runId, String actorId);
 
+    boolean markWaiting(String tenantId, String workspaceId, String runId, RunStatus waitingStatus,
+                        String resumeTokenHash, java.time.Instant expiresAt, String actorId);
+
     boolean resumeWaiting(String tenantId, String workspaceId, String runId, String resumeTokenHash,
                           String resumeDataJson, String actorId);
 

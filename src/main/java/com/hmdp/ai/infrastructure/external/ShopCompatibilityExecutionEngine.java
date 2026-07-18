@@ -6,14 +6,14 @@ import com.hmdp.ai.application.ShopAIApplicationService;
 import com.hmdp.ai.domain.agent.PublishedAgentDefinition;
 import com.hmdp.ai.domain.run.AgentRunOutput;
 import com.hmdp.ai.domain.run.ExecutionContext;
-import com.hmdp.ai.runtime.agent.AgentExecutionEngine;
 import com.hmdp.ai.runtime.agent.AgentOutputAssembler;
+import com.hmdp.ai.runtime.model.AgentModelExecutionPort;
 import com.hmdp.common.ErrorCode;
 import com.hmdp.dto.ai.ShopAIResponse;
 import org.springframework.stereotype.Component;
 
 @Component
-public class ShopCompatibilityExecutionEngine implements AgentExecutionEngine {
+public class ShopCompatibilityExecutionEngine implements AgentModelExecutionPort {
     private static final String SHOP_AGENT_CODE = "shop-consultant";
     private final ShopAIApplicationService shopAi;
     private final AgentOutputAssembler outputAssembler;

@@ -1,5 +1,8 @@
 package com.hmdp.ai.domain.artifact;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonProperty;
+
 public final class Citation {
     private final String citationId;
     private final String knowledgeBaseId;
@@ -15,9 +18,20 @@ public final class Citation {
     private final double score;
     private final String quotePreview;
 
-    public Citation(String citationId, String knowledgeBaseId, String documentId, int documentVersion,
-                    String chunkId, String title, String source, Integer page, String section,
-                    String sheet, String rowRange, double score, String quotePreview) {
+    @JsonCreator
+    public Citation(@JsonProperty("citationId") String citationId,
+                    @JsonProperty("knowledgeBaseId") String knowledgeBaseId,
+                    @JsonProperty("documentId") String documentId,
+                    @JsonProperty("documentVersion") int documentVersion,
+                    @JsonProperty("chunkId") String chunkId,
+                    @JsonProperty("title") String title,
+                    @JsonProperty("source") String source,
+                    @JsonProperty("page") Integer page,
+                    @JsonProperty("section") String section,
+                    @JsonProperty("sheet") String sheet,
+                    @JsonProperty("rowRange") String rowRange,
+                    @JsonProperty("score") double score,
+                    @JsonProperty("quotePreview") String quotePreview) {
         this.citationId = citationId;
         this.knowledgeBaseId = knowledgeBaseId;
         this.documentId = documentId;

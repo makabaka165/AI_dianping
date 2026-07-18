@@ -1,5 +1,9 @@
 package com.hmdp.ai.domain.run;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonProperty;
+
 import com.hmdp.ai.domain.artifact.ArtifactReference;
 import com.hmdp.ai.domain.artifact.Citation;
 import com.hmdp.ai.domain.artifact.ResponseBlock;
@@ -8,6 +12,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
+@JsonIgnoreProperties(ignoreUnknown = true)
 public final class AgentRunOutput {
     private final String answer;
     private final List<ResponseBlock> blocks;
@@ -17,9 +22,14 @@ public final class AgentRunOutput {
     private final List<String> warnings;
     private final RunStatus status;
 
-    public AgentRunOutput(String answer, List<ResponseBlock> blocks, List<Citation> citations,
-                          List<ArtifactReference> artifacts, UsageSummary usage,
-                          List<String> warnings, RunStatus status) {
+    @JsonCreator
+    public AgentRunOutput(@JsonProperty("answer") String answer,
+                          @JsonProperty("blocks") List<ResponseBlock> blocks,
+                          @JsonProperty("citations") List<Citation> citations,
+                          @JsonProperty("artifacts") List<ArtifactReference> artifacts,
+                          @JsonProperty("usage") UsageSummary usage,
+                          @JsonProperty("warnings") List<String> warnings,
+                          @JsonProperty("status") RunStatus status) {
         this.answer = answer;
         this.blocks = immutable(blocks);
         this.citations = immutable(citations);

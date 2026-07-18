@@ -1,0 +1,3 @@
+package com.hmdp.ai.runtime.tool.skill;
+import com.fasterxml.jackson.databind.*;import com.hmdp.ai.domain.run.ExecutionContext;import com.hmdp.ai.port.*;import com.hmdp.ai.runtime.tool.*;import com.hmdp.ai.runtime.tool.skill.dto.ShopExistenceData;import org.springframework.stereotype.Component;
+@Component @AgentSkill(code="check-shop-exists") public class CheckShopExistsSkill extends ShopSkillSupport implements LocalSkill {public CheckShopExistsSkill(ShopDataPort s,ReviewDataPort r,ObjectMapper m){super(s,r,m);}@Override public JsonNode execute(ExecutionContext c,JsonNode in){long id=shopId(in);return json(new ShopExistenceData(id,shops.shopExists(id)));}}

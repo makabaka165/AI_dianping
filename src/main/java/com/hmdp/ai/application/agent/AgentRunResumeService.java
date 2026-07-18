@@ -10,8 +10,10 @@ import com.hmdp.ai.domain.run.RunStatus;
 import com.hmdp.ai.domain.security.AiSecurityContext;
 import com.hmdp.ai.application.agent.AgentRuntime;
 import com.hmdp.ai.shared.json.ContentHashService;
+import com.hmdp.ai.domain.workflow.WorkflowStateRepository;
 import com.hmdp.common.ErrorCode;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class AgentRunResumeService {
@@ -19,15 +21,19 @@ public class AgentRunResumeService {
     private final AgentRuntime runtime;
     private final ContentHashService hashes;
     private final ObjectMapper objectMapper;
+    private final WorkflowStateRepository workflowStates;
 
     public AgentRunResumeService(RunRepository repository, AgentRuntime runtime,
-                                 ContentHashService hashes, ObjectMapper objectMapper) {
+                                 ContentHashService hashes, ObjectMapper objectMapper,
+                                 WorkflowStateRepository workflowStates) {
         this.repository = repository;
         this.runtime = runtime;
         this.hashes = hashes;
         this.objectMapper = objectMapper;
+        this.workflowStates = workflowStates;
     }
 
+    @Transactional
     public AgentRunCreatedResponse resume(AiSecurityContext context, AgentRunRecord run,
                                           ResumeAgentRunRequest request) {
         if (run.getStatus() != RunStatus.WAITING_FOR_USER && run.getStatus() != RunStatus.WAITING_FOR_APPROVAL) {
@@ -35,8 +41,13 @@ public class AgentRunResumeService {
         }
         try {
             String data = objectMapper.writeValueAsString(request.getVariables());
-            boolean resumed = repository.resumeWaiting(run.getTenantId(), run.getWorkspaceId(), run.getId(),
-                    hashes.sha256(request.getResumeToken()), data, context.getUserId());
+            String tokenHash = hashes.sha256(request.getResumeToken());
+            java.util.Map<String, Object> variables = objectMapper.convertValue(request.getVariables(),
+                    new com.fasterxml.jackson.core.type.TypeReference<java.util.Map<String, Object>>() {});
+            boolean workflowResumed = workflowStates.resume(run.getTenantId(), run.getWorkspaceId(), run.getId(),
+                    tokenHash, variables, context.getUserId());
+            boolean resumed = workflowResumed && repository.resumeWaiting(run.getTenantId(), run.getWorkspaceId(),
+                    run.getId(), tokenHash, data, context.getUserId());
             if (!resumed) {
                 throw new AiPlatformException(ErrorCode.AI_VERSION_CONFLICT,
                         "resume token is invalid or expired");

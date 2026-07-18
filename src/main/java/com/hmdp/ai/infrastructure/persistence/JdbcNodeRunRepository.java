@@ -60,6 +60,13 @@ public class JdbcNodeRunRepository implements NodeRunRepository {
     }
 
     @Override
+    public void waitForResume(String tenantId, String workspaceId, String nodeRunId, String outputJson) {
+        jdbcTemplate.update("update ai_node_run set status='WAITING',output_json=?,updated_by='runtime' where " +
+                        "tenant_id=? and workspace_id=? and id=? and status='RUNNING' and deleted=0",
+                outputJson, tenantId, workspaceId, nodeRunId);
+    }
+
+    @Override
     public void fail(String tenantId, String workspaceId, String nodeRunId, NodeRunStatus status,
                      String errorCode, String errorMessage, boolean retryable) {
         if (status != NodeRunStatus.FAILED && status != NodeRunStatus.TIMED_OUT

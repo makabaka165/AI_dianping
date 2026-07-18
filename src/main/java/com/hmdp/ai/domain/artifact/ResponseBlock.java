@@ -1,5 +1,8 @@
 package com.hmdp.ai.domain.artifact;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonProperty;
+
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -9,7 +12,10 @@ public final class ResponseBlock {
     private final String text;
     private final Map<String, Object> data;
 
-    public ResponseBlock(ResponseBlockType type, String text, Map<String, Object> data) {
+    @JsonCreator
+    public ResponseBlock(@JsonProperty("type") ResponseBlockType type,
+                         @JsonProperty("text") String text,
+                         @JsonProperty("data") Map<String, Object> data) {
         this.type = type;
         this.text = text;
         this.data = Collections.unmodifiableMap(new LinkedHashMap<>(data == null

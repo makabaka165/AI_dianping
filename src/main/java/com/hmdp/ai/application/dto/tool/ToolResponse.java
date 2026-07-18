@@ -1,0 +1,3 @@
+package com.hmdp.ai.application.dto.tool;
+import com.hmdp.ai.domain.tool.ToolCatalogEntry;
+public final class ToolResponse {private final String id,code,name,description,status;private final int latestVersion;public ToolResponse(ToolCatalogEntry t){id=t.getId();code=t.getCode();name=t.getName();description=t.getDescription();status=t.getStatus();latestVersion=t.getLatestVersion();}public String getId(){return id;}public String getCode(){return code;}public String getName(){return name;}public String getDescription(){return description;}public String getStatus(){return status;}public int getLatestVersion(){return latestVersion;}}

@@ -1,5 +1,10 @@
 package com.hmdp.ai.domain.run;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonProperty;
+
+@JsonIgnoreProperties(ignoreUnknown = true)
 public final class UsageSummary {
     private final long inputTokens;
     private final long outputTokens;
@@ -9,8 +14,13 @@ public final class UsageSummary {
     private final int retrievalCalls;
     private final long durationMs;
 
-    public UsageSummary(long inputTokens, long outputTokens, int modelCalls, int toolCalls,
-                        int retrievalCalls, long durationMs) {
+    @JsonCreator
+    public UsageSummary(@JsonProperty("inputTokens") long inputTokens,
+                        @JsonProperty("outputTokens") long outputTokens,
+                        @JsonProperty("modelCalls") int modelCalls,
+                        @JsonProperty("toolCalls") int toolCalls,
+                        @JsonProperty("retrievalCalls") int retrievalCalls,
+                        @JsonProperty("durationMs") long durationMs) {
         this.inputTokens = inputTokens;
         this.outputTokens = outputTokens;
         this.totalTokens = inputTokens + outputTokens;

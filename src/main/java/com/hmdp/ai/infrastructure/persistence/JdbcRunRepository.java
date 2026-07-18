@@ -95,9 +95,22 @@ public class JdbcRunRepository implements RunRepository {
     }
 
     @Override
+    public boolean markWaiting(String tenantId, String workspaceId, String runId, RunStatus waitingStatus,
+                               String resumeTokenHash, Instant expiresAt, String actorId) {
+        if (waitingStatus != RunStatus.WAITING_FOR_USER && waitingStatus != RunStatus.WAITING_FOR_APPROVAL) {
+            throw new IllegalArgumentException("run waiting status is invalid");
+        }
+        return jdbcTemplate.update("update ai_run set status=?,resume_token_hash=?,wait_expires_at=?," +
+                        "updated_by=? where tenant_id=? and workspace_id=? and id=? and status='RUNNING' and deleted=0",
+                waitingStatus.name(), resumeTokenHash, Timestamp.from(expiresAt), actorId,
+                tenantId, workspaceId, runId) == 1;
+    }
+
+    @Override
     public boolean resumeWaiting(String tenantId, String workspaceId, String runId, String resumeTokenHash,
                                  String resumeDataJson, String actorId) {
-        return jdbcTemplate.update("update ai_run set status='QUEUED',resume_data_json=?,queued_at=?,updated_by=? " +
+        return jdbcTemplate.update("update ai_run set status='QUEUED',resume_data_json=?,resume_token_hash=null," +
+                        "wait_expires_at=null,queued_at=?,updated_by=? " +
                         "where tenant_id=? and workspace_id=? and id=? and status in " +
                         "('WAITING_FOR_USER','WAITING_FOR_APPROVAL') and resume_token_hash=? and wait_expires_at>? " +
                         "and deleted=0", resumeDataJson, Timestamp.from(Instant.now()), actorId, tenantId,

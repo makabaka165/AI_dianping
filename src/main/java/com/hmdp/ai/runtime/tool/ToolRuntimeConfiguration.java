@@ -1,0 +1,3 @@
+package com.hmdp.ai.runtime.tool;
+import org.springframework.context.annotation.*;import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;import java.util.concurrent.ThreadPoolExecutor;
+@Configuration public class ToolRuntimeConfiguration {@Bean("toolExecutionExecutor") public ThreadPoolTaskExecutor executor(){ThreadPoolTaskExecutor e=new ThreadPoolTaskExecutor();e.setCorePoolSize(4);e.setMaxPoolSize(16);e.setQueueCapacity(200);e.setThreadNamePrefix("agent-tool-");e.setRejectedExecutionHandler(new ThreadPoolExecutor.AbortPolicy());e.setWaitForTasksToCompleteOnShutdown(true);e.setAwaitTerminationSeconds(20);e.initialize();return e;}}
