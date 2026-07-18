@@ -15,8 +15,11 @@ import com.hmdp.ai.domain.run.NodeRunStatus;
 import com.hmdp.ai.domain.run.RunRepository;
 import com.hmdp.ai.domain.run.RunStatus;
 import com.hmdp.ai.infra.AiLogSanitizer;
+import com.hmdp.ai.infra.AiMetricsService;
+import com.hmdp.ai.domain.observability.AiTraceContext;
 import com.hmdp.ai.application.agent.event.RunEventPublisher;
 import com.hmdp.ai.domain.run.RunLifecycleEventPayload;
+import com.hmdp.ai.domain.run.RunCompletionObserver;
 import com.hmdp.ai.domain.run.WorkflowWaitEventPayload;
 import com.hmdp.ai.runtime.workflow.WorkflowPausedException;
 import com.hmdp.common.ErrorCode;
@@ -27,6 +30,7 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
+import java.util.List;
 
 @Component
 @Slf4j
@@ -42,13 +46,17 @@ public class DefaultAgentRuntime implements AgentRuntime {
     private final ObjectMapper objectMapper;
     private final ThreadPoolTaskExecutor executor;
     private final AgentRuntimeProperties properties;
+    private final List<RunCompletionObserver> completionObservers;
+    private final AiMetricsService metrics;
+    private final AiTraceContext traceContext;
 
     public DefaultAgentRuntime(RunRepository runs, NodeRunRepository nodeRuns,
                                AgentDefinitionLoader definitionLoader, AgentContextAssembler contextAssembler,
                                AgentExecutionEngine executionEngine, AgentOutputValidator outputValidator,
                                RunEventPublisher events, ObjectMapper objectMapper,
                                @Qualifier("agentRunExecutor") ThreadPoolTaskExecutor executor,
-                               AgentRuntimeProperties properties) {
+                               AgentRuntimeProperties properties, List<RunCompletionObserver> completionObservers,
+                               AiMetricsService metrics, AiTraceContext traceContext) {
         this.runs = runs;
         this.nodeRuns = nodeRuns;
         this.definitionLoader = definitionLoader;
@@ -59,6 +67,9 @@ public class DefaultAgentRuntime implements AgentRuntime {
         this.objectMapper = objectMapper;
         this.executor = executor;
         this.properties = properties;
+        this.completionObservers = completionObservers;
+        this.metrics = metrics;
+        this.traceContext = traceContext;
     }
 
     @Override
@@ -87,11 +98,13 @@ public class DefaultAgentRuntime implements AgentRuntime {
         try {
             AgentRunRecord run = runs.find(tenantId, workspaceId, runId).orElse(null);
             if (run == null || run.getStatus().isTerminal()) return;
+            traceContext.bind(run,null);
             if (!run.getDeadlineAt().isAfter(Instant.now())) {
                 timeout(run, null);
                 return;
             }
             if (!runs.claimQueued(tenantId, workspaceId, runId)) return;
+            metrics.recordAgentRunStarted(run.getAgentId());
             events.publish(tenantId, workspaceId, runId, "run.started",
                     new RunLifecycleEventPayload(runId, RunStatus.RUNNING, null, null, "run started"), false);
             AgentInputRequest input = objectMapper.readValue(run.getInputJson(), AgentInputRequest.class);
@@ -112,6 +125,8 @@ public class DefaultAgentRuntime implements AgentRuntime {
                         new RunLifecycleEventPayload(runId, RunStatus.RUNNING, COMPATIBILITY_NODE,
                                 null, "idempotent node output restored"), false);
                 runs.complete(tenantId, workspaceId, runId, nodeClaim.getOutputJson());
+                notifyCompletion(current, nodeClaim.getOutputJson());
+                metrics.recordAgentRunCompleted(run.getAgentId(),duration(run));
                 events.publish(tenantId, workspaceId, runId, "run.completed",
                         new RunLifecycleEventPayload(runId, RunStatus.COMPLETED, null, null,
                                 "run completed from persisted node output"), true);
@@ -132,6 +147,8 @@ public class DefaultAgentRuntime implements AgentRuntime {
                     new RunLifecycleEventPayload(runId, RunStatus.RUNNING, COMPATIBILITY_NODE,
                             null, "compatibility node completed"), false);
             runs.complete(tenantId, workspaceId, runId, outputJson);
+            notifyCompletion(run, outputJson);
+            metrics.recordAgentRunCompleted(run.getAgentId(),duration(run));
             events.publish(tenantId, workspaceId, runId, "run.completed",
                     new RunLifecycleEventPayload(runId, RunStatus.COMPLETED, null, null,
                             "run completed"), true);
@@ -147,6 +164,8 @@ public class DefaultAgentRuntime implements AgentRuntime {
                             paused.getResumeToken(), paused.getExpiresAt(), paused.getQuestions()), true);
         } catch (Exception e) {
             fail(tenantId, workspaceId, runId, nodeRunId, e);
+        } finally {
+            traceContext.clear();
         }
     }
 
@@ -157,6 +176,7 @@ public class DefaultAgentRuntime implements AgentRuntime {
         }
         runs.fail(run.getTenantId(), run.getWorkspaceId(), run.getId(), "RUN_DEADLINE_EXCEEDED",
                 "run deadline exceeded", RunStatus.TIMED_OUT);
+        metrics.recordAgentRunFailed(run.getAgentId(),"RUN_DEADLINE_EXCEEDED",duration(run));
         events.publish(run.getTenantId(), run.getWorkspaceId(), run.getId(), "run.failed",
                 new RunLifecycleEventPayload(run.getId(), RunStatus.TIMED_OUT, null,
                         "RUN_DEADLINE_EXCEEDED", "run deadline exceeded"), true);
@@ -172,6 +192,7 @@ public class DefaultAgentRuntime implements AgentRuntime {
             nodeRuns.fail(tenantId, workspaceId, nodeRunId, NodeRunStatus.FAILED, code, message, false);
         }
         runs.fail(tenantId, workspaceId, runId, code, message, RunStatus.FAILED);
+        if(current!=null)metrics.recordAgentRunFailed(current.getAgentId(),code,duration(current));
         try {
             events.publish(tenantId, workspaceId, runId, "run.failed",
                     new RunLifecycleEventPayload(runId, RunStatus.FAILED, null, code, message), true);
@@ -190,4 +211,8 @@ public class DefaultAgentRuntime implements AgentRuntime {
         }
         return ErrorCode.AI_EXECUTION_FAILED.name();
     }
+
+    private void notifyCompletion(AgentRunRecord run,String outputJson){for(RunCompletionObserver observer:completionObservers){
+        try{observer.onCompleted(run,outputJson);}catch(Exception e){log.error("run completion observer failed, runId={}",run.getId(),e);}}}
+    private long duration(AgentRunRecord run){Instant start=run.getStartedAt()==null?run.getQueuedAt():run.getStartedAt();return start==null?0:Math.max(0,java.time.Duration.between(start,Instant.now()).toMillis());}
 }

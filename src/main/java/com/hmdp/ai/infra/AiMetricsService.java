@@ -86,6 +86,20 @@ public class AiMetricsService {
         return counters;
     }
 
+    public void recordAgentRunStarted(String agentId) {
+        increment("agent_run_total", Tags.of("agentId", safe(agentId), "status", "started"));
+    }
+
+    public void recordAgentRunCompleted(String agentId, long durationMillis) {
+        increment("agent_run_success_total", Tags.of("agentId", safe(agentId)));
+        recordTimer("agent_run_duration", durationMillis, Tags.of("agentId", safe(agentId), "status", "success"));
+    }
+
+    public void recordAgentRunFailed(String agentId, String errorCode, long durationMillis) {
+        increment("agent_run_failure_total", Tags.of("agentId", safe(agentId), "errorCode", safe(errorCode)));
+        recordTimer("agent_run_duration", durationMillis, Tags.of("agentId", safe(agentId), "status", "failure"));
+    }
+
     private void increment(String metric, Tags tags) {
         String key = key(metric, tags);
         long value = counters.computeIfAbsent(key, ignored -> new AtomicLong()).incrementAndGet();

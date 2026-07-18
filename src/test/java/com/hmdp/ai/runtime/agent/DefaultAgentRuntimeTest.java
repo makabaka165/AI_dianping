@@ -97,7 +97,9 @@ class DefaultAgentRuntimeTest {
                 .when(runs).complete(anyString(), anyString(), anyString(), anyString());
 
         DefaultAgentRuntime runtime = new DefaultAgentRuntime(runs, nodes, loader, contextAssembler, engine,
-                outputValidator, events, mapper, executor, properties);
+                outputValidator, events, mapper, executor, properties, java.util.Collections.emptyList(),
+                mock(com.hmdp.ai.infra.AiMetricsService.class),
+                mock(com.hmdp.ai.domain.observability.AiTraceContext.class));
         runtime.enqueue("tenant", "workspace", "run");
 
         assertTrue(completed.await(5, TimeUnit.SECONDS));
