@@ -28,6 +28,7 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Collections;
+import java.util.Arrays;
 import java.util.EnumSet;
 import java.util.Optional;
 
@@ -102,11 +103,32 @@ class ToolExecutionPipelineTest {
         verify(audit).record(eq(definition), any(), eq(result), anyLongValue(), anyLongValue());
     }
 
+    @Test
+    void timesOutSlowToolAndReturnsRetryableStructuredFailure() {
+        ObjectMapper mapper = new ObjectMapper();
+        ToolDefinitionRepository repository = mock(ToolDefinitionRepository.class);
+        ToolRateLimitPort rateLimit = mock(ToolRateLimitPort.class);
+        ToolBudgetPort budget = mock(ToolBudgetPort.class);
+        ToolIdempotencyPort idempotency = mock(ToolIdempotencyPort.class);
+        ToolDefinition definition = definition(ToolRiskLevel.LOW, "slow-skill", 10);
+        when(repository.findBound(anyString(), anyString(), anyString(), anyInt(), anyString(), anyInt()))
+                .thenReturn(Optional.of(definition));
+        when(rateLimit.acquire(anyString(), anyString(), anyInt())).thenReturn(true);
+        when(budget.reserve(anyString(), anyString(), anyString(), anyInt(), any(Duration.class))).thenReturn(true);
+        when(idempotency.find(anyString(), anyString(), anyString())).thenReturn(Optional.empty());
+        ToolResult result = pipeline(mapper, repository, rateLimit, budget, idempotency, mock(ToolAuditPort.class))
+                .execute(new ToolInvocation("call", "slow-skill", 1, context(),
+                        mapper.createObjectNode().put("value", "ok")));
+        assertEquals(ToolCallStatus.TIMED_OUT, result.getStatus());
+        assertEquals("TOOL_TIMEOUT", result.getErrorCode());
+        assertEquals(true, result.isRetryable());
+    }
+
     private ToolExecutionPipeline pipeline(ObjectMapper mapper, ToolDefinitionRepository repository,
                                            ToolRateLimitPort rateLimit, ToolBudgetPort budget,
                                            ToolIdempotencyPort idempotency, ToolAuditPort audit) {
         return new ToolExecutionPipeline(repository,
-                new LocalSkillRegistry(Collections.singletonList(new TestSkill())),
+                new LocalSkillRegistry(Arrays.asList(new TestSkill(), new SlowSkill())),
                 Collections.emptyList(),
                 new ToolPermissionService(), rateLimit, budget, idempotency, audit,
                 new JsonSchemaValidationService(mapper), mapper, executor,
@@ -114,11 +136,15 @@ class ToolExecutionPipelineTest {
     }
 
     private ToolDefinition definition(ToolRiskLevel risk) {
-        return new ToolDefinition("tool", "tool-v1", "test-skill", 1, "Test",
+        return definition(risk, "test-skill", 1000);
+    }
+
+    private ToolDefinition definition(ToolRiskLevel risk, String code, int timeoutMs) {
+        return new ToolDefinition("tool", "tool-v1", code, 1, "Test",
                 ToolProtocol.LOCAL_SKILL,
                 "{\"type\":\"object\",\"required\":[\"value\"]}",
                 "{\"type\":\"object\",\"required\":[\"echo\"]}",
-                risk, false, true, 1000, "{\"maxAttempts\":1}",
+                risk, false, true, timeoutMs, "{\"maxAttempts\":1}",
                 Collections.singletonList(AiPermission.AGENT_RUN), "{}", true);
     }
 
@@ -126,6 +152,19 @@ class ToolExecutionPipelineTest {
     static class TestSkill implements LocalSkill {
         @Override
         public JsonNode execute(ExecutionContext context, JsonNode input) {
+            return JsonNodeFactory.instance.objectNode().put("echo", input.path("value").asText());
+        }
+    }
+
+    @AgentSkill(code = "slow-skill")
+    static class SlowSkill implements LocalSkill {
+        @Override
+        public JsonNode execute(ExecutionContext context, JsonNode input) {
+            try {
+                Thread.sleep(200);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
             return JsonNodeFactory.instance.objectNode().put("echo", input.path("value").asText());
         }
     }

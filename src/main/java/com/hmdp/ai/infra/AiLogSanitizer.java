@@ -56,7 +56,8 @@ public final class AiLogSanitizer {
 
     private static String redact(String value) {
         return value
-                .replaceAll("(?i)(api[_-]?key|authorization|password|secret|token)\\s*[:=]\\s*\\S+", "$1=" + REDACTED)
+                .replaceAll("(?i)(authorization)[\"']?\\s*[:=]\\s*[\"']?(bearer\\s+)?[^\\s,;\"'}]+", "$1=" + REDACTED)
+                .replaceAll("(?i)(api[_-]?key|apikey|password|secret|token)[\"']?\\s*[:=]\\s*[\"']?[^\\s,;\"'}]+", "$1=" + REDACTED)
                 .replaceAll("sk-[A-Za-z0-9_-]{6,}", "sk-" + REDACTED);
     }
 }

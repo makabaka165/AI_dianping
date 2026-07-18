@@ -1,0 +1,1 @@
+package com.hmdp.ai.domain.artifact;import java.io.InputStream;public final class ArtifactContent {private final ArtifactRecord record;private final InputStream content;public ArtifactContent(ArtifactRecord record,InputStream content){this.record=record;this.content=content;}public ArtifactRecord getRecord(){return record;}public InputStream getContent(){return content;}}
