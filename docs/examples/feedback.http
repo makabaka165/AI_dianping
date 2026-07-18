@@ -1,0 +1,12 @@
+@baseUrl = http://localhost:8081
+@token = replace_me
+@tenant = default
+@workspace = default
+
+POST {{baseUrl}}/api/v1/feedback
+satoken: {{token}}
+X-Tenant-Id: {{tenant}}
+X-Workspace-Id: {{workspace}}
+Content-Type: application/json
+
+{"runId":"RUN_ID","messageId":"MESSAGE_ID","rating":-1,"tags":["WRONG_CITATION"],"comment":"The cited paragraph does not support the conclusion.","correctedAnswer":"Use the current policy version."}

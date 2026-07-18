@@ -1,0 +1,150 @@
+openapi: 3.0.3
+info:
+  title: AI Dianping Agent Platform API
+  version: 1.0.0
+servers:
+  - url: http://localhost:8081
+security:
+  - saToken: []
+paths:
+  /api/v1/agent-runs:
+    post:
+      summary: Create an Agent run
+      parameters: [ { $ref: '#/components/parameters/TenantHeader' }, { $ref: '#/components/parameters/WorkspaceHeader' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentRunRequest' }
+      responses:
+        '200':
+          description: Run queued
+          content: { application/json: { schema: { $ref: '#/components/schemas/RunCreated' } } }
+  /api/v1/agent-runs/{runId}:
+    get:
+      summary: Get run details
+      parameters:
+        - { $ref: '#/components/parameters/TenantHeader' }
+        - { $ref: '#/components/parameters/WorkspaceHeader' }
+        - { name: runId, in: path, required: true, schema: { type: string } }
+      responses: { '200': { description: Run details } }
+  /api/v1/agent-runs/{runId}/events:
+    get:
+      summary: Stream run events
+      parameters:
+        - { $ref: '#/components/parameters/TenantHeader' }
+        - { $ref: '#/components/parameters/WorkspaceHeader' }
+        - { name: runId, in: path, required: true, schema: { type: string } }
+      responses: { '200': { description: SSE stream, content: { text/event-stream: {} } } }
+  /api/v1/agent-runs/{runId}/cancel:
+    post:
+      summary: Cancel a run
+      parameters:
+        - { $ref: '#/components/parameters/TenantHeader' }
+        - { $ref: '#/components/parameters/WorkspaceHeader' }
+        - { name: runId, in: path, required: true, schema: { type: string } }
+      responses: { '200': { description: Cancellation result } }
+  /api/v1/agent-runs/{runId}/retry:
+    post:
+      summary: Retry a terminal run
+      parameters:
+        - { $ref: '#/components/parameters/TenantHeader' }
+        - { $ref: '#/components/parameters/WorkspaceHeader' }
+        - { name: runId, in: path, required: true, schema: { type: string } }
+      responses: { '200': { description: New run } }
+  /api/v1/agent-runs/{runId}/resume:
+    post:
+      summary: Resume a waiting run
+      parameters:
+        - { $ref: '#/components/parameters/TenantHeader' }
+        - { $ref: '#/components/parameters/WorkspaceHeader' }
+        - { name: runId, in: path, required: true, schema: { type: string } }
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [resumeToken, variables], properties: { resumeToken: { type: string }, variables: { type: object } } } } } }
+      responses: { '200': { description: Run requeued } }
+  /api/v1/knowledge-bases:
+    post:
+      summary: Create a knowledge base
+      parameters: [ { $ref: '#/components/parameters/TenantHeader' }, { $ref: '#/components/parameters/WorkspaceHeader' } ]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [code, name], properties: { code: { type: string }, name: { type: string }, description: { type: string } } } } } }
+      responses: { '200': { description: Created } }
+    get:
+      summary: List knowledge bases
+      parameters: [ { $ref: '#/components/parameters/TenantHeader' }, { $ref: '#/components/parameters/WorkspaceHeader' } ]
+      responses: { '200': { description: Page } }
+  /api/v1/knowledge-bases/{id}/documents:
+    post:
+      summary: Upload a document and create an ingestion job
+      parameters:
+        - { $ref: '#/components/parameters/TenantHeader' }
+        - { $ref: '#/components/parameters/WorkspaceHeader' }
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody: { required: true, content: { multipart/form-data: { schema: { type: object, required: [file], properties: { file: { type: string, format: binary } } } } } }
+      responses: { '200': { description: Ingestion job created } }
+  /api/v1/knowledge-bases/{id}/search:
+    post:
+      summary: Hybrid knowledge search
+      parameters:
+        - { $ref: '#/components/parameters/TenantHeader' }
+        - { $ref: '#/components/parameters/WorkspaceHeader' }
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [query], properties: { query: { type: string, maxLength: 4000 }, topK: { type: integer, minimum: 1, maximum: 50 } } } } } }
+      responses: { '200': { description: Structured chunks and citations } }
+  /api/v1/feedback:
+    post:
+      summary: Submit feedback
+      parameters: [ { $ref: '#/components/parameters/TenantHeader' }, { $ref: '#/components/parameters/WorkspaceHeader' } ]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [runId], properties: { runId: { type: string }, messageId: { type: string }, rating: { type: integer, minimum: -1, maximum: 1 }, tags: { type: array, items: { type: string } }, comment: { type: string, maxLength: 4000 }, correctedAnswer: { type: string } } } } } }
+      responses: { '200': { description: Feedback stored } }
+  /api/v1/mcp-servers:
+    post:
+      summary: Register MCP server (ADMIN)
+      parameters: [ { $ref: '#/components/parameters/TenantHeader' }, { $ref: '#/components/parameters/WorkspaceHeader' } ]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [code, name, namespace, transport, endpoint], properties: { code: { type: string }, name: { type: string }, namespace: { type: string }, transport: { type: string, enum: [HTTP] }, endpoint: { type: string, format: uri }, secretRef: { type: string, example: 'env:MCP_API_KEY' }, allowedTools: { type: array, items: { type: string } }, timeoutMs: { type: integer } } } } } }
+      responses: { '200': { description: Registered without resolved secret } }
+    get:
+      summary: List MCP servers
+      parameters: [ { $ref: '#/components/parameters/TenantHeader' }, { $ref: '#/components/parameters/WorkspaceHeader' } ]
+      responses: { '200': { description: MCP servers } }
+components:
+  parameters:
+    TenantHeader:
+      name: X-Tenant-Id
+      in: header
+      required: true
+      schema: { type: string, maxLength: 64 }
+    WorkspaceHeader:
+      name: X-Workspace-Id
+      in: header
+      required: true
+      schema: { type: string, maxLength: 64 }
+  securitySchemes:
+    saToken:
+      type: apiKey
+      in: header
+      name: satoken
+  schemas:
+    AgentRunRequest:
+      type: object
+      required: [agentId, agentVersion, sessionId, input, responseMode]
+      properties:
+        agentId: { type: string, maxLength: 64 }
+        agentVersion: { type: integer, minimum: 1 }
+        sessionId: { type: string, maxLength: 128 }
+        input:
+          type: object
+          required: [text]
+          properties:
+            text: { type: string, maxLength: 20000 }
+            parts: { type: array, items: { type: object } }
+            attachments: { type: array, items: { type: object } }
+            referenceUris: { type: array, items: { type: string } }
+        responseMode: { type: string, enum: [BLOCKING, STREAM] }
+        metadata: { type: object }
+    RunCreated:
+      type: object
+      required: [runId, status, agentId, agentVersion]
+      properties:
+        runId: { type: string }
+        status: { type: string }
+        agentId: { type: string }
+        agentVersion: { type: integer }

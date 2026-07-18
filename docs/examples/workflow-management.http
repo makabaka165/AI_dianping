@@ -1,0 +1,18 @@
+@baseUrl = http://localhost:8081
+@token = replace_me
+@tenant = default
+@workspace = default
+
+POST {{baseUrl}}/api/v1/workflows
+satoken: {{token}}
+X-Tenant-Id: {{tenant}}
+X-Workspace-Id: {{workspace}}
+Content-Type: application/json
+
+{"code":"support-flow","name":"Support flow","description":"Validated support workflow"}
+
+### Validate a created version
+POST {{baseUrl}}/api/v1/workflows/WORKFLOW_ID/versions/1/validate
+satoken: {{token}}
+X-Tenant-Id: {{tenant}}
+X-Workspace-Id: {{workspace}}

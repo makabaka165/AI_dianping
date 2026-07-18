@@ -1,0 +1,26 @@
+@baseUrl = http://localhost:8081
+@token = replace_me
+@tenant = default
+@workspace = default
+
+POST {{baseUrl}}/api/v1/knowledge-bases
+satoken: {{token}}
+X-Tenant-Id: {{tenant}}
+X-Workspace-Id: {{workspace}}
+Content-Type: application/json
+
+{"code":"shop-enterprise-knowledge","name":"Shop enterprise knowledge","description":"Policies and operating knowledge"}
+
+### Use an HTTP client supporting multipart file references
+POST {{baseUrl}}/api/v1/knowledge-bases/KB_ID/documents
+satoken: {{token}}
+X-Tenant-Id: {{tenant}}
+X-Workspace-Id: {{workspace}}
+Content-Type: multipart/form-data; boundary=Boundary
+
+--Boundary
+Content-Disposition: form-data; name="file"; filename="policy.pdf"
+Content-Type: application/pdf
+
+< ./policy.pdf
+--Boundary--

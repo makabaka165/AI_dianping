@@ -1,0 +1,19 @@
+@baseUrl = http://localhost:8081
+@token = replace_me
+@tenant = default
+@workspace = default
+
+### Create run
+POST {{baseUrl}}/api/v1/agent-runs
+satoken: {{token}}
+X-Tenant-Id: {{tenant}}
+X-Workspace-Id: {{workspace}}
+Content-Type: application/json
+
+{"agentId":"shop-consultant","agentVersion":1,"sessionId":"session-123","input":{"text":"对比 1 号店和 2 号店的服务态度","parts":[],"attachments":[],"referenceUris":[]},"responseMode":"STREAM","metadata":{"channel":"web"}}
+
+### Replace RUN_ID, then stream events
+GET {{baseUrl}}/api/v1/agent-runs/RUN_ID/events
+satoken: {{token}}
+X-Tenant-Id: {{tenant}}
+X-Workspace-Id: {{workspace}}
