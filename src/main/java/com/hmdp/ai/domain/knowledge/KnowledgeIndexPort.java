@@ -1,0 +1,11 @@
+package com.hmdp.ai.domain.knowledge;
+
+import java.util.List;
+
+public interface KnowledgeIndexPort {
+    void ensureIndex(String indexVersion,int dimension);
+    void index(List<KnowledgeChunk> chunks);
+    void delete(String indexVersion,List<String> chunkIds);
+    List<IndexHit> vectorSearch(KnowledgeSearchScope scope,float[] embedding,int limit);
+    List<IndexHit> lexicalSearch(KnowledgeSearchScope scope,String normalizedQuery,int limit);
+}

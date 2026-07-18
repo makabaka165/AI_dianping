@@ -1,0 +1,3 @@
+package com.hmdp.ai.runtime.knowledge;
+import org.springframework.boot.ApplicationArguments;import org.springframework.boot.ApplicationRunner;import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;import org.springframework.stereotype.Component;
+@Component @ConditionalOnProperty(prefix="hmdp.ai.knowledge",name="recovery-enabled",havingValue="true",matchIfMissing=true) public class KnowledgeIngestionRecoveryRunner implements ApplicationRunner {private final IngestionJobWorker worker;public KnowledgeIngestionRecoveryRunner(IngestionJobWorker worker){this.worker=worker;}public void run(ApplicationArguments args){worker.recover();}}

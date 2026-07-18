@@ -1,0 +1,2 @@
+package com.hmdp.ai.domain.knowledge.parsing;
+public final class ParsedFile {private final ParsedDocument document;private final String sha256,mimeType;public ParsedFile(ParsedDocument document,String sha256,String mimeType){this.document=document;this.sha256=sha256;this.mimeType=mimeType;}public ParsedDocument getDocument(){return document;}public String getSha256(){return sha256;}public String getMimeType(){return mimeType;}}

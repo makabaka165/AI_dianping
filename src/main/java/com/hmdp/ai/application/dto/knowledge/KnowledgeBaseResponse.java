@@ -1,0 +1,3 @@
+package com.hmdp.ai.application.dto.knowledge;
+import com.hmdp.ai.domain.knowledge.KnowledgeBase;
+public final class KnowledgeBaseResponse {private final String id,code,name,description,status;private final int latestVersion;public KnowledgeBaseResponse(KnowledgeBase v){id=v.getId();code=v.getCode();name=v.getName();description=v.getDescription();latestVersion=v.getLatestVersion();status=v.getStatus();}public String getId(){return id;}public String getCode(){return code;}public String getName(){return name;}public String getDescription(){return description;}public int getLatestVersion(){return latestVersion;}public String getStatus(){return status;}}

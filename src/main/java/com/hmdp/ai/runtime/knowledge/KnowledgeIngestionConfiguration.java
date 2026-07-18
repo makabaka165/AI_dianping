@@ -1,0 +1,3 @@
+package com.hmdp.ai.runtime.knowledge;
+import org.springframework.context.annotation.*;import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;import java.util.concurrent.ThreadPoolExecutor;
+@Configuration public class KnowledgeIngestionConfiguration {@Bean("knowledgeIngestionExecutor")public ThreadPoolTaskExecutor executor(){ThreadPoolTaskExecutor e=new ThreadPoolTaskExecutor();e.setCorePoolSize(2);e.setMaxPoolSize(4);e.setQueueCapacity(200);e.setThreadNamePrefix("knowledge-ingestion-");e.setRejectedExecutionHandler(new ThreadPoolExecutor.AbortPolicy());e.setWaitForTasksToCompleteOnShutdown(true);e.setAwaitTerminationSeconds(30);e.initialize();return e;}}

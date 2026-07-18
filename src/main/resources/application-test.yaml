@@ -1,5 +1,7 @@
 hmdp:
   ai:
+    knowledge:
+      recovery-enabled: false
     redis-health-check: false
     task:
       enabled: false

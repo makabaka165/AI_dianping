@@ -1,0 +1,3 @@
+package com.hmdp.ai.domain.knowledge;
+
+public final class KnowledgeSearchScope {private final String tenantId,workspaceId,knowledgeBaseId,indexVersion,userId;public KnowledgeSearchScope(String tenantId,String workspaceId,String knowledgeBaseId,String indexVersion,String userId){this.tenantId=tenantId;this.workspaceId=workspaceId;this.knowledgeBaseId=knowledgeBaseId;this.indexVersion=indexVersion;this.userId=userId;}public String getTenantId(){return tenantId;}public String getWorkspaceId(){return workspaceId;}public String getKnowledgeBaseId(){return knowledgeBaseId;}public String getIndexVersion(){return indexVersion;}public String getUserId(){return userId;}}

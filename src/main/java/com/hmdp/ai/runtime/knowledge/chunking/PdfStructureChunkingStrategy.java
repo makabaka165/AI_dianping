@@ -1,0 +1,3 @@
+package com.hmdp.ai.runtime.knowledge.chunking;
+import com.hmdp.ai.domain.knowledge.ChunkFragment;import com.hmdp.ai.domain.knowledge.ChunkingPolicy;import com.hmdp.ai.domain.knowledge.parsing.*;import org.springframework.stereotype.Component;import java.util.*;
+@Component public class PdfStructureChunkingStrategy implements ChunkingStrategy {public String code(){return "PDF_STRUCTURE";}public List<ChunkFragment> chunk(ParsedDocument d,ChunkingPolicy p){List<ChunkFragment>out=new ArrayList<>();for(ParsedSection s:d.getSections())out.addAll(ChunkingSupport.windows(s.getText(),p,s.getPage(),s.getTitle(),ChunkingSupport.headings(s.getHeadingPath()),s.getSourceOffsetStart()));return out;}}

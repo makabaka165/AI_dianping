@@ -1,4 +1,5 @@
 package com.hmdp.ai.infrastructure.parser;
+import com.hmdp.ai.domain.knowledge.parsing.*;
 
 import org.apache.poi.openxml4j.util.ZipSecureFile;
 import org.apache.poi.xwpf.usermodel.*;

@@ -1,4 +1,4 @@
-package com.hmdp.ai.infrastructure.parser;
+package com.hmdp.ai.domain.knowledge.parsing;
 
 public final class ParseWarning {
     private final String code;

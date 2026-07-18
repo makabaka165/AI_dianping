@@ -1,4 +1,5 @@
 package com.hmdp.ai.infrastructure.parser;
+import com.hmdp.ai.domain.knowledge.parsing.*;
 
 import org.apache.tika.metadata.Metadata;
 import org.apache.tika.parser.html.HtmlParser;

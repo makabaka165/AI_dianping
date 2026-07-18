@@ -42,7 +42,6 @@ class DocumentManagementServiceImplTest {
         service = new DocumentManagementServiceImpl();
         ReflectionTestUtils.setField(service, "aiDocumentMapper", aiDocumentMapper);
         ReflectionTestUtils.setField(service, "qualityAssessor", new DocumentQualityAssessor());
-        ReflectionTestUtils.setField(service, "ragEnabled", false);
         lenient().when(aiDocumentMapper.selectById(anyString())).thenAnswer(invocation -> rows.get(invocation.getArgument(0)));
         lenient().when(aiDocumentMapper.selectList(any(QueryWrapper.class))).thenAnswer(invocation -> new ArrayList<>(rows.values()));
         lenient().doAnswer(invocation -> {

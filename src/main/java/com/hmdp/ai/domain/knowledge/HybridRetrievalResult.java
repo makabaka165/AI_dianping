@@ -1,0 +1,3 @@
+package com.hmdp.ai.domain.knowledge;
+import java.util.ArrayList;import java.util.Collections;import java.util.List;
+public final class HybridRetrievalResult {private final List<RetrievedChunk> chunks;private final String rerankMode;private final List<String> warnings;public HybridRetrievalResult(List<RetrievedChunk> chunks,String rerankMode,List<String>warnings){this.chunks=Collections.unmodifiableList(new ArrayList<>(chunks));this.rerankMode=rerankMode;this.warnings=Collections.unmodifiableList(new ArrayList<>(warnings));}public List<RetrievedChunk> getChunks(){return chunks;}public String getRerankMode(){return rerankMode;}public List<String> getWarnings(){return warnings;}}

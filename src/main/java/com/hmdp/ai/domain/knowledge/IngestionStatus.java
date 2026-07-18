@@ -1,0 +1,6 @@
+package com.hmdp.ai.domain.knowledge;
+
+public enum IngestionStatus {
+    CREATED, VALIDATING, STORING, PARSING, NORMALIZING, REDACTING, CHUNKING,
+    EMBEDDING, INDEXING, VERIFYING, PUBLISHED, FAILED, CANCELLED
+}

@@ -11,6 +11,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.data.redis.connection.RedisPassword;
 import org.springframework.data.redis.connection.RedisStandaloneConfiguration;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.util.StringUtils;
 
 @Configuration
@@ -29,14 +30,28 @@ public class AiRedisConfiguration {
 
     @Bean(name = "vectorRedisConnectionFactory", destroyMethod = "destroy")
     public LettuceConnectionFactory vectorRedisConnectionFactory(AiRedisProperties properties) {
-        AiRedisProperties.Endpoint endpoint = properties.getVector();
-        endpoint.validate("vector");
+        return createConnectionFactory("vector", properties.getVector());
+    }
+
+    @Bean(name = "businessRedisConnectionFactory", destroyMethod = "destroy")
+    public LettuceConnectionFactory businessRedisConnectionFactory(AiRedisProperties properties) {
+        return createConnectionFactory("business", properties.getBusiness());
+    }
+
+    private LettuceConnectionFactory createConnectionFactory(String name, AiRedisProperties.Endpoint endpoint) {
+        endpoint.validate(name);
         RedisStandaloneConfiguration configuration = new RedisStandaloneConfiguration(endpoint.getHost(), endpoint.getPort());
         configuration.setDatabase(endpoint.getDatabase());
         if (StringUtils.hasText(endpoint.getPassword())) {
             configuration.setPassword(RedisPassword.of(endpoint.getPassword()));
         }
         return new LettuceConnectionFactory(configuration);
+    }
+
+    @Bean(name = "stringRedisTemplate")
+    public StringRedisTemplate stringRedisTemplate(
+            @Qualifier("businessRedisConnectionFactory") LettuceConnectionFactory factory) {
+        return new StringRedisTemplate(factory);
     }
 
     private RedissonClient createClient(String name, AiRedisProperties.Endpoint endpoint) {

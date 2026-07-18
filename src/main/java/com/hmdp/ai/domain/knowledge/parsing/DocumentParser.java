@@ -1,4 +1,4 @@
-package com.hmdp.ai.infrastructure.parser;
+package com.hmdp.ai.domain.knowledge.parsing;
 
 import java.io.IOException;
 import java.io.InputStream;

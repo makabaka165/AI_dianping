@@ -1,5 +1,9 @@
 package com.hmdp.ai.infrastructure.parser;
 
+import com.hmdp.ai.domain.knowledge.parsing.ParseContext;
+import com.hmdp.ai.domain.knowledge.parsing.ParsedCell;
+import com.hmdp.ai.domain.knowledge.parsing.ParsedDocument;
+
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;

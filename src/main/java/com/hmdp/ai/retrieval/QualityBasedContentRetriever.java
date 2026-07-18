@@ -20,7 +20,12 @@ import java.util.stream.Collectors;
 
 import static java.util.Collections.emptyList;
 
+/**
+ * Legacy LangChain4j compatibility retriever. New agent workflows use the
+ * ACL-scoped {@code com.hmdp.ai.runtime.retrieval.HybridRetriever} module.
+ */
 @Slf4j
+@Deprecated
 public class QualityBasedContentRetriever implements ContentRetriever {
 
     private final EmbeddingStore<TextSegment> embeddingStore;

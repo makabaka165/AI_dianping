@@ -16,7 +16,6 @@ import java.util.Set;
 public class CoreNodeExecutor implements NodeExecutor {
     private static final Set<WorkflowNodeType> TYPES = EnumSet.of(
             WorkflowNodeType.START, WorkflowNodeType.END, WorkflowNodeType.QUERY_REWRITE,
-            WorkflowNodeType.KNOWLEDGE_RETRIEVE, WorkflowNodeType.SEMANTIC_SEARCH,
             WorkflowNodeType.EXTERNAL_SEARCH, WorkflowNodeType.MCP_TOOL, WorkflowNodeType.DIFY_WORKFLOW,
             WorkflowNodeType.DOCUMENT_PARSE, WorkflowNodeType.TEXT_TRANSFORM,
             WorkflowNodeType.LONG_TEXT_MAP_REDUCE, WorkflowNodeType.DATA_TRANSFORM,
@@ -56,9 +55,6 @@ public class CoreNodeExecutor implements NodeExecutor {
             }
             updates.put("longTextChunks", chunks);
             output.put("chunkCount", chunks.size());
-        } else if (type == WorkflowNodeType.KNOWLEDGE_RETRIEVE
-                || type == WorkflowNodeType.SEMANTIC_SEARCH) {
-            return NodeExecutionResult.failure("KNOWLEDGE_PROVIDER_NOT_CONFIGURED", false);
         } else if (type == WorkflowNodeType.EXTERNAL_SEARCH) {
             return NodeExecutionResult.failure("EXTERNAL_SEARCH_PROVIDER_NOT_CONFIGURED", false);
         } else if (type == WorkflowNodeType.MCP_TOOL) {

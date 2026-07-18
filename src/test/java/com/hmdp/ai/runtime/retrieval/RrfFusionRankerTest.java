@@ -1,0 +1,3 @@
+package com.hmdp.ai.runtime.retrieval;
+import com.hmdp.ai.domain.knowledge.IndexHit;import org.junit.jupiter.api.Test;import java.util.*;import static org.junit.jupiter.api.Assertions.*;
+class RrfFusionRankerTest {@Test void fusesVectorAndLexicalRankingsWithoutOverwritingSourceScores(){RrfFusionRanker ranker=new RrfFusionRanker();List<RrfFusionRanker.FusedHit> result=ranker.fuse(Arrays.asList(Arrays.asList(new IndexHit("a",.9),new IndexHit("b",.8)),Arrays.asList(new IndexHit("b",4),new IndexHit("a",3))),60);assertEquals(2,result.size());RrfFusionRanker.FusedHit a=result.stream().filter(v->v.getChunkId().equals("a")).findFirst().orElseThrow();assertEquals(.9,a.getVectorScore(),.0001);assertEquals(3,a.getLexicalScore(),.0001);assertTrue(a.getScore()>0);}}

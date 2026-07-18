@@ -1,0 +1,3 @@
+package com.hmdp.ai.application.dto.knowledge;
+import com.hmdp.ai.domain.knowledge.HybridRetrievalResult;import java.util.*;import java.util.stream.Collectors;
+public final class KnowledgeSearchResponse {private final List<RetrievedChunkResponse> results;private final String rerankMode;private final List<String>warnings;public KnowledgeSearchResponse(HybridRetrievalResult v){results=v.getChunks().stream().map(RetrievedChunkResponse::new).collect(Collectors.toList());rerankMode=v.getRerankMode();warnings=v.getWarnings();}public List<RetrievedChunkResponse> getResults(){return results;}public String getRerankMode(){return rerankMode;}public List<String> getWarnings(){return warnings;}}

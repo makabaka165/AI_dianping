@@ -4,7 +4,6 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.hmdp.ai.infra.DocumentQualityAssessment;
 import com.hmdp.ai.infra.DocumentQualityAssessor;
 import com.hmdp.ai.infra.DocumentQualityProfile;
-import com.hmdp.ai.infra.AiLogSanitizer;
 import com.hmdp.ai.retrieval.PlatformPolicyVectorDocumentFactory;
 import com.hmdp.entity.AiDocument;
 import com.hmdp.entity.DocumentMetadata;
@@ -12,15 +11,8 @@ import com.hmdp.entity.DocumentStatus;
 import com.hmdp.mapper.AiDocumentMapper;
 import com.hmdp.service.DocumentManagementService;
 import dev.langchain4j.data.document.Document;
-import dev.langchain4j.data.document.splitter.DocumentSplitters;
-import dev.langchain4j.data.segment.TextSegment;
-import dev.langchain4j.model.embedding.EmbeddingModel;
-import dev.langchain4j.store.embedding.EmbeddingStore;
-import dev.langchain4j.store.embedding.EmbeddingStoreIngestor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
@@ -41,16 +33,6 @@ public class DocumentManagementServiceImpl implements DocumentManagementService 
     @Autowired
     private DocumentQualityAssessor qualityAssessor;
 
-    @Autowired(required = false)
-    private EmbeddingModel embeddingModel;
-
-    @Autowired(required = false)
-    @Qualifier("platformPolicyEmbeddingStore")
-    private EmbeddingStore<TextSegment> embeddingStore;
-
-    @Value("${rag.enabled:true}")
-    private boolean ragEnabled;
-
     @Override
     public void saveDocument(DocumentMetadata metadata) {
         saveDocument(null, metadata);
@@ -70,7 +52,6 @@ public class DocumentManagementServiceImpl implements DocumentManagementService 
         }
         DocumentMetadata safeMetadata = prepareMetadata(metadata, document);
         upsert(toRecord(safeMetadata, document.text()));
-        ingestIfEnabled(safeMetadata.getId(), document, safeMetadata);
         log.info("Added AI document, id={}, title={}, qualityScore={}",
                 safeMetadata.getId(), safeMetadata.getTitle(), safeMetadata.getQualityScore());
         return safeMetadata.getId();
@@ -91,7 +72,6 @@ public class DocumentManagementServiceImpl implements DocumentManagementService 
         Document safeDocument = document == null ? Document.from(existing.getContent() == null ? "" : existing.getContent()) : document;
         DocumentMetadata prepared = prepareMetadata(merged, safeDocument);
         upsert(toRecord(prepared, safeDocument.text()));
-        ingestIfEnabled(documentId, safeDocument, prepared);
         return true;
     }
 
@@ -155,10 +135,6 @@ public class DocumentManagementServiceImpl implements DocumentManagementService 
         return toMetadataList(records);
     }
 
-    public boolean isRagIngestionAvailable() {
-        return ragEnabled && embeddingModel != null && embeddingStore != null;
-    }
-
     private DocumentMetadata prepareMetadata(DocumentMetadata metadata, Document document) {
         DocumentMetadata safeMetadata = metadata == null ? new DocumentMetadata() : metadata;
         if (blank(safeMetadata.getId())) {
@@ -196,25 +172,6 @@ public class DocumentManagementServiceImpl implements DocumentManagementService 
             aiDocumentMapper.insert(record);
         } else {
             aiDocumentMapper.updateById(record);
-        }
-    }
-
-    private void ingestIfEnabled(String documentId, Document document, DocumentMetadata metadata) {
-        if (!isRagIngestionAvailable()) {
-            log.info("RAG is disabled or unavailable; document saved without vector ingestion, id={}", documentId);
-            return;
-        }
-        try {
-            Document vectorDocument = PlatformPolicyVectorDocumentFactory.toDocument(documentId, document, metadata);
-            EmbeddingStoreIngestor ingestor = EmbeddingStoreIngestor.builder()
-                    .embeddingStore(embeddingStore)
-                    .embeddingModel(embeddingModel)
-                    .documentSplitter(DocumentSplitters.recursive(300, 30))
-                    .build();
-            ingestor.ingest(vectorDocument);
-        } catch (Exception e) {
-            log.warn("Document saved but vector write failed, id={}, errorType={}, reason={}",
-                    documentId, e.getClass().getSimpleName(), AiLogSanitizer.safe(e.getMessage(), 100));
         }
     }
 

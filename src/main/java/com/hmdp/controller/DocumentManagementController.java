@@ -1,12 +1,11 @@
 package com.hmdp.controller;
 
 import cn.dev33.satoken.annotation.SaCheckPermission;
-import com.hmdp.ai.infrastructure.parser.ParserRegistry;
+import com.hmdp.ai.application.knowledge.KnowledgeIngestionApplicationService;
 import com.hmdp.dto.Result;
 import com.hmdp.entity.DocumentMetadata;
 import com.hmdp.entity.DocumentStatus;
 import com.hmdp.service.DocumentManagementService;
-import com.hmdp.service.impl.DocumentManagementServiceImpl;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -18,96 +17,70 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
-import java.io.IOException;
-import java.time.LocalDateTime;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
 @Slf4j
 @RestController
 @RequestMapping("/document")
+@Deprecated
 public class DocumentManagementController {
+    private static final Set<String> ALLOWED_EXTENSIONS = Set.of(
+            "txt", "md", "pdf", "docx", "xlsx", "html", "htm");
 
-    private static final Set<String> ALLOWED_EXTENSIONS = Set.of("txt", "md", "pdf", "docx", "xlsx", "html", "htm");
-
-    private final DocumentManagementService documentManagementService;
-    private final ParserRegistry parserRegistry;
+    private final DocumentManagementService legacyDocuments;
+    private final KnowledgeIngestionApplicationService knowledgeIngestion;
 
     @Value("${rag.document.max-upload-bytes:5242880}")
     private long maxUploadBytes;
 
-    public DocumentManagementController(DocumentManagementService documentManagementService, ParserRegistry parserRegistry) {
-        this.documentManagementService = documentManagementService;
-        this.parserRegistry = parserRegistry;
+    public DocumentManagementController(DocumentManagementService legacyDocuments,
+                                        KnowledgeIngestionApplicationService knowledgeIngestion) {
+        this.legacyDocuments = legacyDocuments;
+        this.knowledgeIngestion = knowledgeIngestion;
     }
 
     @GetMapping("/list")
     @SaCheckPermission("document:manage")
     public Result listAllDocuments() {
-        try {
-            List<DocumentMetadata> documents = documentManagementService.listAllDocuments();
-            return Result.ok(documents);
-        } catch (Exception e) {
-            log.error("List documents failed", e);
-            return Result.fail("获取文档列表失败");
-        }
+        return Result.ok(legacyDocuments.listAllDocuments());
     }
 
     @GetMapping("/{documentId}")
     @SaCheckPermission("document:manage")
     public Result getDocument(@PathVariable String documentId) {
-        try {
-            Optional<DocumentMetadata> metadata = documentManagementService.getDocumentMetadata(documentId);
-            return metadata.<Result>map(Result::ok).orElseGet(() -> Result.fail("文档不存在"));
-        } catch (Exception e) {
-            log.error("Get document failed, documentId={}", documentId, e);
-            return Result.fail("获取文档详情失败");
-        }
+        Optional<DocumentMetadata> metadata = legacyDocuments.getDocumentMetadata(documentId);
+        return metadata.<Result>map(Result::ok).orElseGet(() -> Result.fail("document not found"));
     }
 
     @GetMapping("/status/{status}")
     @SaCheckPermission("document:manage")
     public Result listDocumentsByStatus(@PathVariable String status) {
         try {
-            DocumentStatus documentStatus = DocumentStatus.valueOf(status.toUpperCase());
-            return Result.ok(documentManagementService.listDocumentsByStatus(documentStatus));
+            return Result.ok(legacyDocuments.listDocumentsByStatus(DocumentStatus.valueOf(status.toUpperCase())));
         } catch (IllegalArgumentException e) {
-            return Result.fail("无效的文档状态");
-        } catch (Exception e) {
-            log.error("List documents by status failed", e);
-            return Result.fail("获取文档列表失败");
+            return Result.fail("invalid document status");
         }
     }
 
     @GetMapping("/quality")
     @SaCheckPermission("document:manage")
-    public Result listDocumentsByQualityScoreRange(@RequestParam double minScore, @RequestParam double maxScore) {
-        try {
-            return Result.ok(documentManagementService.listDocumentsByQualityScoreRange(minScore, maxScore));
-        } catch (Exception e) {
-            log.error("List documents by quality failed", e);
-            return Result.fail("获取文档列表失败");
-        }
+    public Result listDocumentsByQualityScoreRange(@RequestParam double minScore,
+                                                   @RequestParam double maxScore) {
+        return Result.ok(legacyDocuments.listDocumentsByQualityScoreRange(minScore, maxScore));
     }
 
     @GetMapping("/statistics")
     @SaCheckPermission("document:manage")
     public Result getStatistics() {
-        try {
-            List<DocumentMetadata> allDocuments = documentManagementService.listAllDocuments();
-            long totalDocs = allDocuments.size();
-            double avgQuality = allDocuments.stream().mapToDouble(DocumentMetadata::getQualityScore).average().orElse(0.0);
-            long highQualityDocs = allDocuments.stream().filter(doc -> doc.getQualityScore() >= 0.8).count();
-            long mediumQualityDocs = allDocuments.stream().filter(doc -> doc.getQualityScore() >= 0.5 && doc.getQualityScore() < 0.8).count();
-            long lowQualityDocs = allDocuments.stream().filter(doc -> doc.getQualityScore() < 0.5).count();
-            return Result.ok(new DocumentStatistics(totalDocs, avgQuality, highQualityDocs, mediumQualityDocs, lowQualityDocs));
-        } catch (Exception e) {
-            log.error("Get document statistics failed", e);
-            return Result.fail("获取文档统计信息失败");
-        }
+        List<DocumentMetadata> documents = legacyDocuments.listAllDocuments();
+        double average = documents.stream().mapToDouble(DocumentMetadata::getQualityScore).average().orElse(0);
+        return Result.ok(new DocumentStatistics(documents.size(), average,
+                documents.stream().filter(value -> value.getQualityScore() >= 0.8).count(),
+                documents.stream().filter(value -> value.getQualityScore() >= 0.5
+                        && value.getQualityScore() < 0.8).count(),
+                documents.stream().filter(value -> value.getQualityScore() < 0.5).count()));
     }
 
     @PostMapping("/upload")
@@ -116,58 +89,17 @@ public class DocumentManagementController {
                                  @RequestParam(required = false) String title,
                                  @RequestParam(required = false) String source) {
         try {
-            if (file == null || file.isEmpty()) {
-                return Result.fail("上传文件不能为空");
+            if (file == null || file.isEmpty()) return Result.fail("file must not be empty");
+            if (file.getSize() > maxUploadBytes) return Result.fail("file exceeds upload size limit");
+            String fileName = safeFilename(file.getOriginalFilename());
+            if (fileName == null || !ALLOWED_EXTENSIONS.contains(extension(fileName))) {
+                return Result.fail("unsupported or unsafe file name");
             }
-            if (file.getSize() > maxUploadBytes) {
-                return Result.fail("文件大小超过限制");
-            }
-            String safeFilename = safeFilename(file.getOriginalFilename());
-            if (safeFilename == null) {
-                return Result.fail("文件名不安全");
-            }
-            String fileType = getFileType(safeFilename);
-            if (!ALLOWED_EXTENSIONS.contains(fileType)) {
-                return Result.fail("不支持的文件类型");
-            }
-            ParserRegistry.ParseResult parseResult = parserRegistry.parse(file.getBytes(), safeFilename, file.getContentType());
-            String content = parseResult.getDocument().getPlainText();
-            if (content == null || content.trim().isEmpty()) {
-                return Result.fail("文档内容不能为空");
-            }
-
-            DocumentMetadata metadata = new DocumentMetadata();
-            metadata.setTitle(isBlank(title) ? safeFilename : title.trim());
-            metadata.setSource(isBlank(source) ? "manual-upload" : source.trim());
-            metadata.setFileType(fileType);
-            metadata.setCreatedAt(LocalDateTime.now());
-            metadata.setUpdatedAt(LocalDateTime.now());
-            metadata.setStatus(DocumentStatus.PUBLISHED);
-
-            String documentId = documentManagementService.addDocument(
-                    dev.langchain4j.data.document.Document.from(content), metadata);
-            DocumentMetadata savedMetadata = documentManagementService.getDocumentMetadata(documentId).orElse(metadata);
-
-            Map<String, Object> resultData = new HashMap<>();
-            resultData.put("documentId", documentId);
-            resultData.put("title", savedMetadata.getTitle());
-            resultData.put("wordCount", savedMetadata.getWordCount());
-            resultData.put("qualityScore", savedMetadata.getQualityScore());
-            resultData.put("sha256", parseResult.getSha256());
-            resultData.put("mimeType", parseResult.getMimeType());
-            boolean ragIndexed = documentManagementService instanceof DocumentManagementServiceImpl
-                    && ((DocumentManagementServiceImpl) documentManagementService).isRagIngestionAvailable();
-            resultData.put("ragIndexed", ragIndexed);
-            resultData.put("message", ragIndexed
-                    ? "文档上传成功，已尝试写入向量库"
-                    : "文档上传成功；RAG 未启用或不可用，未写入向量库");
-            return Result.ok(resultData);
-        } catch (IOException e) {
-            log.error("Read uploaded document failed", e);
-            return Result.fail("读取上传文件失败");
+            return Result.ok(knowledgeIngestion.upload("kb-shop-enterprise", 1,
+                    blank(title) ? fileName : title.trim(), fileName, file.getContentType(), file.getBytes()));
         } catch (Exception e) {
-            log.error("Upload document failed", e);
-            return Result.fail("上传文档失败");
+            log.warn("Legacy document upload failed, errorType={}", e.getClass().getSimpleName());
+            return Result.fail("document upload failed: " + e.getMessage());
         }
     }
 
@@ -175,51 +107,37 @@ public class DocumentManagementController {
     @SaCheckPermission("document:manage")
     public Result deleteDocument(@PathVariable String documentId) {
         try {
-            boolean success = documentManagementService.deleteDocument(documentId);
-            return success ? Result.ok("文档删除成功") : Result.fail("文档不存在");
-        } catch (Exception e) {
-            log.error("Delete document failed, documentId={}", documentId, e);
-            return Result.fail("删除文档失败");
+            knowledgeIngestion.deleteDocument(documentId);
+            return Result.ok("document deleted");
+        } catch (IllegalArgumentException notNewDocument) {
+            return legacyDocuments.deleteDocument(documentId)
+                    ? Result.ok("document deleted") : Result.fail("document not found");
         }
     }
 
-    private String getFileType(String filename) {
-        int lastDotIndex = filename == null ? -1 : filename.lastIndexOf('.');
-        if (lastDotIndex > 0 && lastDotIndex < filename.length() - 1) {
-            return filename.substring(lastDotIndex + 1).toLowerCase();
-        }
-        return "txt";
+    private String safeFilename(String value) {
+        if (blank(value)) return null;
+        String normalized = value.trim().replace('\\', '/');
+        if (normalized.contains("..") || normalized.contains("/")) return null;
+        return normalized;
     }
 
-    private String safeFilename(String filename) {
-        if (isBlank(filename)) {
-            return null;
-        }
-        String normalized = filename.trim().replace('\\', '/');
-        if (normalized.contains("..")) {
-            return null;
-        }
-        int slash = normalized.lastIndexOf('/');
-        String name = slash >= 0 ? normalized.substring(slash + 1) : normalized;
-        return name.isEmpty() ? null : name;
+    private String extension(String value) {
+        int dot = value.lastIndexOf('.');
+        return dot > 0 && dot < value.length() - 1 ? value.substring(dot + 1).toLowerCase() : "";
     }
 
-    private boolean isBlank(String value) {
-        return value == null || value.trim().isEmpty();
-    }
+    private boolean blank(String value) { return value == null || value.trim().isEmpty(); }
 
-    public static class DocumentStatistics {
-        private long totalDocuments;
-        private double averageQualityScore;
-        private long highQualityDocuments;
-        private long mediumQualityDocuments;
-        private long lowQualityDocuments;
+    public static final class DocumentStatistics {
+        private final long totalDocuments;
+        private final double averageQualityScore;
+        private final long highQualityDocuments;
+        private final long mediumQualityDocuments;
+        private final long lowQualityDocuments;
 
-        public DocumentStatistics(long totalDocuments,
-                                  double averageQualityScore,
-                                  long highQualityDocuments,
-                                  long mediumQualityDocuments,
-                                  long lowQualityDocuments) {
+        public DocumentStatistics(long totalDocuments, double averageQualityScore, long highQualityDocuments,
+                                  long mediumQualityDocuments, long lowQualityDocuments) {
             this.totalDocuments = totalDocuments;
             this.averageQualityScore = averageQualityScore;
             this.highQualityDocuments = highQualityDocuments;
@@ -227,44 +145,10 @@ public class DocumentManagementController {
             this.lowQualityDocuments = lowQualityDocuments;
         }
 
-        public long getTotalDocuments() {
-            return totalDocuments;
-        }
-
-        public void setTotalDocuments(long totalDocuments) {
-            this.totalDocuments = totalDocuments;
-        }
-
-        public double getAverageQualityScore() {
-            return averageQualityScore;
-        }
-
-        public void setAverageQualityScore(double averageQualityScore) {
-            this.averageQualityScore = averageQualityScore;
-        }
-
-        public long getHighQualityDocuments() {
-            return highQualityDocuments;
-        }
-
-        public void setHighQualityDocuments(long highQualityDocuments) {
-            this.highQualityDocuments = highQualityDocuments;
-        }
-
-        public long getMediumQualityDocuments() {
-            return mediumQualityDocuments;
-        }
-
-        public void setMediumQualityDocuments(long mediumQualityDocuments) {
-            this.mediumQualityDocuments = mediumQualityDocuments;
-        }
-
-        public long getLowQualityDocuments() {
-            return lowQualityDocuments;
-        }
-
-        public void setLowQualityDocuments(long lowQualityDocuments) {
-            this.lowQualityDocuments = lowQualityDocuments;
-        }
+        public long getTotalDocuments() { return totalDocuments; }
+        public double getAverageQualityScore() { return averageQualityScore; }
+        public long getHighQualityDocuments() { return highQualityDocuments; }
+        public long getMediumQualityDocuments() { return mediumQualityDocuments; }
+        public long getLowQualityDocuments() { return lowQualityDocuments; }
     }
 }

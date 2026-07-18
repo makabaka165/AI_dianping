@@ -1,0 +1,7 @@
+package com.hmdp.ai.domain.knowledge;
+
+public final class KnowledgeDocumentVersion {
+    private final String id,tenantId,workspaceId,knowledgeBaseId,documentId,objectKey,bucket,originalFileName,contentType,sha256,status;private final int version;private final long sizeBytes;
+    public KnowledgeDocumentVersion(String id,String tenantId,String workspaceId,String knowledgeBaseId,String documentId,int version,String objectKey,String bucket,String originalFileName,String contentType,long sizeBytes,String sha256,String status){this.id=id;this.tenantId=tenantId;this.workspaceId=workspaceId;this.knowledgeBaseId=knowledgeBaseId;this.documentId=documentId;this.version=version;this.objectKey=objectKey;this.bucket=bucket;this.originalFileName=originalFileName;this.contentType=contentType;this.sizeBytes=sizeBytes;this.sha256=sha256;this.status=status;}
+    public String getId(){return id;}public String getTenantId(){return tenantId;}public String getWorkspaceId(){return workspaceId;}public String getKnowledgeBaseId(){return knowledgeBaseId;}public String getDocumentId(){return documentId;}public int getVersion(){return version;}public String getObjectKey(){return objectKey;}public String getBucket(){return bucket;}public String getOriginalFileName(){return originalFileName;}public String getContentType(){return contentType;}public long getSizeBytes(){return sizeBytes;}public String getSha256(){return sha256;}public String getStatus(){return status;}
+}
