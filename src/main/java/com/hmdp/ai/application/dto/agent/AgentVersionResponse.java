@@ -12,6 +12,7 @@ public final class AgentVersionResponse {
     private final String name;
     private final String description;
     private final String modelProfileId;
+    private final String modelProfileVersionId;
     private final String promptVersionId;
     private final String workflowVersionId;
     private final String memoryPolicyJson;
@@ -33,6 +34,7 @@ public final class AgentVersionResponse {
         this.name = version.getName();
         this.description = version.getDescription();
         this.modelProfileId = version.getModelProfileId();
+        this.modelProfileVersionId = version.getModelProfileVersionId();
         this.promptVersionId = version.getPromptVersionId();
         this.workflowVersionId = version.getWorkflowVersionId();
         this.memoryPolicyJson = version.getMemoryPolicyJson();
@@ -54,6 +56,7 @@ public final class AgentVersionResponse {
     public String getName() { return name; }
     public String getDescription() { return description; }
     public String getModelProfileId() { return modelProfileId; }
+    public String getModelProfileVersionId() { return modelProfileVersionId; }
     public String getPromptVersionId() { return promptVersionId; }
     public String getWorkflowVersionId() { return workflowVersionId; }
     public String getMemoryPolicyJson() { return memoryPolicyJson; }

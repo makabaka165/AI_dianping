@@ -10,7 +10,8 @@ import java.util.List;
 public class CreateAgentVersionRequest {
     @NotBlank @Size(max = 128) private String name;
     @Size(max = 1000) private String description;
-    @NotBlank @Size(max = 64) private String modelProfileId;
+    @Size(max = 64) private String modelProfileId;
+    @Size(max = 64) private String modelProfileVersionId;
     @NotBlank @Size(max = 64) private String promptVersionId;
     @NotBlank @Size(max = 64) private String workflowVersionId;
     @NotBlank @Size(max = 16000) private String memoryPolicyJson;
@@ -28,6 +29,8 @@ public class CreateAgentVersionRequest {
     public void setDescription(String description) { this.description = description; }
     public String getModelProfileId() { return modelProfileId; }
     public void setModelProfileId(String modelProfileId) { this.modelProfileId = modelProfileId; }
+    public String getModelProfileVersionId() { return modelProfileVersionId; }
+    public void setModelProfileVersionId(String modelProfileVersionId) { this.modelProfileVersionId = modelProfileVersionId; }
     public String getPromptVersionId() { return promptVersionId; }
     public void setPromptVersionId(String promptVersionId) { this.promptVersionId = promptVersionId; }
     public String getWorkflowVersionId() { return workflowVersionId; }

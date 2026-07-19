@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hmdp.ai.domain.model.ModelProfile;
 import com.hmdp.ai.domain.model.ModelProfileRepository;
+import com.hmdp.ai.domain.model.ModelProfileVersion;
+import com.hmdp.ai.domain.model.ModelProfileVersionRepository;
 import com.hmdp.ai.domain.prompt.PromptRepository;
 import com.hmdp.ai.domain.prompt.PromptVersion;
 import com.hmdp.ai.domain.prompt.VersionStatus;
@@ -12,6 +14,7 @@ import com.hmdp.ai.shared.validation.JsonSchemaValidationService;
 import com.hmdp.ai.shared.validation.ValidationIssue;
 import com.hmdp.ai.shared.validation.ValidationResult;
 import org.springframework.stereotype.Component;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -25,11 +28,20 @@ public class AgentPublishValidator {
     private final AgentDependencyInspector dependencies;
     private final JsonSchemaValidationService schemas;
     private final ObjectMapper objectMapper;
+    private final ModelProfileVersionRepository modelVersions;
 
     public AgentPublishValidator(ModelProfileRepository modelProfiles, PromptRepository prompts,
                                  AgentDependencyInspector dependencies, JsonSchemaValidationService schemas,
                                  ObjectMapper objectMapper) {
+        this(modelProfiles, null, prompts, dependencies, schemas, objectMapper);
+    }
+
+    @Autowired
+    public AgentPublishValidator(ModelProfileRepository modelProfiles, ModelProfileVersionRepository modelVersions,
+                                 PromptRepository prompts, AgentDependencyInspector dependencies,
+                                 JsonSchemaValidationService schemas, ObjectMapper objectMapper) {
         this.modelProfiles = modelProfiles;
+        this.modelVersions = modelVersions;
         this.prompts = prompts;
         this.dependencies = dependencies;
         this.schemas = schemas;
@@ -52,6 +64,23 @@ public class AgentPublishValidator {
     }
 
     private void validateModel(AgentVersion version, List<ValidationIssue> issues) {
+        if (modelVersions != null) {
+            ModelProfileVersion snapshot = modelVersions.findById(version.getTenantId(), version.getWorkspaceId(),
+                    version.getModelProfileVersionId()).orElse(null);
+            if (snapshot == null) {
+                issues.add(issue("AGENT_MODEL_VERSION_NOT_FOUND", "modelProfileVersionId",
+                        "model profile version does not exist"));
+                return;
+            }
+            if (!"PUBLISHED".equals(snapshot.getStatus()) && !"ARCHIVED".equals(snapshot.getStatus())) {
+                issues.add(issue("AGENT_MODEL_VERSION_NOT_PUBLISHED", "modelProfileVersionId",
+                        "model profile version is not published"));
+            }
+            if (!snapshot.getSecretRef().matches("env:[A-Z][A-Z0-9_]{1,127}")) {
+                issues.add(issue("AGENT_MODEL_SECRET_INVALID", "modelProfileVersionId",
+                        "model profile version must use an environment secret reference"));
+            }
+        }
         ModelProfile model = modelProfiles.findById(version.getTenantId(), version.getWorkspaceId(),
                         version.getModelProfileId()).orElse(null);
         if (model == null) {

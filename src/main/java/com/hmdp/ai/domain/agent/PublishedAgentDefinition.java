@@ -1,6 +1,7 @@
 package com.hmdp.ai.domain.agent;
 
 import com.hmdp.ai.domain.model.ModelProfile;
+import com.hmdp.ai.domain.model.ModelProfileVersion;
 import com.hmdp.ai.domain.prompt.PromptVersion;
 import com.hmdp.ai.domain.run.VersionSnapshot;
 
@@ -12,6 +13,7 @@ public final class PublishedAgentDefinition {
     private final AgentDefinition agent;
     private final AgentVersion version;
     private final ModelProfile modelProfile;
+    private final ModelProfileVersion modelProfileVersion;
     private final PromptVersion promptVersion;
     private final String workflowId;
     private final int workflowVersion;
@@ -24,9 +26,19 @@ public final class PublishedAgentDefinition {
                                     PromptVersion promptVersion, String workflowId, int workflowVersion,
                                     String workflowStatus, List<AgentToolBinding> tools,
                                     List<AgentKnowledgeBinding> knowledgeBases, VersionSnapshot versionSnapshot) {
+        this(agent, version, modelProfile, null, promptVersion, workflowId, workflowVersion, workflowStatus,
+                tools, knowledgeBases, versionSnapshot);
+    }
+
+    public PublishedAgentDefinition(AgentDefinition agent, AgentVersion version, ModelProfile modelProfile,
+                                    ModelProfileVersion modelProfileVersion, PromptVersion promptVersion,
+                                    String workflowId, int workflowVersion, String workflowStatus,
+                                    List<AgentToolBinding> tools, List<AgentKnowledgeBinding> knowledgeBases,
+                                    VersionSnapshot versionSnapshot) {
         this.agent = agent;
         this.version = version;
         this.modelProfile = modelProfile;
+        this.modelProfileVersion = modelProfileVersion;
         this.promptVersion = promptVersion;
         this.workflowId = workflowId;
         this.workflowVersion = workflowVersion;
@@ -44,6 +56,7 @@ public final class PublishedAgentDefinition {
     public AgentDefinition getAgent() { return agent; }
     public AgentVersion getVersion() { return version; }
     public ModelProfile getModelProfile() { return modelProfile; }
+    public ModelProfileVersion getModelProfileVersion() { return modelProfileVersion; }
     public PromptVersion getPromptVersion() { return promptVersion; }
     public String getWorkflowId() { return workflowId; }
     public int getWorkflowVersion() { return workflowVersion; }

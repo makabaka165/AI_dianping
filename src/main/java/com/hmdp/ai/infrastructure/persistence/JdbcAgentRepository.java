@@ -9,6 +9,8 @@ import com.hmdp.ai.domain.agent.AgentVersion;
 import com.hmdp.ai.domain.agent.PublishedAgentDefinition;
 import com.hmdp.ai.domain.model.ModelProfile;
 import com.hmdp.ai.domain.model.ModelProfileRepository;
+import com.hmdp.ai.domain.model.ModelProfileVersion;
+import com.hmdp.ai.domain.model.ModelProfileVersionRepository;
 import com.hmdp.ai.domain.prompt.PromptRepository;
 import com.hmdp.ai.domain.prompt.PromptVersion;
 import com.hmdp.ai.domain.prompt.VersionStatus;
@@ -34,20 +36,22 @@ public class JdbcAgentRepository implements AgentRepository {
     private static final String AGENT_COLUMNS = "id,tenant_id,workspace_id,code,name,description,latest_version," +
             "status,created_at,updated_at";
     private static final String VERSION_COLUMNS = "id,tenant_id,workspace_id,agent_id,version,name,description," +
-            "model_profile_id,prompt_version_id,workflow_version_id,memory_policy_json,input_schema,output_schema," +
+            "model_profile_id,model_profile_version_id,prompt_version_id,workflow_version_id,memory_policy_json,input_schema,output_schema," +
             "execution_policy_json,response_render_policy_json,status,content_hash,change_note,published_at," +
             "published_by,created_at";
 
     private final JdbcTemplate jdbcTemplate;
     private final ModelProfileRepository modelProfiles;
+    private final ModelProfileVersionRepository modelProfileVersions;
     private final PromptRepository prompts;
     private final RowMapper<AgentDefinition> agentMapper = this::mapAgent;
     private final RowMapper<AgentVersion> versionMapper = this::mapVersion;
 
     public JdbcAgentRepository(JdbcTemplate jdbcTemplate, ModelProfileRepository modelProfiles,
-                               PromptRepository prompts) {
+                               ModelProfileVersionRepository modelProfileVersions, PromptRepository prompts) {
         this.jdbcTemplate = jdbcTemplate;
         this.modelProfiles = modelProfiles;
+        this.modelProfileVersions = modelProfileVersions;
         this.prompts = prompts;
     }
 
@@ -106,12 +110,13 @@ public class JdbcAgentRepository implements AgentRepository {
                                       List<String> knowledgeBaseVersionIds, String actorId) {
         try {
             jdbcTemplate.update("insert into ai_agent_version (id,tenant_id,workspace_id,agent_id,version,name," +
-                            "description,model_profile_id,prompt_version_id,workflow_version_id,memory_policy_json," +
+                            "description,model_profile_id,model_profile_version_id,prompt_version_id,workflow_version_id,memory_policy_json," +
                             "input_schema,output_schema,execution_policy_json,response_render_policy_json,status," +
                             "content_hash,change_note,published_at,published_by,created_by,updated_by) " +
-                            "values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                            "values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     version.getId(), version.getTenantId(), version.getWorkspaceId(), version.getAgentId(),
                     version.getVersion(), version.getName(), version.getDescription(), version.getModelProfileId(),
+                    version.getModelProfileVersionId(),
                     version.getPromptVersionId(), version.getWorkflowVersionId(), version.getMemoryPolicyJson(),
                     version.getInputSchema(), version.getOutputSchema(), version.getExecutionPolicyJson(),
                     version.getResponseRenderPolicyJson(), version.getStatus().name(), version.getContentHash(),
@@ -191,6 +196,10 @@ public class JdbcAgentRepository implements AgentRepository {
         ModelProfile model = modelProfiles.findById(tenantId, workspaceId, agentVersion.getModelProfileId())
                 .orElseThrow(() -> new AiPlatformException(ErrorCode.AI_PUBLISH_VALIDATION_FAILED,
                         "published agent references a missing model profile"));
+        ModelProfileVersion modelVersion = modelProfileVersions.findById(tenantId, workspaceId,
+                        agentVersion.getModelProfileVersionId())
+                .orElseThrow(() -> new AiPlatformException(ErrorCode.AI_PUBLISH_VALIDATION_FAILED,
+                        "published agent references a missing model profile version"));
         PromptVersion prompt = prompts.findVersionById(tenantId, workspaceId, agentVersion.getPromptVersionId())
                 .orElseThrow(() -> new AiPlatformException(ErrorCode.AI_PUBLISH_VALIDATION_FAILED,
                         "published agent references a missing prompt version"));
@@ -207,8 +216,9 @@ public class JdbcAgentRepository implements AgentRepository {
         });
         VersionSnapshot snapshot = new VersionSnapshot(agent.getId(), agentVersion.getVersion(),
                 prompt.getPromptId(), prompt.getVersion(), workflow.workflowId, workflow.version,
-                model.getId(), model.getRevision(), toolVersions, knowledgeVersions, indexVersions);
-        return Optional.of(new PublishedAgentDefinition(agent, agentVersion, model, prompt,
+                model.getId(), modelVersion.getId(), modelVersion.getVersion(), modelVersion.getContentHash(),
+                toolVersions, knowledgeVersions, indexVersions);
+        return Optional.of(new PublishedAgentDefinition(agent, agentVersion, model, modelVersion, prompt,
                 workflow.workflowId, workflow.version, workflow.status, tools, knowledge, snapshot));
     }
 
@@ -271,6 +281,7 @@ public class JdbcAgentRepository implements AgentRepository {
         return new AgentVersion(rs.getString("id"), rs.getString("tenant_id"), rs.getString("workspace_id"),
                 rs.getString("agent_id"), rs.getInt("version"), rs.getString("name"),
                 rs.getString("description"), rs.getString("model_profile_id"),
+                rs.getString("model_profile_version_id"),
                 rs.getString("prompt_version_id"), rs.getString("workflow_version_id"),
                 rs.getString("memory_policy_json"), rs.getString("input_schema"), rs.getString("output_schema"),
                 rs.getString("execution_policy_json"), rs.getString("response_render_policy_json"),

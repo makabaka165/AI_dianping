@@ -13,6 +13,7 @@ public final class AgentVersion {
     private final String name;
     private final String description;
     private final String modelProfileId;
+    private final String modelProfileVersionId;
     private final String promptVersionId;
     private final String workflowVersionId;
     private final String memoryPolicyJson;
@@ -33,6 +34,18 @@ public final class AgentVersion {
                         String outputSchema, String executionPolicyJson, String responseRenderPolicyJson,
                         VersionStatus status, String contentHash, String changeNote, Instant publishedAt,
                         String publishedBy, Instant createdAt) {
+        this(id, tenantId, workspaceId, agentId, version, name, description, modelProfileId, modelProfileId,
+                promptVersionId, workflowVersionId, memoryPolicyJson, inputSchema, outputSchema,
+                executionPolicyJson, responseRenderPolicyJson, status, contentHash, changeNote, publishedAt,
+                publishedBy, createdAt);
+    }
+
+    public AgentVersion(String id, String tenantId, String workspaceId, String agentId, int version,
+                        String name, String description, String modelProfileId, String modelProfileVersionId,
+                        String promptVersionId, String workflowVersionId, String memoryPolicyJson, String inputSchema,
+                        String outputSchema, String executionPolicyJson, String responseRenderPolicyJson,
+                        VersionStatus status, String contentHash, String changeNote, Instant publishedAt,
+                        String publishedBy, Instant createdAt) {
         this.id = id;
         this.tenantId = tenantId;
         this.workspaceId = workspaceId;
@@ -41,6 +54,7 @@ public final class AgentVersion {
         this.name = name;
         this.description = description;
         this.modelProfileId = modelProfileId;
+        this.modelProfileVersionId = modelProfileVersionId;
         this.promptVersionId = promptVersionId;
         this.workflowVersionId = workflowVersionId;
         this.memoryPolicyJson = memoryPolicyJson;
@@ -64,6 +78,7 @@ public final class AgentVersion {
     public String getName() { return name; }
     public String getDescription() { return description; }
     public String getModelProfileId() { return modelProfileId; }
+    public String getModelProfileVersionId() { return modelProfileVersionId; }
     public String getPromptVersionId() { return promptVersionId; }
     public String getWorkflowVersionId() { return workflowVersionId; }
     public String getMemoryPolicyJson() { return memoryPolicyJson; }

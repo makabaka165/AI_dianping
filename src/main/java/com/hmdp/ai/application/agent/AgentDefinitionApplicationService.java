@@ -157,6 +157,7 @@ public class AgentDefinitionApplicationService {
         content.put("name", request.getName());
         content.put("description", request.getDescription());
         content.put("modelProfileId", request.getModelProfileId());
+        content.put("modelProfileVersionId", request.getModelProfileVersionId());
         content.put("promptVersionId", request.getPromptVersionId());
         content.put("workflowVersionId", request.getWorkflowVersionId());
         content.put("memoryPolicyJson", request.getMemoryPolicyJson());
@@ -166,8 +167,15 @@ public class AgentDefinitionApplicationService {
         content.put("responseRenderPolicyJson", request.getResponseRenderPolicyJson());
         content.put("toolVersionIds", new ArrayList<>(request.getToolVersionIds()));
         content.put("knowledgeBaseVersionIds", new ArrayList<>(request.getKnowledgeBaseVersionIds()));
+        String modelProfileId = request.getModelProfileId();
+        String modelProfileVersionId = request.getModelProfileVersionId();
+        if ((modelProfileId == null || modelProfileId.trim().isEmpty())
+                && modelProfileVersionId != null) modelProfileId = modelProfileVersionId;
+        if (modelProfileVersionId == null || modelProfileVersionId.trim().isEmpty()) {
+            modelProfileVersionId = modelProfileId;
+        }
         return new AgentVersion(idGenerator.nextId(), agent.getTenantId(), agent.getWorkspaceId(), agent.getId(),
-                versionNumber, request.getName(), request.getDescription(), request.getModelProfileId(),
+                versionNumber, request.getName(), request.getDescription(), modelProfileId, modelProfileVersionId,
                 request.getPromptVersionId(), request.getWorkflowVersionId(), request.getMemoryPolicyJson(),
                 request.getInputSchema(), request.getOutputSchema(), request.getExecutionPolicyJson(),
                 request.getResponseRenderPolicyJson(), VersionStatus.DRAFT, hashes.sha256(content), changeNote,
@@ -197,6 +205,7 @@ public class AgentDefinitionApplicationService {
         request.setName(source.getName());
         request.setDescription(source.getDescription());
         request.setModelProfileId(source.getModelProfileId());
+        request.setModelProfileVersionId(source.getModelProfileVersionId());
         request.setPromptVersionId(source.getPromptVersionId());
         request.setWorkflowVersionId(source.getWorkflowVersionId());
         request.setMemoryPolicyJson(source.getMemoryPolicyJson());
@@ -215,6 +224,7 @@ public class AgentDefinitionApplicationService {
         result.put("name", version.getName());
         result.put("description", version.getDescription());
         result.put("modelProfileId", version.getModelProfileId());
+        result.put("modelProfileVersionId", version.getModelProfileVersionId());
         result.put("promptVersionId", version.getPromptVersionId());
         result.put("workflowVersionId", version.getWorkflowVersionId());
         result.put("memoryPolicyJson", version.getMemoryPolicyJson());

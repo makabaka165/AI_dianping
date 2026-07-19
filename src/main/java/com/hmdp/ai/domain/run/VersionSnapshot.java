@@ -12,6 +12,9 @@ public final class VersionSnapshot {
     private final String workflowId;
     private final int workflowVersion;
     private final String modelProfileId;
+    private final String modelProfileVersionId;
+    private final int modelProfileVersion;
+    private final String modelProfileContentHash;
     private final int modelProfileRevision;
     private final Map<String, Integer> toolVersions;
     private final Map<String, Integer> knowledgeBaseVersions;
@@ -21,6 +24,15 @@ public final class VersionSnapshot {
                            String workflowId, int workflowVersion, String modelProfileId,
                            int modelProfileRevision, Map<String, Integer> toolVersions,
                            Map<String, Integer> knowledgeBaseVersions, Map<String, String> indexVersions) {
+        this(agentId, agentVersion, promptId, promptVersion, workflowId, workflowVersion, modelProfileId,
+                modelProfileId, modelProfileRevision, null, toolVersions, knowledgeBaseVersions, indexVersions);
+    }
+
+    public VersionSnapshot(String agentId, int agentVersion, String promptId, int promptVersion,
+                           String workflowId, int workflowVersion, String modelProfileId,
+                           String modelProfileVersionId, int modelProfileVersion, String modelProfileContentHash,
+                           Map<String, Integer> toolVersions, Map<String, Integer> knowledgeBaseVersions,
+                           Map<String, String> indexVersions) {
         this.agentId = agentId;
         this.agentVersion = agentVersion;
         this.promptId = promptId;
@@ -28,7 +40,10 @@ public final class VersionSnapshot {
         this.workflowId = workflowId;
         this.workflowVersion = workflowVersion;
         this.modelProfileId = modelProfileId;
-        this.modelProfileRevision = modelProfileRevision;
+        this.modelProfileVersionId = modelProfileVersionId;
+        this.modelProfileVersion = modelProfileVersion;
+        this.modelProfileContentHash = modelProfileContentHash;
+        this.modelProfileRevision = modelProfileVersion;
         this.toolVersions = immutable(toolVersions);
         this.knowledgeBaseVersions = immutable(knowledgeBaseVersions);
         this.indexVersions = immutable(indexVersions);
@@ -46,6 +61,9 @@ public final class VersionSnapshot {
     public String getWorkflowId() { return workflowId; }
     public int getWorkflowVersion() { return workflowVersion; }
     public String getModelProfileId() { return modelProfileId; }
+    public String getModelProfileVersionId() { return modelProfileVersionId; }
+    public int getModelProfileVersion() { return modelProfileVersion; }
+    public String getModelProfileContentHash() { return modelProfileContentHash; }
     public int getModelProfileRevision() { return modelProfileRevision; }
     public Map<String, Integer> getToolVersions() { return toolVersions; }
     public Map<String, Integer> getKnowledgeBaseVersions() { return knowledgeBaseVersions; }
