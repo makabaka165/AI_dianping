@@ -310,7 +310,7 @@ public class DefaultWorkflowRuntime implements WorkflowRuntime {
 
         NodeExecutionContext nodeContext = new NodeExecutionContext(context, agent, workflow, node,
                 Collections.unmodifiableMap(new LinkedHashMap<>(variables)), outgoing, claim.getNodeRunId());
-        NodeExecutionResult result = registry.require(node.getType()).execute(nodeContext);
+        NodeExecutionResult result = executeWithPolicy(node, nodeContext);
         List<String> next = result.getNextNodeIds().isEmpty()
                 ? defaultNext(outgoing, variables, result.getVariableUpdates()) : result.getNextNodeIds();
         if (result.getStatus() == NodeRunStatus.FAILED) {
@@ -327,6 +327,34 @@ public class DefaultWorkflowRuntime implements WorkflowRuntime {
                     json(persisted), json(result.getUsage()));
         }
         return new NodeOutcome(result, next);
+    }
+
+    private NodeExecutionResult executeWithPolicy(WorkflowNodeDefinition node, NodeExecutionContext context) {
+        int maxAttempts = Math.max(1, node.getMaxAttempts());
+        long timeoutMs = Math.max(1, node.getTimeoutMs());
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            Future<NodeExecutionResult> future = executor.submit(
+                    () -> registry.require(node.getType()).execute(context));
+            try {
+                NodeExecutionResult result = future.get(timeoutMs, TimeUnit.MILLISECONDS);
+                if (result.getStatus() != NodeRunStatus.FAILED || !result.isRetryable()
+                        || attempt == maxAttempts) {
+                    return result;
+                }
+            } catch (java.util.concurrent.TimeoutException e) {
+                future.cancel(true);
+                if (attempt == maxAttempts) return NodeExecutionResult.failure("NODE_TIMEOUT", true);
+            } catch (InterruptedException e) {
+                future.cancel(true);
+                Thread.currentThread().interrupt();
+                return NodeExecutionResult.failure("NODE_CANCELLED", false);
+            } catch (java.util.concurrent.ExecutionException e) {
+                if (attempt == maxAttempts) {
+                    return NodeExecutionResult.failure("NODE_EXECUTION_FAILED", true);
+                }
+            }
+        }
+        return NodeExecutionResult.failure("NODE_MAX_ATTEMPTS_EXCEEDED", true);
     }
 
     private NodeOutcome restore(String persistedJson, List<WorkflowEdgeDefinition> outgoing,

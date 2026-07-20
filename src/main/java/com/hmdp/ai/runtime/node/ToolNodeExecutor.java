@@ -42,12 +42,14 @@ public class ToolNodeExecutor implements NodeExecutor {
             String code = configuration.path("toolCode").asText();
             int version = configuration.path("toolVersion").asInt(1);
             JsonNode input = configuration.has("input") ? configuration.get("input")
-                    : mapper.valueToTree(context.getVariables());
+                    : mappedInput(configuration.path("inputMapping"), context.getVariables());
             boolean approved = Boolean.TRUE.equals(context.getVariables().get("approvedTool." + code));
+            String approvalRequestId = (String) context.getVariables().get("approvalRequest." + code);
             String callId = ids.nextId();
             ToolInvocation invocation = new ToolInvocation(callId, code, version,
                     context.getExecutionContext(), input,
-                    context.getExecutionContext().getRunId() + ':' + context.getNode().getCode(), approved);
+                    context.getExecutionContext().getRunId() + ':' + context.getNode().getCode(), approved,
+                    context.getNodeRunId(), approvalRequestId);
             ToolResult result = tools.execute(invocation);
             if (result.getStatus() == ToolCallStatus.APPROVAL_REQUIRED) {
                 Map<String, Object> pending = new LinkedHashMap<>();
@@ -60,13 +62,32 @@ public class ToolNodeExecutor implements NodeExecutor {
             if (result.getStatus() != ToolCallStatus.SUCCEEDED) {
                 return NodeExecutionResult.failure(result.getErrorCode(), result.isRetryable());
             }
+            String outputVariable = configuration.path("outputVariable").asText(context.getNode().getCode());
             return new NodeExecutionResult(NodeRunStatus.SUCCEEDED, result.getData(), null,
-                    Collections.singletonMap(context.getNode().getCode(),
-                            mapper.convertValue(result.getData(), Object.class)),
+                    Collections.singletonMap(outputVariable, mapper.convertValue(result.getData(), Object.class)),
                     result.getArtifacts(), result.getCitations(), result.getWarnings(), result.getUsage(),
                     false, null);
         } catch (Exception e) {
             return NodeExecutionResult.failure("TOOL_NODE_CONFIG_INVALID", false);
         }
+    }
+
+    private JsonNode mappedInput(JsonNode mapping, Map<String, Object> variables) {
+        if (!mapping.isObject()) return mapper.valueToTree(variables);
+        com.fasterxml.jackson.databind.node.ObjectNode result = mapper.createObjectNode();
+        mapping.fields().forEachRemaining(entry -> result.set(entry.getKey(),
+                mapper.valueToTree(resolve(entry.getValue().asText(), variables))));
+        return result;
+    }
+
+    private Object resolve(String path, Map<String, Object> variables) {
+        String expression = path == null ? "" : path;
+        if (expression.startsWith("$.")) expression = expression.substring(2);
+        String[] parts = expression.split("\\.");
+        Object value = variables.get(parts[0]);
+        for (int index = 1; index < parts.length && value != null; index++) {
+            value = value instanceof Map ? ((Map<?, ?>) value).get(parts[index]) : null;
+        }
+        return value;
     }
 }
