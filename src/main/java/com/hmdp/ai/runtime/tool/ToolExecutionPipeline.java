@@ -14,8 +14,10 @@ import com.hmdp.ai.domain.tool.ToolProtocolAdapter;
 import com.hmdp.ai.domain.tool.ToolRateLimitPort;
 import com.hmdp.ai.domain.tool.ToolResult;
 import com.hmdp.ai.domain.tool.ToolRiskLevel;
+import com.hmdp.ai.domain.approval.ApprovalRequest;
 import com.hmdp.ai.shared.validation.JsonSchemaValidationService;
 import com.hmdp.ai.shared.validation.ValidationResult;
+import com.hmdp.ai.shared.json.ContentHashService;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.stereotype.Component;
@@ -49,14 +51,18 @@ public class ToolExecutionPipeline {
     private final ObjectMapper mapper;
     private final ThreadPoolTaskExecutor executor;
     private final ToolReliabilityExecutor reliability;
+    private final ApprovalService approvals;
+    private final ContentHashService hashes;
 
+    @org.springframework.beans.factory.annotation.Autowired
     public ToolExecutionPipeline(ToolDefinitionRepository definitions, LocalSkillRegistry skills,
                                  List<ToolProtocolAdapter> protocolAdapters,
                                  ToolPermissionService permissions, ToolRateLimitPort rateLimits,
                                  ToolBudgetPort budgets, ToolIdempotencyPort idempotency, ToolAuditPort audit,
                                  JsonSchemaValidationService schemas, ObjectMapper mapper,
                                  @Qualifier("toolExecutionExecutor") ThreadPoolTaskExecutor executor,
-                                 ToolReliabilityExecutor reliability) {
+                                 ToolReliabilityExecutor reliability, ApprovalService approvals,
+                                 ContentHashService hashes) {
         this.definitions = definitions;
         this.skills = skills;
         this.protocolAdapters = protocolAdapters;
@@ -69,6 +75,18 @@ public class ToolExecutionPipeline {
         this.mapper = mapper;
         this.executor = executor;
         this.reliability = reliability;
+        this.approvals = approvals;
+        this.hashes = hashes;
+    }
+
+    public ToolExecutionPipeline(ToolDefinitionRepository definitions, LocalSkillRegistry skills,
+                                 List<ToolProtocolAdapter> protocolAdapters,
+                                 ToolPermissionService permissions, ToolRateLimitPort rateLimits,
+                                 ToolBudgetPort budgets, ToolIdempotencyPort idempotency, ToolAuditPort audit,
+                                 JsonSchemaValidationService schemas, ObjectMapper mapper,
+                                 ThreadPoolTaskExecutor executor, ToolReliabilityExecutor reliability) {
+        this(definitions, skills, protocolAdapters, permissions, rateLimits, budgets, idempotency, audit,
+                schemas, mapper, executor, reliability, null, null);
     }
 
     public ToolResult execute(ToolInvocation invocation) {
@@ -92,8 +110,18 @@ public class ToolExecutionPipeline {
             result = ToolResult.failure(ToolCallStatus.FAILED, "TOOL_INPUT_SCHEMA_INVALID",
                     "tool input schema validation failed", false);
         } else if (requiresApproval(definition) && !invocation.isApproved()) {
-            result = ToolResult.failure(ToolCallStatus.APPROVAL_REQUIRED, "TOOL_APPROVAL_REQUIRED",
-                    "high-risk tool requires explicit approval", false);
+            if (approvals == null) {
+                result = ToolResult.failure(ToolCallStatus.APPROVAL_REQUIRED, "TOOL_APPROVAL_REQUIRED",
+                        "high-risk tool requires TOOL_APPROVE and a matching inputHash", false);
+            } else {
+                ApprovalRequest request = approvals.request(definition, invocation, invocation.getInput());
+                result = ToolResult.failure(ToolCallStatus.APPROVAL_REQUIRED, "TOOL_APPROVAL_REQUIRED",
+                        "approvalRequestId=" + request.getId() + ";inputHash=" + request.getInputHash()
+                                + ";requires=TOOL_APPROVE", false);
+            }
+        } else if (requiresApproval(definition) && !approvals.approved(invocation, invocation.getInput())) {
+            result = ToolResult.failure(ToolCallStatus.DENIED, "TOOL_APPROVAL_INVALID",
+                    "approval is missing, expired, self-approved, or inputHash changed", false);
         } else {
             result = executeAuthorized(definition, invocation, started);
         }

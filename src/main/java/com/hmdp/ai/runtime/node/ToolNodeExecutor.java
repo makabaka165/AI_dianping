@@ -43,8 +43,8 @@ public class ToolNodeExecutor implements NodeExecutor {
             int version = configuration.path("toolVersion").asInt(1);
             JsonNode input = configuration.has("input") ? configuration.get("input")
                     : mappedInput(configuration.path("inputMapping"), context.getVariables());
-            boolean approved = Boolean.TRUE.equals(context.getVariables().get("approvedTool." + code));
             String approvalRequestId = (String) context.getVariables().get("approvalRequest." + code);
+            boolean approved = approvalRequestId != null && !approvalRequestId.trim().isEmpty();
             String callId = ids.nextId();
             ToolInvocation invocation = new ToolInvocation(callId, code, version,
                     context.getExecutionContext(), input,
@@ -55,6 +55,7 @@ public class ToolNodeExecutor implements NodeExecutor {
                 Map<String, Object> pending = new LinkedHashMap<>();
                 pending.put("pendingToolCode", code);
                 pending.put("pendingToolVersion", version);
+                pending.putAll(approvalMetadata(result.getErrorMessage()));
                 return new NodeExecutionResult(NodeRunStatus.WAITING, mapper.valueToTree(pending),
                         Collections.singletonList(context.getNode().getCode()), pending, null, null, null,
                         UsageSummary.empty(0), false, "TOOL_APPROVAL_REQUIRED");
@@ -70,6 +71,16 @@ public class ToolNodeExecutor implements NodeExecutor {
         } catch (Exception e) {
             return NodeExecutionResult.failure("TOOL_NODE_CONFIG_INVALID", false);
         }
+    }
+
+    private Map<String, Object> approvalMetadata(String message) {
+        Map<String, Object> values = new LinkedHashMap<>();
+        if (message == null) return values;
+        for (String part : message.split(";")) {
+            int separator = part.indexOf('=');
+            if (separator > 0) values.put(part.substring(0, separator), part.substring(separator + 1));
+        }
+        return values;
     }
 
     private JsonNode mappedInput(JsonNode mapping, Map<String, Object> variables) {

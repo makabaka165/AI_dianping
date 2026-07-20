@@ -8,14 +8,14 @@ import org.springframework.core.annotation.AnnotatedElementUtils;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.method.HandlerMethod;
-import org.springframework.web.servlet.HandlerInterceptor;
+import org.springframework.web.servlet.AsyncHandlerInterceptor;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
 
 @Component
-public class AiPermissionInterceptor implements HandlerInterceptor {
+public class AiPermissionInterceptor implements AsyncHandlerInterceptor {
     private final AiAuthorizationService authorizationService;
     public AiPermissionInterceptor(AiAuthorizationService authorizationService) { this.authorizationService = authorizationService; }
 
@@ -26,8 +26,9 @@ public class AiPermissionInterceptor implements HandlerInterceptor {
         HandlerMethod method = (HandlerMethod) handler;
         RequireAiPermission required = AnnotatedElementUtils.findMergedAnnotation(method.getMethod(), RequireAiPermission.class);
         if (required == null) required = AnnotatedElementUtils.findMergedAnnotation(method.getBeanType(), RequireAiPermission.class);
-        AiPermission permission = required == null ? defaultPermission(request) : required.value();
         boolean v1 = request.getRequestURI().startsWith("/api/v1/");
+        if (v1 && required == null) return reject(response, 403, "AI_PERMISSION_DECLARATION_REQUIRED");
+        AiPermission permission = required == null ? defaultPermission(request) : required.value();
         String tenantId = header(request, "X-Tenant-Id", v1 ? null : "default");
         String workspaceId = header(request, "X-Workspace-Id", v1 ? null : "default");
         if (tenantId == null || workspaceId == null) return reject(response, 400, "AI_CONTEXT_REQUIRED");
@@ -41,6 +42,12 @@ public class AiPermissionInterceptor implements HandlerInterceptor {
 
     @Override
     public void afterCompletion(HttpServletRequest request, HttpServletResponse response, Object handler, Exception ex) {
+        AiSecurityContextHolder.clear();
+    }
+
+    @Override
+    public void afterConcurrentHandlingStarted(HttpServletRequest request, HttpServletResponse response,
+                                               Object handler) {
         AiSecurityContextHolder.clear();
     }
 
