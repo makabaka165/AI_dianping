@@ -305,7 +305,7 @@ public class KnowledgeIngestionApplicationService {
         KnowledgeBaseVersion target = repository.findVersionNumber(context.getTenant().getTenantId(),
                         context.getWorkspace().getWorkspaceId(), knowledgeBaseId, version)
                 .orElseThrow(() -> new IllegalArgumentException("knowledge base version not found"));
-        if (!"DRAFT".equals(target.getStatus()) && !"PUBLISHED".equals(target.getStatus())) {
+        if (!"DRAFT".equals(target.getStatus())) {
             throw new IllegalArgumentException("knowledge base version cannot accept ingestion");
         }
         return target;

@@ -186,6 +186,9 @@ CREATE TABLE IF NOT EXISTS ai_outbox_event (
     KEY idx_ai_outbox_aggregate (tenant_id, workspace_id, aggregate_type, aggregate_id, deleted)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- Durable consumers are defined by the hardening migration as ai_outbox_consumption and
+-- ai_outbox_dead_letter. Index builds use SHADOW index versions until verification succeeds.
+
 INSERT IGNORE INTO ai_model_profile (
     id,tenant_id,workspace_id,code,name,provider,model_name,base_url,secret_ref,model_type,
     capabilities_json,default_parameters_json,context_window,max_output_tokens,timeout_ms,retry_policy_json,

@@ -50,16 +50,19 @@ public class IngestionJobWorker implements IngestionDispatcher {
     private final KnowledgeIndexPort index;
     private final TextNormalizer normalizer;
     private final PiiRedactionService pii;
+    private final StructuredDocumentRedactor structuredRedactor;
     private final DocumentQualityAssessor quality;
     private final AiIdGenerator ids;
     private final ContentHashService hashes;
     private final ObjectMapper mapper;
     private final ThreadPoolTaskExecutor executor;
 
+    @org.springframework.beans.factory.annotation.Autowired
     public IngestionJobWorker(KnowledgeRepository repository, ObjectStoragePort objects,
                               DocumentParsingPort parsers, ChunkingStrategyRegistry strategies,
                               EmbeddingGateway embeddings, KnowledgeIndexPort index, TextNormalizer normalizer,
-                              PiiRedactionService pii, DocumentQualityAssessor quality, AiIdGenerator ids,
+                              PiiRedactionService pii, StructuredDocumentRedactor structuredRedactor,
+                              DocumentQualityAssessor quality, AiIdGenerator ids,
                               ContentHashService hashes, ObjectMapper mapper,
                               @Qualifier("knowledgeIngestionExecutor") ThreadPoolTaskExecutor executor) {
         this.repository = repository;
@@ -70,11 +73,22 @@ public class IngestionJobWorker implements IngestionDispatcher {
         this.index = index;
         this.normalizer = normalizer;
         this.pii = pii;
+        this.structuredRedactor = structuredRedactor;
         this.quality = quality;
         this.ids = ids;
         this.hashes = hashes;
         this.mapper = mapper;
         this.executor = executor;
+    }
+
+    public IngestionJobWorker(KnowledgeRepository repository, ObjectStoragePort objects,
+                              DocumentParsingPort parsers, ChunkingStrategyRegistry strategies,
+                              EmbeddingGateway embeddings, KnowledgeIndexPort index, TextNormalizer normalizer,
+                              PiiRedactionService pii, DocumentQualityAssessor quality, AiIdGenerator ids,
+                              ContentHashService hashes, ObjectMapper mapper,
+                              ThreadPoolTaskExecutor executor) {
+        this(repository, objects, parsers, strategies, embeddings, index, normalizer, pii,
+                new StructuredDocumentRedactor(), quality, ids, hashes, mapper, executor);
     }
 
     @Override
@@ -106,14 +120,15 @@ public class IngestionJobWorker implements IngestionDispatcher {
             repository.updateJob(jobId, IngestionStatus.NORMALIZING, 30, "{}");
             String plain = normalizer.normalize(document.getPlainText());
             repository.updateJob(jobId, IngestionStatus.REDACTING, 38, "{}");
-            String redacted = pii.redact(plain);
+            ParsedDocument redactedDocument = structuredRedactor.redact(document);
+            String redacted = pii.redact(normalizer.normalize(redactedDocument.getPlainText()));
             DocumentQualityAssessment assessment = quality.assess(redacted, DocumentQualityProfile.GENERAL);
-            repository.saveParsed(version.getId(), document.getTitle(), redacted,
-                    mapper.writeValueAsString(document), mapper.writeValueAsString(document.getWarnings()),
+            repository.saveParsed(version.getId(), redactedDocument.getTitle(), redacted,
+                    mapper.writeValueAsString(redactedDocument), mapper.writeValueAsString(redactedDocument.getWarnings()),
                     assessment.getScore(), mapper.writeValueAsString(assessment));
             repository.updateJob(jobId, IngestionStatus.CHUNKING, 45, "{}");
             ChunkingPolicy policy = ChunkingPolicy.parse(kb.getChunkingPolicyJson(), mapper);
-            List<ChunkFragment> fragments = strategies.require(policy).chunk(document, policy);
+            List<ChunkFragment> fragments = strategies.require(policy).chunk(redactedDocument, policy);
             if (fragments.isEmpty()) throw new IllegalStateException("DOCUMENT_CHUNKS_EMPTY");
             List<String> texts = new ArrayList<>();
             for (ChunkFragment fragment : fragments) {
@@ -121,7 +136,7 @@ public class IngestionJobWorker implements IngestionDispatcher {
             }
             repository.updateJob(jobId, IngestionStatus.EMBEDDING, 55, stats("chunkCount", texts.size()));
             List<float[]> vectors = embed(job, kb, texts);
-            List<KnowledgeChunk> chunks = chunks(job, kb, version, document, assessment, fragments, texts, vectors);
+            List<KnowledgeChunk> chunks = chunks(job, kb, version, redactedDocument, assessment, fragments, texts, vectors);
             repository.updateJob(jobId, IngestionStatus.INDEXING, 80, stats("chunkCount", chunks.size()));
             index.ensureIndex(kb.getIndexVersion(), kb.getEmbeddingDimension());
             List<String> replacedChunkIds = repository.findChunkIds(version.getId(), kb.getIndexVersion());
