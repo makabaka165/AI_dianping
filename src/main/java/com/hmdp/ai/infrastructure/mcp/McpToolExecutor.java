@@ -1,1 +1,16 @@
-package com.hmdp.ai.infrastructure.mcp;import com.fasterxml.jackson.databind.JsonNode;import com.hmdp.ai.domain.mcp.McpServer;import org.springframework.stereotype.Component;@Component public class McpToolExecutor {private final McpClientFactory clients;public McpToolExecutor(McpClientFactory clients){this.clients=clients;}public JsonNode execute(McpServer server,String tool,JsonNode input){return clients.create().execute(server,tool,input);}}
+package com.hmdp.ai.infrastructure.mcp;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.hmdp.ai.domain.mcp.McpServer;
+import org.springframework.stereotype.Component;
+
+@Component
+public class McpToolExecutor {
+    private final McpClientFactory clients;
+
+    public McpToolExecutor(McpClientFactory clients) { this.clients = clients; }
+
+    public JsonNode execute(McpServer server, String tool, JsonNode input) {
+        return clients.create(server).execute(server, tool, input);
+    }
+}

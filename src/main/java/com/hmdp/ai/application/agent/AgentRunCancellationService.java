@@ -1,5 +1,7 @@
 package com.hmdp.ai.application.agent;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hmdp.ai.application.dto.agent.AgentRunCreatedResponse;
 import com.hmdp.ai.shared.exception.AiPlatformException;
 import com.hmdp.ai.domain.run.AgentRunRecord;
@@ -15,10 +17,16 @@ import org.springframework.stereotype.Service;
 public class AgentRunCancellationService {
     private final RunRepository repository;
     private final RunEventPublisher events;
+    private final ObjectMapper mapper;
 
     public AgentRunCancellationService(RunRepository repository, RunEventPublisher events) {
+        this(repository, events, new ObjectMapper());
+    }
+
+    public AgentRunCancellationService(RunRepository repository, RunEventPublisher events, ObjectMapper mapper) {
         this.repository = repository;
         this.events = events;
+        this.mapper = mapper;
     }
 
     public AgentRunCreatedResponse cancel(AiSecurityContext context, AgentRunRecord run) {
@@ -30,6 +38,11 @@ public class AgentRunCancellationService {
                 new RunLifecycleEventPayload(run.getId(), RunStatus.CANCELLED, null,
                         "RUN_CANCELLED", "run cancelled"), true);
         return new AgentRunCreatedResponse(run.getId(), RunStatus.CANCELLED,
-                run.getAgentId(), run.getAgentVersion());
+                run.getAgentId(), agentCode(run), run.getAgentVersion());
+    }
+
+    private String agentCode(AgentRunRecord run) {
+        try { JsonNode snapshot = mapper.readTree(run.getVersionSnapshotJson()); return snapshot.path("agentCode").asText(run.getAgentId()); }
+        catch (Exception ignored) { return run.getAgentId(); }
     }
 }

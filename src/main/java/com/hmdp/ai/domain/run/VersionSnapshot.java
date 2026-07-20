@@ -6,6 +6,7 @@ import java.util.Map;
 
 public final class VersionSnapshot {
     private final String agentId;
+    private final String agentCode;
     private final int agentVersion;
     private final String promptId;
     private final int promptVersion;
@@ -24,7 +25,7 @@ public final class VersionSnapshot {
                            String workflowId, int workflowVersion, String modelProfileId,
                            int modelProfileRevision, Map<String, Integer> toolVersions,
                            Map<String, Integer> knowledgeBaseVersions, Map<String, String> indexVersions) {
-        this(agentId, agentVersion, promptId, promptVersion, workflowId, workflowVersion, modelProfileId,
+        this(agentId, agentId, agentVersion, promptId, promptVersion, workflowId, workflowVersion, modelProfileId,
                 modelProfileId, modelProfileRevision, null, toolVersions, knowledgeBaseVersions, indexVersions);
     }
 
@@ -33,7 +34,18 @@ public final class VersionSnapshot {
                            String modelProfileVersionId, int modelProfileVersion, String modelProfileContentHash,
                            Map<String, Integer> toolVersions, Map<String, Integer> knowledgeBaseVersions,
                            Map<String, String> indexVersions) {
+        this(agentId, agentId, agentVersion, promptId, promptVersion, workflowId, workflowVersion, modelProfileId,
+                modelProfileVersionId, modelProfileVersion, modelProfileContentHash, toolVersions,
+                knowledgeBaseVersions, indexVersions);
+    }
+
+    public VersionSnapshot(String agentId, String agentCode, int agentVersion, String promptId, int promptVersion,
+                           String workflowId, int workflowVersion, String modelProfileId,
+                           String modelProfileVersionId, int modelProfileVersion, String modelProfileContentHash,
+                           Map<String, Integer> toolVersions, Map<String, Integer> knowledgeBaseVersions,
+                           Map<String, String> indexVersions) {
         this.agentId = agentId;
+        this.agentCode = agentCode;
         this.agentVersion = agentVersion;
         this.promptId = promptId;
         this.promptVersion = promptVersion;
@@ -55,6 +67,7 @@ public final class VersionSnapshot {
     }
 
     public String getAgentId() { return agentId; }
+    public String getAgentCode() { return agentCode; }
     public int getAgentVersion() { return agentVersion; }
     public String getPromptId() { return promptId; }
     public int getPromptVersion() { return promptVersion; }

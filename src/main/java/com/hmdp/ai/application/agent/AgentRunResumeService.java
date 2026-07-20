@@ -54,11 +54,16 @@ public class AgentRunResumeService {
             }
             runtime.enqueue(run.getTenantId(), run.getWorkspaceId(), run.getId());
             return new AgentRunCreatedResponse(run.getId(), RunStatus.QUEUED,
-                    run.getAgentId(), run.getAgentVersion());
+                    run.getAgentId(), agentCode(run), run.getAgentVersion());
         } catch (AiPlatformException e) {
             throw e;
         } catch (Exception e) {
             throw new IllegalArgumentException("resume variables are invalid", e);
         }
+    }
+
+    private String agentCode(AgentRunRecord run) {
+        try { return objectMapper.readTree(run.getVersionSnapshotJson()).path("agentCode").asText(run.getAgentId()); }
+        catch (Exception ignored) { return run.getAgentId(); }
     }
 }

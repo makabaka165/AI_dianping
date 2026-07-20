@@ -214,7 +214,7 @@ public class JdbcAgentRepository implements AgentRepository {
             knowledgeVersions.put(kb.getKnowledgeBaseId(), kb.getKnowledgeBaseVersion());
             indexVersions.put(kb.getKnowledgeBaseId(), kb.getIndexVersion());
         });
-        VersionSnapshot snapshot = new VersionSnapshot(agent.getId(), agentVersion.getVersion(),
+          VersionSnapshot snapshot = new VersionSnapshot(agent.getId(), agent.getCode(), agentVersion.getVersion(),
                 prompt.getPromptId(), prompt.getVersion(), workflow.workflowId, workflow.version,
                 model.getId(), modelVersion.getId(), modelVersion.getVersion(), modelVersion.getContentHash(),
                 toolVersions, knowledgeVersions, indexVersions);

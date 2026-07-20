@@ -54,7 +54,12 @@ public class AgentRunRetryService {
                 null, null, now, null, null, now.plus(budget.getMaxRunDuration()), null);
         repository.create(retry);
         runtime.enqueue(retry.getTenantId(), retry.getWorkspaceId(), retry.getId());
-        return new AgentRunCreatedResponse(runId, RunStatus.QUEUED, source.getAgentId(), source.getAgentVersion());
+        return new AgentRunCreatedResponse(runId, RunStatus.QUEUED, source.getAgentId(), agentCode(source), source.getAgentVersion());
+    }
+
+    private String agentCode(AgentRunRecord source) {
+        try { return objectMapper.readTree(source.getVersionSnapshotJson()).path("agentCode").asText(source.getAgentId()); }
+        catch (Exception ignored) { return source.getAgentId(); }
     }
 
     private String authorizationJson(AiSecurityContext context) {

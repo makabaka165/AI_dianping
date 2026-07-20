@@ -13,20 +13,24 @@ import java.util.concurrent.CopyOnWriteArrayList;
 @Component
 public class SseRunEventHub {
     private final ConcurrentHashMap<String, CopyOnWriteArrayList<SseEmitter>> emitters = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<SseEmitter, Long> lastSequences = new ConcurrentHashMap<>();
 
     public SseEmitter open(String tenantId, String workspaceId, String runId,
-                           List<AgentRunEventResponse> replay, boolean terminal) {
+                           long afterSequence, List<AgentRunEventResponse> replay, boolean terminal) {
         String key = key(tenantId, workspaceId, runId);
         SseEmitter emitter = new SseEmitter(Duration.ofMinutes(30).toMillis());
         emitter.onCompletion(() -> remove(key, emitter));
         emitter.onTimeout(() -> remove(key, emitter));
         emitter.onError(error -> remove(key, emitter));
+        emitters.computeIfAbsent(key, ignored -> new CopyOnWriteArrayList<>()).add(emitter);
         try {
-            for (AgentRunEventResponse event : replay) send(emitter, event);
+            for (AgentRunEventResponse event : replay) {
+                if (event.getSequence() > lastSequences.getOrDefault(emitter, afterSequence)) {
+                    send(emitter, event);
+                }
+            }
             if (terminal) {
                 emitter.complete();
-            } else {
-                emitters.computeIfAbsent(key, ignored -> new CopyOnWriteArrayList<>()).add(emitter);
             }
         } catch (IOException e) {
             emitter.completeWithError(e);
@@ -51,8 +55,12 @@ public class SseRunEventHub {
     }
 
     private void send(SseEmitter emitter, AgentRunEventResponse event) throws IOException {
+        long sequence = event.getSequence();
+        Long previous = lastSequences.putIfAbsent(emitter, sequence);
+        if (previous != null && sequence <= previous) return;
+        lastSequences.put(emitter, sequence);
         emitter.send(SseEmitter.event()
-                .id(String.valueOf(event.getSequence()))
+                .id(String.valueOf(sequence))
                 .name(event.getType())
                 .data(event));
     }
@@ -61,6 +69,7 @@ public class SseRunEventHub {
         CopyOnWriteArrayList<SseEmitter> clients = emitters.get(key);
         if (clients == null) return;
         clients.remove(emitter);
+        lastSequences.remove(emitter);
         if (clients.isEmpty()) emitters.remove(key, clients);
     }
 

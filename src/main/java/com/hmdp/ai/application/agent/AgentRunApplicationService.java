@@ -97,7 +97,8 @@ public class AgentRunApplicationService {
         repository.create(run);
         runtime.enqueue(run.getTenantId(), run.getWorkspaceId(), run.getId());
         return new AgentRunCreatedResponse(runId, RunStatus.QUEUED,
-                definition.getAgent().getCode(), definition.getVersion().getVersion());
+                definition.getAgent().getId(), definition.getAgent().getCode(),
+                definition.getVersion().getVersion());
     }
 
     public AgentRunDetailResponse get(String runId) {
@@ -136,7 +137,8 @@ public class AgentRunApplicationService {
         AgentRunRecord run = requireRun(context, runId);
         List<AgentRunEventResponse> replay = repository.findEvents(run.getTenantId(), run.getWorkspaceId(),
                         runId, afterSequence, 1000).stream().map(this::event).collect(Collectors.toList());
-        return eventHub.open(run.getTenantId(), run.getWorkspaceId(), runId, replay, run.getStatus().isTerminal());
+        return eventHub.open(run.getTenantId(), run.getWorkspaceId(), runId, afterSequence, replay,
+                run.getStatus().isTerminal());
     }
 
     private AgentRunRecord requireRun(AiSecurityContext context, String runId) {
