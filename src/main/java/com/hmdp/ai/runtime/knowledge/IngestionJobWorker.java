@@ -138,13 +138,7 @@ public class IngestionJobWorker implements IngestionDispatcher {
             List<float[]> vectors = embed(job, kb, texts);
             List<KnowledgeChunk> chunks = chunks(job, kb, version, redactedDocument, assessment, fragments, texts, vectors);
             repository.updateJob(jobId, IngestionStatus.INDEXING, 80, stats("chunkCount", chunks.size()));
-            index.ensureIndex(kb.getIndexVersion(), kb.getEmbeddingDimension());
-            List<String> replacedChunkIds = repository.findChunkIds(version.getId(), kb.getIndexVersion());
-            repository.replaceChunks(version.getId(), chunks, "worker");
-            index.delete(kb.getIndexVersion(), replacedChunkIds);
-            index.index(chunks);
-            repository.updateJob(jobId, IngestionStatus.VERIFYING, 95, stats("indexed", chunks.size()));
-            repository.publishIngestion(jobId, version.getId(), job.getDocumentId(), "worker");
+            repository.stageIndexBuild(jobId, version.getId(), job.getDocumentId(), chunks, "worker");
         } catch (Exception e) {
             String message = AiLogSanitizer.safe(e.getMessage(), 500);
             repository.failJob(jobId, errorCode(e), message == null ? "knowledge ingestion failed" : message);

@@ -129,9 +129,6 @@ public class KnowledgeIngestionApplicationService {
         KnowledgeBaseVersion draft = repository.findVersionNumber(context.getTenant().getTenantId(),
                         context.getWorkspace().getWorkspaceId(), knowledgeBaseId, version)
                 .orElseThrow(() -> new IllegalArgumentException("knowledge version not found"));
-        index.ensureIndex(draft.getIndexVersion(), draft.getEmbeddingDimension());
-        repository.markIndexReady(context.getTenant().getTenantId(), context.getWorkspace().getWorkspaceId(),
-                knowledgeBaseId, draft.getIndexVersion(), context.getUserId());
         KnowledgeBaseVersion ready = repository.findVersionNumber(context.getTenant().getTenantId(),
                         context.getWorkspace().getWorkspaceId(), knowledgeBaseId, version)
                 .orElseThrow(() -> new IllegalArgumentException("knowledge version not found"));

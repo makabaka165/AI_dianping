@@ -130,11 +130,23 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
         jdbc.update("update ai_index_version set active=0,updated_by=? " +
                         "where tenant_id=? and workspace_id=? and knowledge_base_id=? and deleted=0",
                 actor, tenant, workspace, knowledgeBaseId);
-        int activated = jdbc.update("update ai_index_version set active=1,updated_by=? " +
+        jdbc.update("update ai_index_version set rollback_after=?,updated_by=? " +
+                        "where tenant_id=? and workspace_id=? and knowledge_base_id=? and code<>? " +
+                        "and status='READY' and deleted=0",
+                Timestamp.from(Instant.now().plusSeconds(86400)), actor, tenant, workspace,
+                knowledgeBaseId, target.getIndexVersion());
+        int activated = jdbc.update("update ai_index_version set active=1,activated_at=?,updated_by=? " +
                         "where tenant_id=? and workspace_id=? and knowledge_base_id=? and code=? " +
                         "and status='READY' and deleted=0",
-                actor, tenant, workspace, knowledgeBaseId, target.getIndexVersion());
+                Timestamp.from(Instant.now()), actor, tenant, workspace, knowledgeBaseId,
+                target.getIndexVersion());
         if (activated != 1) throw new IllegalStateException("KNOWLEDGE_INDEX_NOT_READY");
+        jdbc.update("update ai_knowledge_base set active_index_version=?,updated_by=? where tenant_id=? " +
+                        "and workspace_id=? and id=? and deleted=0",
+                target.getIndexVersion(), actor, tenant, workspace, knowledgeBaseId);
+        jdbc.update("update ai_knowledge_base_version set status='ARCHIVED',updated_by=? where tenant_id=? " +
+                        "and workspace_id=? and knowledge_base_id=? and status='PUBLISHED' and id<>? " +
+                        "and deleted=0", actor, tenant, workspace, knowledgeBaseId, target.getId());
         int published = jdbc.update("update ai_knowledge_base_version set status='PUBLISHED',published_at=?," +
                         "published_by=?,updated_by=? where id=? and status='DRAFT' and index_status='READY'",
                 Timestamp.from(Instant.now()), actor, actor, target.getId());
@@ -159,7 +171,7 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
     @Override
     public Optional<KnowledgeBaseVersion> findVersionById(String id) {
         return jdbc.query("select " + KNOWLEDGE_VERSION_COLUMNS + " from ai_knowledge_base_version " +
-                        "where id=? and status in ('DRAFT','PUBLISHED') and deleted=0",
+                        "where id=? and status in ('DRAFT','BUILDING','PUBLISHED','ARCHIVED','FAILED') and deleted=0",
                 (rs, row) -> knowledgeBaseVersion(rs), id).stream().findFirst();
     }
 
@@ -388,6 +400,86 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                         "where document_version_id=? and index_version=? and deleted=0",
                 actor, versionId, indexVersion);
         for (KnowledgeChunk chunk : chunks) insertChunk(chunk, actor);
+    }
+
+    @Override
+    @Transactional
+    public void stageIndexBuild(String jobId, String versionId, String documentId,
+                                List<KnowledgeChunk> chunks, String actor) {
+        if (chunks == null || chunks.isEmpty()) throw new IllegalArgumentException("chunks must not be empty");
+        KnowledgeChunk first = chunks.get(0);
+        Long mutable = jdbc.queryForObject("select count(*) from ai_knowledge_base_version k "
+                        + "join ai_document_version d on d.knowledge_base_id=k.knowledge_base_id "
+                        + "where k.tenant_id=? and k.workspace_id=? and k.knowledge_base_id=? "
+                        + "and k.version=? and k.index_version=? and k.status in ('DRAFT','BUILDING') "
+                        + "and d.id=? and d.deleted=0 and k.deleted=0",
+                Long.class, first.getTenantId(), first.getWorkspaceId(), first.getKnowledgeBaseId(),
+                first.getKnowledgeBaseVersion(), first.getIndexVersion(), versionId);
+        if (mutable == null || mutable != 1) throw new IllegalStateException("KNOWLEDGE_VERSION_IMMUTABLE");
+        jdbc.update("delete from ai_document_chunk where document_version_id=? and index_version=?",
+                versionId, first.getIndexVersion());
+        for (KnowledgeChunk chunk : chunks) insertChunk(chunk, actor);
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("jobId", jobId);
+        payload.put("documentVersionId", versionId);
+        payload.put("documentId", documentId);
+        payload.put("knowledgeBaseId", first.getKnowledgeBaseId());
+        payload.put("indexVersion", first.getIndexVersion());
+        payload.put("embeddingDimension", first.getEmbeddingDimension());
+        payload.put("expectedDocumentChunkCount", chunks.size());
+        String deduplicationKey = "index-build:" + jobId;
+        jdbc.update("insert into ai_outbox_event "
+                        + "(id,tenant_id,workspace_id,aggregate_type,aggregate_id,event_type,deduplication_key,"
+                        + "payload_json,status,attempt,available_at,created_by,updated_by) "
+                        + "values (?,?,?,?,?,'INDEX_BUILD_REQUESTED',?,?,'PENDING',0,?,?,?) "
+                        + "on duplicate key update payload_json=values(payload_json),available_at=values(available_at),"
+                        + "status=if(status='PUBLISHED',status,'PENDING'),updated_by=values(updated_by)",
+                ids.nextId(), first.getTenantId(), first.getWorkspaceId(), "INDEX_VERSION",
+                first.getIndexVersion(), deduplicationKey, json(payload), Timestamp.from(Instant.now()), actor, actor);
+        jdbc.update("update ai_ingestion_job set status='VERIFYING',progress=90,statistics_json=?,"
+                        + "updated_by=? where id=? and status not in ('PUBLISHED','CANCELLED') and deleted=0",
+                json(Collections.singletonMap("stagedChunks", chunks.size())), actor, jobId);
+        jdbc.update("update ai_index_version set status='BUILDING',updated_by=? where tenant_id=? "
+                        + "and workspace_id=? and knowledge_base_id=? and code=? and active=0 and deleted=0",
+                actor, first.getTenantId(), first.getWorkspaceId(), first.getKnowledgeBaseId(),
+                first.getIndexVersion());
+    }
+
+    @Override
+    public List<KnowledgeChunk> findIndexBuildChunks(String tenant, String workspace, String indexVersion) {
+        return jdbc.query("select " + CHUNK_COLUMNS + " from ai_document_chunk where tenant_id=? and "
+                        + "workspace_id=? and index_version=? and status in ('INDEXING','PUBLISHED') and deleted=0 "
+                        + "order by document_id,ordinal_no",
+                (rs, row) -> chunk(rs), tenant, workspace, indexVersion);
+    }
+
+    @Override
+    @Transactional
+    public void completeIndexBuild(String jobId, String versionId, String documentId,
+                                   String indexVersion, com.hmdp.ai.domain.knowledge.IndexVerificationResult result,
+                                   String actor) {
+        if (result == null || !result.isValid()) throw new IllegalStateException("INDEX_VERIFICATION_FAILED");
+        int updated = jdbc.update("update ai_index_version set status='READY',document_count=?,chunk_count=?,"
+                        + "verification_json=?,ready_at=?,updated_by=? where code=? and active=0 and deleted=0",
+                result.getIndexedDocumentCount(), result.getIndexedChunkCount(), json(result),
+                Timestamp.from(Instant.now()), actor, indexVersion);
+        if (updated != 1) throw new IllegalStateException("KNOWLEDGE_INDEX_NOT_FOUND");
+        publishIngestion(jobId, versionId, documentId, actor);
+    }
+
+    @Override
+    public List<String> findExpiredInactiveIndexes(int limit) {
+        return jdbc.query("select code from ai_index_version where active=0 and status='READY' "
+                        + "and rollback_after is not null and rollback_after<=? and deleted=0 "
+                        + "order by rollback_after,id limit ?",
+                (rs, row) -> rs.getString(1), Timestamp.from(Instant.now()), limit);
+    }
+
+    @Override
+    public void markIndexDeleted(String indexVersion, String actor) {
+        jdbc.update("update ai_index_version set status='DELETED',deleted=1,updated_by=? where code=? "
+                        + "and active=0 and rollback_after<=? and deleted=0",
+                actor, indexVersion, Timestamp.from(Instant.now()));
     }
 
     @Override

@@ -25,7 +25,6 @@ import com.hmdp.ai.shared.id.AiIdGenerator;
 import com.hmdp.ai.shared.json.ContentHashService;
 import com.hmdp.ai.shared.text.TextNormalizer;
 import org.junit.jupiter.api.Test;
-import org.mockito.InOrder;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 import java.io.ByteArrayInputStream;
@@ -36,14 +35,13 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class IngestionJobWorkerTest {
     @Test
-    void replacesTargetIndexChunksAndRemovesStaleRedisEntries() throws Exception {
+    void stagesChunksAndOutboxWithoutWritingRedisDirectly() throws Exception {
         KnowledgeRepository repository = mock(KnowledgeRepository.class);
         ObjectStoragePort objects = mock(ObjectStoragePort.class);
         DocumentParsingPort parsers = mock(DocumentParsingPort.class);
@@ -73,7 +71,7 @@ class IngestionJobWorkerTest {
         when(parsers.parse(any(), eq("policy.txt"), eq("text/plain")))
                 .thenReturn(new ParsedFile(parsed, "sha", "text/plain"));
         when(registry.require(any())).thenReturn(strategy);
-        when(strategy.chunk(eq(parsed), any())).thenReturn(Collections.singletonList(
+        when(strategy.chunk(any(ParsedDocument.class), any())).thenReturn(Collections.singletonList(
                 new ChunkFragment("safe policy text", 1, "Policy", "Policy", null,
                         null, null, null, null, 0, 16)));
         when(pii.redact(anyString())).thenAnswer(invocation -> invocation.getArgument(0));
@@ -82,17 +80,13 @@ class IngestionJobWorkerTest {
                         .level(DocumentQualityLevel.GOOD).score(0.9).build());
         when(embeddings.embed(eq("tenant"), eq("workspace"), eq("embedding"), anyList(), eq(3)))
                 .thenReturn(Collections.singletonList(new float[]{1, 0, 0}));
-        when(repository.findChunkIds("dv", "index-v2")).thenReturn(Collections.singletonList("stale"));
         IngestionJobWorker worker = new IngestionJobWorker(repository, objects, parsers, registry, embeddings,
                 index, new TextNormalizer(), pii, quality, new AiIdGenerator(), new ContentHashService(mapper),
                 mapper, mock(ThreadPoolTaskExecutor.class));
 
         worker.process("job");
 
-        InOrder order = inOrder(repository, index);
-        order.verify(repository).replaceChunks(eq("dv"), anyList(), eq("worker"));
-        order.verify(index).delete("index-v2", Collections.singletonList("stale"));
-        order.verify(index).index(anyList());
-        verify(repository).publishIngestion("job", "dv", "document", "worker");
+        verify(repository).stageIndexBuild(eq("job"), eq("dv"), eq("document"), anyList(), eq("worker"));
+        org.mockito.Mockito.verifyNoInteractions(index);
     }
 }

@@ -52,6 +52,13 @@ public interface KnowledgeRepository {
                     String warningsJson, double qualityScore, String qualityJson);
     List<String> findChunkIds(String documentVersionId, String indexVersion);
     void replaceChunks(String documentVersionId, List<KnowledgeChunk> chunks, String actorId);
+    void stageIndexBuild(String jobId, String documentVersionId, String documentId,
+                         List<KnowledgeChunk> chunks, String actorId);
+    List<KnowledgeChunk> findIndexBuildChunks(String tenantId, String workspaceId, String indexVersion);
+    void completeIndexBuild(String jobId, String documentVersionId, String documentId,
+                            String indexVersion, IndexVerificationResult verification, String actorId);
+    List<String> findExpiredInactiveIndexes(int limit);
+    void markIndexDeleted(String indexVersion, String actorId);
     void publishIngestion(String jobId, String documentVersionId, String documentId, String actorId);
     List<KnowledgeChunk> findChunksByIds(String tenantId, String workspaceId, List<String> chunkIds);
     boolean deleteDocument(String tenantId, String workspaceId, String documentId, String actorId);
