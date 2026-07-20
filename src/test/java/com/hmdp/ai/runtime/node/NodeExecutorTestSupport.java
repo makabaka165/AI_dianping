@@ -16,8 +16,33 @@ import java.util.List;
 import java.util.Map;
 
 final class NodeExecutorTestSupport {
-    private NodeExecutorTestSupport() { }
-    static NodeExecutionContext context(WorkflowNodeDefinition node,Map<String,Object> variables,List<WorkflowEdgeDefinition> edges){WorkflowDefinition workflow=new WorkflowDefinition("v","t","w","wf",1,"{}","{}","{}","{}","DRAFT",Collections.singletonList(node),edges);ExecutionContext execution=new ExecutionContext("t","w","u","s",null,"r","a",1,"zh-CN","UTC",Collections.emptyList(),Collections.emptyList(),new AuthorizationContext(EnumSet.of(AiPermission.AGENT_RUN)),ExecutionBudget.defaults(),Instant.now().plusSeconds(30),Collections.emptyMap(),"trace");return new NodeExecutionContext(execution,null,workflow,node,variables,edges);}
-    static WorkflowNodeDefinition node(String code,WorkflowNodeType type,String configuration){return new WorkflowNodeDefinition(code,code,type,code,configuration,"{}","{}",1000,1);}
-    static WorkflowEdgeDefinition edge(String source,String target,String condition,int priority,String label){return new WorkflowEdgeDefinition(source+target,source,target,condition,priority,label);}
+    private NodeExecutorTestSupport() {
+    }
+
+    static NodeExecutionContext context(WorkflowNodeDefinition node, Map<String, Object> variables,
+                                        List<WorkflowEdgeDefinition> edges) {
+        return context(node, variables, edges, Collections.emptyList(), null);
+    }
+
+    static NodeExecutionContext context(WorkflowNodeDefinition node, Map<String, Object> variables,
+                                        List<WorkflowEdgeDefinition> edges,
+                                        List<com.hmdp.ai.domain.run.AttachmentReference> attachments,
+                                        String nodeRunId) {
+        WorkflowDefinition workflow = new WorkflowDefinition("v", "t", "w", "wf", 1,
+                "{}", "{}", "{}", "{}", "DRAFT", Collections.singletonList(node), edges);
+        ExecutionContext execution = new ExecutionContext("t", "w", "u", "s", null,
+                "r", "a", 1, "zh-CN", "UTC", attachments, Collections.emptyList(),
+                new AuthorizationContext(EnumSet.of(AiPermission.AGENT_RUN)), ExecutionBudget.defaults(),
+                Instant.now().plusSeconds(30), Collections.emptyMap(), "trace");
+        return new NodeExecutionContext(execution, null, workflow, node, variables, edges, nodeRunId);
+    }
+
+    static WorkflowNodeDefinition node(String code, WorkflowNodeType type, String configuration) {
+        return new WorkflowNodeDefinition(code, code, type, code, configuration, "{}", "{}", 1000, 1);
+    }
+
+    static WorkflowEdgeDefinition edge(String source, String target, String condition, int priority,
+                                       String label) {
+        return new WorkflowEdgeDefinition(source + target, source, target, condition, priority, label);
+    }
 }

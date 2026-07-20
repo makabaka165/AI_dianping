@@ -1,5 +1,6 @@
 package com.hmdp.ai.runtime.cancellation;
 
+import com.hmdp.ai.domain.run.RunCancellationPort;
 import org.springframework.stereotype.Component;
 
 import java.util.Map;
@@ -8,7 +9,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Future;
 
 @Component
-public class RunCancellationRegistry {
+public class RunCancellationRegistry implements RunCancellationPort {
     private final Map<String, CancellationToken> tokens = new ConcurrentHashMap<>();
     private final Map<String, Set<Future<?>>> active = new ConcurrentHashMap<>();
     private final Map<String, Set<CancellableInvocation>> invocations = new ConcurrentHashMap<>();
@@ -65,6 +66,7 @@ public class RunCancellationRegistry {
         }
     }
 
+    @Override
     public void cancel(String runId) {
         CancellationToken token = begin(runId);
         token.cancel();

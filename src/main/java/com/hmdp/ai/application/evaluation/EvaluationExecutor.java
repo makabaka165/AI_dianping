@@ -15,7 +15,6 @@ import com.hmdp.ai.domain.security.AuthorizationContext;
 import com.hmdp.ai.domain.workflow.WorkflowDefinition;
 import com.hmdp.ai.domain.workflow.WorkflowRepository;
 import com.hmdp.ai.domain.workflow.WorkflowValidator;
-import com.hmdp.ai.runtime.workflow.WorkflowRuntime;
 import com.hmdp.ai.domain.evaluation.EvaluationCase;
 import com.hmdp.ai.shared.id.AiIdGenerator;
 import org.springframework.stereotype.Component;
@@ -28,13 +27,13 @@ import java.util.EnumSet;
 public class EvaluationExecutor {
     private final AgentDefinitionLoader definitions;
     private final WorkflowRepository workflows;
-    private final WorkflowRuntime runtime;
+    private final EvaluationWorkflowRunner runtime;
     private final WorkflowValidator validator;
     private final ObjectMapper mapper;
     private final AiIdGenerator ids;
 
     public EvaluationExecutor(AgentDefinitionLoader definitions, WorkflowRepository workflows,
-                              WorkflowRuntime runtime, WorkflowValidator validator, ObjectMapper mapper,
+                              EvaluationWorkflowRunner runtime, WorkflowValidator validator, ObjectMapper mapper,
                               AiIdGenerator ids) {
         this.definitions = definitions;
         this.workflows = workflows;

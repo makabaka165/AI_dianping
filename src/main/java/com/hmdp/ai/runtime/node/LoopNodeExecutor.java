@@ -16,6 +16,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.Locale;
 
 @Component
 public class LoopNodeExecutor implements NodeExecutor {
@@ -68,12 +69,56 @@ public class LoopNodeExecutor implements NodeExecutor {
             Map<String, Object> updates = new LinkedHashMap<>();
             updates.put(iterationKey, done ? iteration : iteration + 1);
             if (!done) updates.put(startedKey, now);
+            if (!duplicate) accumulate(configuration, context, updates, prefix + ".accumulator");
             appendDeduplicationValue(configuration.path("deduplicationKey").asText(""), context, seenKey,
                     updates);
             return NodeExecutionResult.success(new IntNode(iteration), Collections.singletonList(next), updates);
         } catch (Exception e) {
             return NodeExecutionResult.failure("LOOP_CONFIG_INVALID", false);
         }
+    }
+
+    private void accumulate(JsonNode configuration, NodeExecutionContext context,
+                            Map<String, Object> updates, String defaultVariable) {
+        String strategy = configuration.path("accumulatorStrategy").asText("REPLACE")
+                .toUpperCase(Locale.ROOT);
+        String accumulatorVariable = configuration.path("accumulatorVariable").asText(defaultVariable);
+        String valueVariable = configuration.path("valueVariable").asText("loopValue");
+        Object incoming = context.getVariables().get(valueVariable);
+        if (incoming == null) return;
+        Object existing = context.getVariables().get(accumulatorVariable);
+        switch (strategy) {
+            case "APPEND":
+                List<Object> values = new ArrayList<>();
+                if (existing != null && !(existing instanceof Collection)) {
+                    throw new IllegalArgumentException("LOOP_APPEND_COLLECTION_REQUIRED");
+                }
+                if (existing instanceof Collection) values.addAll((Collection<?>) existing);
+                values.add(incoming);
+                updates.put(accumulatorVariable, values);
+                break;
+            case "MERGE":
+                if (!(incoming instanceof Map)) throw new IllegalArgumentException("LOOP_MERGE_OBJECT_REQUIRED");
+                if (existing != null && !(existing instanceof Map)) {
+                    throw new IllegalArgumentException("LOOP_MERGE_OBJECT_REQUIRED");
+                }
+                Map<Object, Object> merged = new LinkedHashMap<>();
+                if (existing instanceof Map) merged.putAll((Map<?, ?>) existing);
+                if (incoming instanceof Map) merged.putAll((Map<?, ?>) incoming);
+                updates.put(accumulatorVariable, merged);
+                break;
+            case "SUM": updates.put(accumulatorVariable, number(existing).add(number(incoming))); break;
+            case "MIN": updates.put(accumulatorVariable, existing == null || number(incoming).compareTo(number(existing)) < 0 ? incoming : existing); break;
+            case "MAX": updates.put(accumulatorVariable, existing == null || number(incoming).compareTo(number(existing)) > 0 ? incoming : existing); break;
+            case "REPLACE": updates.put(accumulatorVariable, incoming); break;
+            default: throw new IllegalArgumentException("LOOP_ACCUMULATOR_UNSUPPORTED");
+        }
+    }
+
+    private java.math.BigDecimal number(Object value) {
+        if (value == null) return java.math.BigDecimal.ZERO;
+        if (!(value instanceof Number)) throw new IllegalArgumentException("LOOP_NUMBER_REQUIRED");
+        return new java.math.BigDecimal(String.valueOf(value));
     }
 
     private boolean duplicate(String variable, NodeExecutionContext context, String seenKey) {

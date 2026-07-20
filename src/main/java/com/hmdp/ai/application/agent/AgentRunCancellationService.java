@@ -10,8 +10,8 @@ import com.hmdp.ai.domain.run.RunStatus;
 import com.hmdp.ai.domain.security.AiSecurityContext;
 import com.hmdp.ai.application.agent.event.RunEventPublisher;
 import com.hmdp.ai.domain.run.RunLifecycleEventPayload;
+import com.hmdp.ai.domain.run.RunCancellationPort;
 import com.hmdp.common.ErrorCode;
-import com.hmdp.ai.runtime.cancellation.RunCancellationRegistry;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -19,7 +19,7 @@ public class AgentRunCancellationService {
     private final RunRepository repository;
     private final RunEventPublisher events;
     private final ObjectMapper mapper;
-    private final RunCancellationRegistry cancellations;
+    private final RunCancellationPort cancellations;
 
     public AgentRunCancellationService(RunRepository repository, RunEventPublisher events) {
         this(repository, events, new ObjectMapper(), null);
@@ -27,7 +27,7 @@ public class AgentRunCancellationService {
 
     @org.springframework.beans.factory.annotation.Autowired
     public AgentRunCancellationService(RunRepository repository, RunEventPublisher events, ObjectMapper mapper,
-                                       RunCancellationRegistry cancellations) {
+                                       RunCancellationPort cancellations) {
         this.repository = repository;
         this.events = events;
         this.mapper = mapper;

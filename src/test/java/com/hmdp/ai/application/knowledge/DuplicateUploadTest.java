@@ -44,7 +44,7 @@ class DuplicateUploadTest {
                 new WorkspaceContext("w"), new AuthorizationContext(EnumSet.of(AiPermission.KNOWLEDGE_WRITE)),
                 false);
         KnowledgeBaseVersion knowledgeVersion = new KnowledgeBaseVersion("kbv", "t", "w", "kb", 1,
-                "model", 3, "{}", "{}", "idx", "READY", "PUBLISHED");
+                "model", 3, "{}", "{}", "idx", "PENDING", "DRAFT");
         when(access.require(AiPermission.KNOWLEDGE_WRITE)).thenReturn(context);
         when(repository.findVersionNumber("t", "w", "kb", 1)).thenReturn(Optional.of(knowledgeVersion));
         when(inspection.inspect(any(), eq("a.txt"), eq("text/plain")))
