@@ -26,6 +26,7 @@ public final class McpHttpClient {
     private final SecretResolutionService secrets;
     private final ObjectMapper mapper;
     private volatile boolean initialized;
+    private volatile String sessionId;
 
     McpHttpClient(SafeHttpClient http, SecretResolutionService secrets, ObjectMapper mapper) {
         this.http = http;
@@ -34,48 +35,71 @@ public final class McpHttpClient {
     }
 
     public synchronized JsonNode initialize(McpServer server) {
+        return initialize(server, null);
+    }
+
+    public synchronized JsonNode initialize(McpServer server, String runId) {
         if (initialized) return mapper.createObjectNode().put("initialized", true);
         ObjectNode params = mapper.createObjectNode().put("protocolVersion", "2025-03-26");
         params.set("capabilities", mapper.createObjectNode());
         params.set("clientInfo", mapper.createObjectNode().put("name", "hmdp-agent-platform").put("version", "1"));
-        JsonNode result = call(server, "initialize", params);
+        JsonNode result = call(server, "initialize", params, runId, false);
         initialized = true;
         return result;
     }
 
     public JsonNode initialized(McpServer server) {
-        return call(server, "notifications/initialized", mapper.createObjectNode());
+        return initialized(server, null);
+    }
+
+    public JsonNode initialized(McpServer server, String runId) {
+        return call(server, "notifications/initialized", mapper.createObjectNode(), runId, true);
     }
 
     public List<McpToolDescriptor> tools(McpServer server) {
-        ensureInitialized(server);
-        JsonNode result = call(server, "tools/list", mapper.createObjectNode());
+        return tools(server, null);
+    }
+
+    public List<McpToolDescriptor> tools(McpServer server, String runId) {
+        ensureInitialized(server, runId);
         List<McpToolDescriptor> tools = new ArrayList<>();
-        for (JsonNode node : result.path("tools")) {
-            tools.add(new McpToolDescriptor(node.path("name").asText(), node.path("description").asText(""),
-                    node.has("inputSchema") ? node.get("inputSchema") : mapper.createObjectNode()));
-        }
+        String cursor = null;
+        do {
+            ObjectNode params = mapper.createObjectNode();
+            if (cursor != null) params.put("cursor", cursor);
+            JsonNode result = call(server, "tools/list", params, runId, false);
+            for (JsonNode node : result.path("tools")) {
+                tools.add(new McpToolDescriptor(node.path("name").asText(),
+                        node.path("description").asText(""),
+                        node.has("inputSchema") ? node.get("inputSchema") : mapper.createObjectNode()));
+            }
+            cursor = result.path("nextCursor").asText(null);
+        } while (cursor != null && !cursor.isEmpty());
         return tools;
     }
 
     public JsonNode execute(McpServer server, String tool, JsonNode arguments) {
-        ensureInitialized(server);
-        ObjectNode params = mapper.createObjectNode().put("name", tool);
-        params.set("arguments", arguments);
-        return call(server, "tools/call", params);
+        return execute(server, tool, arguments, null);
     }
 
-    private void ensureInitialized(McpServer server) {
+    public JsonNode execute(McpServer server, String tool, JsonNode arguments, String runId) {
+        ensureInitialized(server, runId);
+        ObjectNode params = mapper.createObjectNode().put("name", tool);
+        params.set("arguments", arguments);
+        return call(server, "tools/call", params, runId, false);
+    }
+
+    private synchronized void ensureInitialized(McpServer server, String runId) {
         if (!initialized) {
-            initialize(server);
-            initialized(server);
+            initialize(server, runId);
+            initialized(server, runId);
         }
     }
 
-    private JsonNode call(McpServer server, String method, JsonNode params) {
+    private JsonNode call(McpServer server, String method, JsonNode params, String runId, boolean notification) {
         try {
-            ObjectNode body = mapper.createObjectNode().put("jsonrpc", "2.0")
-                    .put("id", UUID.randomUUID().toString()).put("method", method);
+            ObjectNode body = mapper.createObjectNode().put("jsonrpc", "2.0").put("method", method);
+            if (!notification) body.put("id", UUID.randomUUID().toString());
             body.set("params", params);
             Map<String, String> headers = new LinkedHashMap<>();
             headers.put("Content-Type", "application/json");
@@ -83,15 +107,19 @@ public final class McpHttpClient {
             if (server.getSecretRef() != null && !server.getSecretRef().isEmpty()) {
                 headers.put("Authorization", "Bearer " + secrets.resolve(server.getSecretRef()));
             }
+            if (sessionId != null) headers.put("Mcp-Session-Id", sessionId);
             OutboundHttpResponse response = http.execute(new OutboundHttpRequest(URI.create(server.getEndpoint()),
                     "POST", headers, mapper.writeValueAsBytes(body), Duration.ofMillis(server.getTimeoutMs()),
                     2 * 1024 * 1024,
                     new LinkedHashSet<>(Arrays.asList("application/json", "text/event-stream")),
-                    server.isAllowPrivateNetwork()));
+                    server.isAllowPrivateNetwork()), runId);
+            String responseSession = response.firstHeader("Mcp-Session-Id");
+            if (responseSession != null && !responseSession.trim().isEmpty()) sessionId = responseSession;
             if (response.getStatusCode() < 200 || response.getStatusCode() >= 300) {
                 throw new IllegalStateException("MCP_STATUS_" + response.getStatusCode());
             }
-            if (response.getBody().length == 0 || response.getStatusCode() == 202 || response.getStatusCode() == 204) {
+            if (notification || response.getBody().length == 0
+                    || response.getStatusCode() == 202 || response.getStatusCode() == 204) {
                 return NullNode.getInstance();
             }
             JsonNode envelope = "text/event-stream".equals(response.getContentType())

@@ -26,6 +26,8 @@ public class McpClientFactory {
     }
 
     public McpHttpClient create(McpServer server) {
-        return sessions.computeIfAbsent(server.getId(), ignored -> create());
+        String key = server.getTenantId() + '\u001f' + server.getWorkspaceId() + '\u001f'
+                + server.getId() + '\u001f' + server.getEndpoint();
+        return sessions.computeIfAbsent(key, ignored -> create());
     }
 }

@@ -76,6 +76,8 @@ hmdp:
       queue-capacity: ${AI_RUNTIME_QUEUE_CAPACITY:200}
       recovery-batch-size: ${AI_RUNTIME_RECOVERY_BATCH_SIZE:100}
       recovery-enabled: ${AI_RUNTIME_RECOVERY_ENABLED:true}
+    sandbox:
+      allowed-images: ${AI_SANDBOX_ALLOWED_IMAGES:}
     quota:
       enabled: ${HMDP_AI_QUOTA_ENABLED:true}
       minute-permits: ${HMDP_AI_QUOTA_MINUTE_PERMITS:10}

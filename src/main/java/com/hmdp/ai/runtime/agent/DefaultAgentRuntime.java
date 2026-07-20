@@ -24,6 +24,8 @@ import com.hmdp.ai.domain.run.RunLifecycleEventPayload;
 import com.hmdp.ai.domain.run.RunCompletionObserver;
 import com.hmdp.ai.domain.run.WorkflowWaitEventPayload;
 import com.hmdp.ai.runtime.workflow.WorkflowPausedException;
+import com.hmdp.ai.runtime.cancellation.CancellationToken;
+import com.hmdp.ai.runtime.cancellation.RunCancellationRegistry;
 import com.hmdp.common.ErrorCode;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -33,6 +35,7 @@ import org.springframework.stereotype.Component;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.concurrent.CancellationException;
 
 @Component
 @Slf4j
@@ -52,6 +55,7 @@ public class DefaultAgentRuntime implements AgentRuntime {
     private final AiMetricsService metrics;
     private final AiTraceContext traceContext;
     private final AiAuthorizationService authorization;
+    private final RunCancellationRegistry cancellations;
 
     @org.springframework.beans.factory.annotation.Autowired
     public DefaultAgentRuntime(RunRepository runs, NodeRunRepository nodeRuns,
@@ -61,7 +65,7 @@ public class DefaultAgentRuntime implements AgentRuntime {
                                @Qualifier("agentRunExecutor") ThreadPoolTaskExecutor executor,
                                AgentRuntimeProperties properties, List<RunCompletionObserver> completionObservers,
                                AiMetricsService metrics, AiTraceContext traceContext,
-                               AiAuthorizationService authorization) {
+                               AiAuthorizationService authorization, RunCancellationRegistry cancellations) {
         this.runs = runs;
         this.nodeRuns = nodeRuns;
         this.definitionLoader = definitionLoader;
@@ -76,6 +80,7 @@ public class DefaultAgentRuntime implements AgentRuntime {
         this.metrics = metrics;
         this.traceContext = traceContext;
         this.authorization = authorization;
+        this.cancellations = cancellations;
     }
 
     public DefaultAgentRuntime(RunRepository runs, NodeRunRepository nodeRuns,
@@ -86,7 +91,7 @@ public class DefaultAgentRuntime implements AgentRuntime {
                                List<RunCompletionObserver> completionObservers, AiMetricsService metrics,
                                AiTraceContext traceContext) {
         this(runs, nodeRuns, definitionLoader, contextAssembler, executionEngine, outputValidator, events,
-                objectMapper, executor, properties, completionObservers, metrics, traceContext, null);
+                objectMapper, executor, properties, completionObservers, metrics, traceContext, null, null);
     }
 
     @Override
@@ -112,10 +117,12 @@ public class DefaultAgentRuntime implements AgentRuntime {
 
     private void execute(String tenantId, String workspaceId, String runId) {
         String nodeRunId = null;
+        CancellationToken cancellation = cancellations == null ? null : cancellations.begin(runId);
         try {
             AgentRunRecord run = runs.find(tenantId, workspaceId, runId).orElse(null);
             if (run == null || run.getStatus().isTerminal()) return;
             if (authorization != null) revalidate(run);
+            if (cancellation != null) cancellation.throwIfCancelled();
             traceContext.bind(run,null);
             if (!run.getDeadlineAt().isAfter(Instant.now())) {
                 timeout(run, null);
@@ -151,6 +158,7 @@ public class DefaultAgentRuntime implements AgentRuntime {
                 return;
             }
             AgentRunOutput output = executionEngine.execute(definition, context, input);
+            if (cancellation != null) cancellation.throwIfCancelled();
             outputValidator.validate(definition.getVersion().getOutputSchema(), output);
             AgentRunRecord current = runs.find(tenantId, workspaceId, runId).orElse(run);
             if (current.getStatus() == RunStatus.CANCELLED) {
@@ -180,10 +188,29 @@ public class DefaultAgentRuntime implements AgentRuntime {
             events.publish(tenantId, workspaceId, runId, eventType,
                     new WorkflowWaitEventPayload(runId, paused.getRunStatus(), paused.getNodeCode(),
                             paused.getResumeToken(), paused.getExpiresAt(), paused.getQuestions()), true);
+        } catch (CancellationException cancelled) {
+            markCancelled(tenantId, workspaceId, runId, nodeRunId);
         } catch (Exception e) {
             fail(tenantId, workspaceId, runId, nodeRunId, e);
         } finally {
             traceContext.clear();
+            if (cancellations != null) cancellations.end(runId);
+        }
+    }
+
+    private void markCancelled(String tenantId, String workspaceId, String runId, String nodeRunId) {
+        if (nodeRunId != null) {
+            nodeRuns.fail(tenantId, workspaceId, nodeRunId, NodeRunStatus.CANCELLED,
+                    "RUN_CANCELLED", "run was cancelled", false);
+        }
+        AgentRunRecord current = runs.find(tenantId, workspaceId, runId).orElse(null);
+        if (current != null && current.getStatus() != RunStatus.CANCELLED) {
+            runs.cancel(tenantId, workspaceId, runId, current.getUserId());
+        }
+        if (current == null || current.getStatus() != RunStatus.CANCELLED) {
+            events.publish(tenantId, workspaceId, runId, "run.cancelled",
+                    new RunLifecycleEventPayload(runId, RunStatus.CANCELLED, null,
+                            "RUN_CANCELLED", "run cancelled"), true);
         }
     }
 

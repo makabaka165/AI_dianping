@@ -10,7 +10,7 @@ public class McpToolExecutor {
 
     public McpToolExecutor(McpClientFactory clients) { this.clients = clients; }
 
-    public JsonNode execute(McpServer server, String tool, JsonNode input) {
-        return clients.create(server).execute(server, tool, input);
+    public JsonNode execute(McpServer server, String tool, JsonNode input, String runId) {
+        return clients.create(server).execute(server, tool, input, runId);
     }
 }

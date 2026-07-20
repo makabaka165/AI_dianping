@@ -11,6 +11,7 @@ import com.hmdp.ai.domain.security.AiSecurityContext;
 import com.hmdp.ai.application.agent.event.RunEventPublisher;
 import com.hmdp.ai.domain.run.RunLifecycleEventPayload;
 import com.hmdp.common.ErrorCode;
+import com.hmdp.ai.runtime.cancellation.RunCancellationRegistry;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -18,15 +19,19 @@ public class AgentRunCancellationService {
     private final RunRepository repository;
     private final RunEventPublisher events;
     private final ObjectMapper mapper;
+    private final RunCancellationRegistry cancellations;
 
     public AgentRunCancellationService(RunRepository repository, RunEventPublisher events) {
-        this(repository, events, new ObjectMapper());
+        this(repository, events, new ObjectMapper(), null);
     }
 
-    public AgentRunCancellationService(RunRepository repository, RunEventPublisher events, ObjectMapper mapper) {
+    @org.springframework.beans.factory.annotation.Autowired
+    public AgentRunCancellationService(RunRepository repository, RunEventPublisher events, ObjectMapper mapper,
+                                       RunCancellationRegistry cancellations) {
         this.repository = repository;
         this.events = events;
         this.mapper = mapper;
+        this.cancellations = cancellations;
     }
 
     public AgentRunCreatedResponse cancel(AiSecurityContext context, AgentRunRecord run) {
@@ -34,7 +39,8 @@ public class AgentRunCancellationService {
             throw new AiPlatformException(ErrorCode.AI_RUN_NOT_CANCELLABLE,
                     "run is already terminal or cannot be cancelled");
         }
-        events.publish(run.getTenantId(), run.getWorkspaceId(), run.getId(), "run.failed",
+        if (cancellations != null) cancellations.cancel(run.getId());
+        events.publish(run.getTenantId(), run.getWorkspaceId(), run.getId(), "run.cancelled",
                 new RunLifecycleEventPayload(run.getId(), RunStatus.CANCELLED, null,
                         "RUN_CANCELLED", "run cancelled"), true);
         return new AgentRunCreatedResponse(run.getId(), RunStatus.CANCELLED,

@@ -51,6 +51,9 @@ public class ToolNodeExecutor implements NodeExecutor {
                     context.getExecutionContext().getRunId() + ':' + context.getNode().getCode(), approved,
                     context.getNodeRunId(), approvalRequestId);
             ToolResult result = tools.execute(invocation);
+            if (result.getStatus() == ToolCallStatus.CANCELLED) {
+                throw new java.util.concurrent.CancellationException("RUN_CANCELLED");
+            }
             if (result.getStatus() == ToolCallStatus.APPROVAL_REQUIRED) {
                 Map<String, Object> pending = new LinkedHashMap<>();
                 pending.put("pendingToolCode", code);
@@ -68,6 +71,8 @@ public class ToolNodeExecutor implements NodeExecutor {
                     Collections.singletonMap(outputVariable, mapper.convertValue(result.getData(), Object.class)),
                     result.getArtifacts(), result.getCitations(), result.getWarnings(), result.getUsage(),
                     false, null);
+        } catch (java.util.concurrent.CancellationException e) {
+            throw e;
         } catch (Exception e) {
             return NodeExecutionResult.failure("TOOL_NODE_CONFIG_INVALID", false);
         }

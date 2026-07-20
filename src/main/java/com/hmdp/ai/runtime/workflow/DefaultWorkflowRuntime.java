@@ -23,8 +23,12 @@ import com.hmdp.ai.domain.workflow.WorkflowStateStatus;
 import com.hmdp.ai.runtime.node.NodeExecutionContext;
 import com.hmdp.ai.runtime.node.NodeExecutionResult;
 import com.hmdp.ai.runtime.node.WorkflowNodeRegistry;
+import com.hmdp.ai.runtime.cancellation.CancellationToken;
+import com.hmdp.ai.runtime.cancellation.RunCancellationRegistry;
 import com.hmdp.ai.shared.json.ContentHashService;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.core.task.AsyncTaskExecutor;
+import org.springframework.core.task.support.TaskExecutorAdapter;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.stereotype.Component;
 
@@ -46,6 +50,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.Future;
+import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
@@ -59,24 +64,39 @@ public class DefaultWorkflowRuntime implements WorkflowRuntime {
     private final WorkflowStateRepository states;
     private final ObjectMapper mapper;
     private final ThreadPoolTaskExecutor executor;
+    private final AsyncTaskExecutor branchExecutor;
     private final ConditionDslEvaluator conditions;
     private final ContentHashService hashes;
     private final WorkflowPauseCoordinator pauseCoordinator;
     private final SecureRandom secureRandom = new SecureRandom();
+    private final RunCancellationRegistry cancellations;
 
+    @org.springframework.beans.factory.annotation.Autowired
     public DefaultWorkflowRuntime(WorkflowNodeRegistry registry, NodeRunRepository nodeRuns,
                                   WorkflowStateRepository states, ObjectMapper mapper,
                                   @Qualifier("workflowNodeExecutor") ThreadPoolTaskExecutor executor,
+                                  @Qualifier("workflowBranchExecutor") AsyncTaskExecutor branchExecutor,
                                   ConditionDslEvaluator conditions, ContentHashService hashes,
-                                  WorkflowPauseCoordinator pauseCoordinator) {
+                                  WorkflowPauseCoordinator pauseCoordinator,
+                                  RunCancellationRegistry cancellations) {
         this.registry = registry;
         this.nodeRuns = nodeRuns;
         this.states = states;
         this.mapper = mapper;
         this.executor = executor;
+        this.branchExecutor = branchExecutor;
         this.conditions = conditions;
         this.hashes = hashes;
         this.pauseCoordinator = pauseCoordinator;
+        this.cancellations = cancellations;
+    }
+
+    public DefaultWorkflowRuntime(WorkflowNodeRegistry registry, NodeRunRepository nodeRuns,
+                                  WorkflowStateRepository states, ObjectMapper mapper,
+                                  ThreadPoolTaskExecutor executor, ConditionDslEvaluator conditions,
+                                  ContentHashService hashes, WorkflowPauseCoordinator pauseCoordinator) {
+        this(registry, nodeRuns, states, mapper, executor,
+                new TaskExecutorAdapter(ForkJoinPool.commonPool()), conditions, hashes, pauseCoordinator, null);
     }
 
     @Override
@@ -95,6 +115,8 @@ public class DefaultWorkflowRuntime implements WorkflowRuntime {
         int executions = counts.values().stream().mapToInt(Integer::intValue).sum();
 
         while (!queue.isEmpty()) {
+            CancellationToken token = cancellations == null ? null : cancellations.token(context.getRunId());
+            if (token != null) token.throwIfCancelled();
             enforceBudget(context, ++executions);
             String code = queue.removeFirst();
             WorkflowNodeDefinition node = graph.requireNode(code);
@@ -178,21 +200,27 @@ public class DefaultWorkflowRuntime implements WorkflowRuntime {
             for (int index = offset; index < end; index++) {
                 final int branchIndex = index;
                 final String branchStart = starts.get(index);
-                active.add(executor.submit(() -> executeBranch(workflow, agent, context, graph, branchStart,
+                Future<BranchResult> future = branchExecutor.submit(() -> executeBranch(workflow, agent, context,
+                        graph, branchStart,
                         join, new LinkedHashMap<>(variables), new LinkedHashSet<>(),
                         new LinkedHashMap<>(counts), "parallel:" + parallelNode.getCode() + ':' + branchIndex,
-                        Instant.now().plusMillis(timeoutMs))));
+                        Instant.now().plusMillis(timeoutMs)));
+                active.add(future);
+                track(context.getRunId(), future);
             }
             for (Future<BranchResult> future : active) {
                 try {
                     ordered.add(future.get(timeoutMs, TimeUnit.MILLISECONDS));
                 } catch (Exception e) {
                     future.cancel(true);
+                    throwIfRunCancelled(context.getRunId(), e);
                     if (!partialSuccess) {
                         active.forEach(item -> item.cancel(true));
                         throw new IllegalStateException("parallel workflow branch failed", e);
                     }
                     ordered.add(BranchResult.failed(e));
+                } finally {
+                    untrack(context.getRunId(), future);
                 }
             }
         }
@@ -240,9 +268,12 @@ public class DefaultWorkflowRuntime implements WorkflowRuntime {
                 branchVariables.put(itemVariable, items.get(index));
                 branchVariables.put(indexVariable, index);
                 final int itemIndex = index;
-                futures.add(executor.submit(() -> executeBranch(workflow, agent, context, graph, body, join,
+                Future<BranchResult> future = branchExecutor.submit(() -> executeBranch(
+                        workflow, agent, context, graph, body, join,
                         branchVariables, new LinkedHashSet<>(), new LinkedHashMap<>(counts),
-                        "foreach:" + node.getCode() + ':' + itemIndex, Instant.now().plusMillis(timeoutMs))));
+                        "foreach:" + node.getCode() + ':' + itemIndex, Instant.now().plusMillis(timeoutMs)));
+                futures.add(future);
+                track(context.getRunId(), future);
             }
             for (int local = 0; local < futures.size(); local++) {
                 int itemIndex = offset + local;
@@ -256,11 +287,14 @@ public class DefaultWorkflowRuntime implements WorkflowRuntime {
                     result.counts.forEach((key, value) -> counts.merge(key, value, Math::max));
                 } catch (Exception e) {
                     futures.get(local).cancel(true);
+                    throwIfRunCancelled(context.getRunId(), e);
                     if (!partialSuccess) {
                         futures.forEach(future -> future.cancel(true));
                         throw new IllegalStateException("foreach branch failed at index " + itemIndex, e);
                     }
                     results.set(itemIndex, Collections.singletonMap("errorCode", "FOREACH_ITEM_FAILED"));
+                } finally {
+                    untrack(context.getRunId(), futures.get(local));
                 }
             }
         }
@@ -275,6 +309,8 @@ public class DefaultWorkflowRuntime implements WorkflowRuntime {
         ArrayDeque<String> queue = new ArrayDeque<>();
         queue.add(start);
         while (!queue.isEmpty()) {
+            CancellationToken token = cancellations == null ? null : cancellations.token(context.getRunId());
+            if (token != null) token.throwIfCancelled();
             if (Instant.now().isAfter(branchDeadline) || Instant.now().isAfter(context.getDeadline())) {
                 throw new IllegalStateException("workflow branch timed out");
             }
@@ -314,6 +350,11 @@ public class DefaultWorkflowRuntime implements WorkflowRuntime {
         List<String> next = result.getNextNodeIds().isEmpty()
                 ? defaultNext(outgoing, variables, result.getVariableUpdates()) : result.getNextNodeIds();
         if (result.getStatus() == NodeRunStatus.FAILED) {
+            if ("NODE_CANCELLED".equals(result.getErrorCode())) {
+                nodeRuns.fail(context.getTenantId(), context.getWorkspaceId(), claim.getNodeRunId(),
+                        NodeRunStatus.CANCELLED, "RUN_CANCELLED", "run was cancelled", false);
+                throw new java.util.concurrent.CancellationException("RUN_CANCELLED");
+            }
             nodeRuns.fail(context.getTenantId(), context.getWorkspaceId(), claim.getNodeRunId(),
                     NodeRunStatus.FAILED, result.getErrorCode(), result.getErrorCode(), result.isRetryable());
             throw new IllegalStateException(result.getErrorCode());
@@ -333,8 +374,11 @@ public class DefaultWorkflowRuntime implements WorkflowRuntime {
         int maxAttempts = Math.max(1, node.getMaxAttempts());
         long timeoutMs = Math.max(1, node.getTimeoutMs());
         for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            CancellationToken token = cancellations == null ? null : cancellations.token(context.getExecutionContext().getRunId());
+            if (token != null) token.throwIfCancelled();
             Future<NodeExecutionResult> future = executor.submit(
                     () -> registry.require(node.getType()).execute(context));
+            if (cancellations != null) cancellations.track(context.getExecutionContext().getRunId(), future);
             try {
                 NodeExecutionResult result = future.get(timeoutMs, TimeUnit.MILLISECONDS);
                 if (result.getStatus() != NodeRunStatus.FAILED || !result.isRetryable()
@@ -347,14 +391,38 @@ public class DefaultWorkflowRuntime implements WorkflowRuntime {
             } catch (InterruptedException e) {
                 future.cancel(true);
                 Thread.currentThread().interrupt();
-                return NodeExecutionResult.failure("NODE_CANCELLED", false);
+                throw new java.util.concurrent.CancellationException("RUN_CANCELLED");
+            } catch (java.util.concurrent.CancellationException e) {
+                future.cancel(true);
+                throw e;
             } catch (java.util.concurrent.ExecutionException e) {
                 if (attempt == maxAttempts) {
                     return NodeExecutionResult.failure("NODE_EXECUTION_FAILED", true);
                 }
+            } finally {
+                if (cancellations != null) cancellations.untrack(context.getExecutionContext().getRunId(), future);
             }
         }
         return NodeExecutionResult.failure("NODE_MAX_ATTEMPTS_EXCEEDED", true);
+    }
+
+    private void track(String runId, Future<?> future) {
+        if (cancellations != null) {
+            cancellations.track(runId, future);
+        }
+    }
+
+    private void untrack(String runId, Future<?> future) {
+        if (cancellations != null) {
+            cancellations.untrack(runId, future);
+        }
+    }
+
+    private void throwIfRunCancelled(String runId, Exception cause) {
+        CancellationToken token = cancellations == null ? null : cancellations.token(runId);
+        if ((token != null && token.isCancelled()) || cause instanceof java.util.concurrent.CancellationException) {
+            throw new java.util.concurrent.CancellationException("RUN_CANCELLED");
+        }
     }
 
     private NodeOutcome restore(String persistedJson, List<WorkflowEdgeDefinition> outgoing,

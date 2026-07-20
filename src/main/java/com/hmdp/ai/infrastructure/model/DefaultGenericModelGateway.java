@@ -10,6 +10,8 @@ import com.hmdp.ai.runtime.model.ModelCallRecorder;
 import com.hmdp.ai.runtime.model.ModelInvocation;
 import com.hmdp.ai.runtime.model.ModelInvocationResult;
 import com.hmdp.ai.shared.exception.AiPlatformException;
+import com.hmdp.ai.runtime.cancellation.CancellationToken;
+import com.hmdp.ai.runtime.cancellation.RunCancellationRegistry;
 import com.hmdp.common.ErrorCode;
 import org.springframework.stereotype.Component;
 
@@ -24,19 +26,29 @@ public class DefaultGenericModelGateway implements GenericModelGateway {
     private final ModelClientCache clients;
     private final ModelCallRecorder recorder;
     private final ObjectMapper mapper;
+    private final RunCancellationRegistry cancellations;
     private final Map<String, Semaphore> bulkheads = new ConcurrentHashMap<>();
     private final Map<String, CircuitState> circuits = new ConcurrentHashMap<>();
 
     public DefaultGenericModelGateway(ModelProfileVersionRepository profiles, ModelClientCache clients,
                                       ModelCallRecorder recorder, ObjectMapper mapper) {
+        this(profiles, clients, recorder, mapper, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public DefaultGenericModelGateway(ModelProfileVersionRepository profiles, ModelClientCache clients,
+                                      ModelCallRecorder recorder, ObjectMapper mapper,
+                                      RunCancellationRegistry cancellations) {
         this.profiles = profiles;
         this.clients = clients;
         this.recorder = recorder;
         this.mapper = mapper;
+        this.cancellations = cancellations;
     }
 
     @Override
     public ModelInvocationResult invoke(ModelInvocation invocation) {
+        throwIfCancelled(invocation);
         ModelProfileVersion profile = profiles.findById(
                         invocation.getContext().getInvocationContext().getTenantId(),
                         invocation.getContext().getInvocationContext().getWorkspaceId(),
@@ -76,10 +88,15 @@ public class DefaultGenericModelGateway implements GenericModelGateway {
             RuntimeException last = null;
             for (int attempt = 1; attempt <= maxAttempts; attempt++) {
                 try {
+                    throwIfCancelled(invocation);
                     ModelInvocationResult result = clients.get(profile).invoke(invocation);
                     circuit.succeeded();
                     recorder.success(profile, invocation, result, started);
                     return result;
+                } catch (java.util.concurrent.CancellationException error) {
+                    recorder.failure(profile, invocation, "MODEL_INVOCATION_CANCELLED", started,
+                            System.currentTimeMillis() - started);
+                    throw error;
                 } catch (RuntimeException error) {
                     last = error;
                     if (attempt < maxAttempts) sleep(backoffMillis * attempt);
@@ -134,8 +151,15 @@ public class DefaultGenericModelGateway implements GenericModelGateway {
             Thread.sleep(millis);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new IllegalStateException("MODEL_INVOCATION_CANCELLED", e);
+            throw new java.util.concurrent.CancellationException("RUN_CANCELLED");
         }
+    }
+
+    private void throwIfCancelled(ModelInvocation invocation) {
+        if (cancellations == null) return;
+        String runId = invocation.getContext().getInvocationContext().getRunId();
+        CancellationToken token = cancellations.token(runId);
+        if (token != null) token.throwIfCancelled();
     }
 
     private String code(Throwable error) {

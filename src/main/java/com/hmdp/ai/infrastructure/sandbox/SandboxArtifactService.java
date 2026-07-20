@@ -29,10 +29,17 @@ public class SandboxArtifactService {
     }
 
     public List<ArtifactReference> store(ExecutionContext context, Path workspace, long maxBytes) {
+        return store(context, workspace, maxBytes, 20);
+    }
+
+    public List<ArtifactReference> store(ExecutionContext context, Path workspace, long maxBytes, int maxCount) {
         List<ArtifactReference> result = new ArrayList<>();
         long total = 0;
         try (java.util.stream.Stream<Path> stream = Files.walk(workspace)) {
             for (Path file : (Iterable<Path>) stream.filter(Files::isRegularFile)::iterator) {
+                if (result.size() >= maxCount) {
+                    throw new IllegalArgumentException("SANDBOX_ARTIFACT_COUNT_EXCEEDED");
+                }
                 byte[] bytes = Files.readAllBytes(file);
                 total += bytes.length;
                 if (total > maxBytes) throw new IllegalArgumentException("SANDBOX_ARTIFACT_BUDGET_EXCEEDED");

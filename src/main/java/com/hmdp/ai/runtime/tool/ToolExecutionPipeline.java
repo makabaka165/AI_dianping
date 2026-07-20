@@ -18,6 +18,7 @@ import com.hmdp.ai.domain.approval.ApprovalRequest;
 import com.hmdp.ai.shared.validation.JsonSchemaValidationService;
 import com.hmdp.ai.shared.validation.ValidationResult;
 import com.hmdp.ai.shared.json.ContentHashService;
+import com.hmdp.ai.runtime.cancellation.RunCancellationRegistry;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.stereotype.Component;
@@ -53,6 +54,7 @@ public class ToolExecutionPipeline {
     private final ToolReliabilityExecutor reliability;
     private final ApprovalService approvals;
     private final ContentHashService hashes;
+    private final RunCancellationRegistry cancellations;
 
     @org.springframework.beans.factory.annotation.Autowired
     public ToolExecutionPipeline(ToolDefinitionRepository definitions, LocalSkillRegistry skills,
@@ -62,7 +64,7 @@ public class ToolExecutionPipeline {
                                  JsonSchemaValidationService schemas, ObjectMapper mapper,
                                  @Qualifier("toolExecutionExecutor") ThreadPoolTaskExecutor executor,
                                  ToolReliabilityExecutor reliability, ApprovalService approvals,
-                                 ContentHashService hashes) {
+                                 ContentHashService hashes, RunCancellationRegistry cancellations) {
         this.definitions = definitions;
         this.skills = skills;
         this.protocolAdapters = protocolAdapters;
@@ -77,6 +79,7 @@ public class ToolExecutionPipeline {
         this.reliability = reliability;
         this.approvals = approvals;
         this.hashes = hashes;
+        this.cancellations = cancellations;
     }
 
     public ToolExecutionPipeline(ToolDefinitionRepository definitions, LocalSkillRegistry skills,
@@ -86,10 +89,14 @@ public class ToolExecutionPipeline {
                                  JsonSchemaValidationService schemas, ObjectMapper mapper,
                                  ThreadPoolTaskExecutor executor, ToolReliabilityExecutor reliability) {
         this(definitions, skills, protocolAdapters, permissions, rateLimits, budgets, idempotency, audit,
-                schemas, mapper, executor, reliability, null, null);
+                schemas, mapper, executor, reliability, null, null, null);
     }
 
     public ToolResult execute(ToolInvocation invocation) {
+        if (cancellations != null && cancellations.token(invocation.getContext().getRunId()) != null
+                && cancellations.token(invocation.getContext().getRunId()).isCancelled()) {
+            return ToolResult.failure(ToolCallStatus.CANCELLED, "RUN_CANCELLED", "run cancelled", false);
+        }
         long started = System.currentTimeMillis();
         ToolDefinition definition = definitions.findBound(invocation.getContext().getTenantId(),
                 invocation.getContext().getWorkspaceId(), invocation.getContext().getAgentId(),
@@ -171,6 +178,7 @@ public class ToolExecutionPipeline {
         Callable<ToolResult> operation = () -> executeProtocol(definition, invocation, configuration);
         Callable<ToolResult> decorated = reliability.decorate(definition, invocation, operation);
         Future<ToolResult> future = executor.submit(decorated);
+        if (cancellations != null) cancellations.track(invocation.getContext().getRunId(), future);
         try {
             long remainingMs = Duration.between(Instant.now(), invocation.getContext().getDeadline()).toMillis();
             long timeoutMs = Math.max(1, Math.min(definition.getTimeoutMs(), remainingMs));
@@ -197,12 +205,17 @@ public class ToolExecutionPipeline {
             future.cancel(true);
             return ToolResult.failure(ToolCallStatus.TIMED_OUT, "TOOL_TIMEOUT",
                     "tool execution timed out", true);
+        } catch (java.util.concurrent.CancellationException e) {
+            future.cancel(true);
+            return ToolResult.failure(ToolCallStatus.CANCELLED, "RUN_CANCELLED", "run cancelled", false);
         } catch (ExecutionException e) {
             return ToolResult.failure(ToolCallStatus.FAILED, "TOOL_EXECUTION_FAILED",
                     "tool execution failed", true);
         } catch (Exception e) {
             return ToolResult.failure(ToolCallStatus.FAILED, "TOOL_EXECUTION_FAILED",
                     "tool execution failed", false);
+        } finally {
+            if (cancellations != null) cancellations.untrack(invocation.getContext().getRunId(), future);
         }
     }
 
