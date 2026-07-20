@@ -301,8 +301,6 @@ public class DefaultWorkflowRuntime implements WorkflowRuntime {
                                     ExecutionContext context, WorkflowNodeDefinition node,
                                     Map<String, Object> variables, List<WorkflowEdgeDefinition> outgoing,
                                     Map<String, Integer> counts, String namespace) {
-        NodeExecutionContext nodeContext = new NodeExecutionContext(context, agent, workflow, node,
-                Collections.unmodifiableMap(new LinkedHashMap<>(variables)), outgoing);
         String countKey = namespace + ':' + node.getCode();
         int occurrence = counts.merge(countKey, 1, Integer::sum);
         String idempotencyKey = context.getRunId() + ':' + countKey + ':' + occurrence;
@@ -310,6 +308,8 @@ public class DefaultWorkflowRuntime implements WorkflowRuntime {
                 idempotencyKey);
         if (!claim.isClaimed()) return restore(claim.getOutputJson(), outgoing, variables);
 
+        NodeExecutionContext nodeContext = new NodeExecutionContext(context, agent, workflow, node,
+                Collections.unmodifiableMap(new LinkedHashMap<>(variables)), outgoing, claim.getNodeRunId());
         NodeExecutionResult result = registry.require(node.getType()).execute(nodeContext);
         List<String> next = result.getNextNodeIds().isEmpty()
                 ? defaultNext(outgoing, variables, result.getVariableUpdates()) : result.getNextNodeIds();

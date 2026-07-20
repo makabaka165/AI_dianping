@@ -10,10 +10,11 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 class GenericAgentExecutionRegressionTest {
     @Test
     void genericRuntimeMustNotDelegateToShopCompatibilityService() throws Exception {
-        String source = Files.readString(Path.of("src/main/java/com/hmdp/ai/infrastructure/external/ShopCompatibilityExecutionEngine.java"));
+        String source = Files.readString(Path.of("src/main/java/com/hmdp/ai/legacy/compatibility/ShopCompatibilityExecutionEngine.java"));
+        String llm = Files.readString(Path.of("src/main/java/com/hmdp/ai/runtime/node/LlmNodeExecutor.java"));
         assertFalse(source.contains("implements AgentModelExecutionPort"),
                 "legacy shop compatibility must not be the generic model execution port");
-        assertFalse(source.contains("ShopAIApplicationService"),
+        assertFalse(llm.contains("ShopAIApplicationService"),
                 "generic agent execution must not re-enter the legacy shop application service");
     }
 }

@@ -59,6 +59,13 @@ class AiModuleBoundaryTest {
     static final ArchRule ai_slices_should_be_free_of_cycles =
             slices().matching("com.hmdp.ai.(*)..").should().beFreeOfCycles();
 
+    @ArchTest
+    static final ArchRule platform_runtime_must_not_depend_on_legacy_compatibility =
+            classes().that(resideInAPackage("com.hmdp.ai.runtime..")
+                            .or(resideInAPackage("com.hmdp.ai.domain.."))
+                            .or(resideInAPackage("com.hmdp.ai.application.agent..")))
+                    .should().onlyDependOnClassesThat(not(resideInAPackage("com.hmdp.ai.legacy.compatibility..")));
+
     @Test
     void aiTopLevelPackagesShouldStayWithinCurrentBoundarySet() throws IOException {
         Set<String> allowedTopLevelPackages = Set.of(
@@ -71,6 +78,7 @@ class AiModuleBoundaryTest {
                 "infra",
                 "infrastructure",
                 "intent",
+                "legacy",
                 "memory",
                 "model",
                 "orchestration",
