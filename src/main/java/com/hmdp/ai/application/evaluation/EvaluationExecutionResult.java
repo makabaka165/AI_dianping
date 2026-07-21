@@ -12,10 +12,19 @@ public final class EvaluationExecutionResult {
     private final int toolCalls;
     private final double cost;
     private final boolean success;
+    private final String errorCode;
+    private final String errorMessage;
 
     public EvaluationExecutionResult(String runId, JsonNode actual, long latencyMs, long inputTokens,
                                     long outputTokens, int modelCalls, int toolCalls, double cost,
                                     boolean success) {
+        this(runId, actual, latencyMs, inputTokens, outputTokens, modelCalls, toolCalls, cost,
+                success, null, null);
+    }
+
+    public EvaluationExecutionResult(String runId, JsonNode actual, long latencyMs, long inputTokens,
+                                     long outputTokens, int modelCalls, int toolCalls, double cost,
+                                     boolean success, String errorCode, String errorMessage) {
         this.runId = runId;
         this.actual = actual;
         this.latencyMs = latencyMs;
@@ -25,6 +34,8 @@ public final class EvaluationExecutionResult {
         this.toolCalls = toolCalls;
         this.cost = cost;
         this.success = success;
+        this.errorCode = errorCode;
+        this.errorMessage = errorMessage;
     }
 
     public String getRunId() { return runId; }
@@ -36,4 +47,6 @@ public final class EvaluationExecutionResult {
     public int getToolCalls() { return toolCalls; }
     public double getCost() { return cost; }
     public boolean isSuccess() { return success; }
+    public String getErrorCode() { return errorCode; }
+    public String getErrorMessage() { return errorMessage; }
 }
