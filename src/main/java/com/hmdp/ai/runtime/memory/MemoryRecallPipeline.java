@@ -1,106 +1,148 @@
 package com.hmdp.ai.runtime.memory;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.hmdp.ai.domain.memory.MemoryFact;
 import com.hmdp.ai.domain.memory.MemoryRepository;
-import com.hmdp.ai.domain.memory.MessageRecord;
 import com.hmdp.ai.domain.run.ExecutionContext;
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.stereotype.Component;
-
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.stereotype.Component;
 
 @Component
 public class MemoryRecallPipeline {
-    private final MemoryRepository repository;
-    private final JdbcTemplate jdbc;
-    private final ObjectMapper mapper;
+  private final MemoryRepository repository;
+  private final FactMemoryRetriever facts;
+  private final EpisodicMemoryRetriever episodes;
+  private final ConversationMemoryRetriever conversation;
+  private final UserProfileRetriever profile;
+  private final MemorySensitivityFilter sensitivity;
+  private final MemoryRelevanceRanker relevance;
+  private final MemoryContextCompressor compressor;
 
-    public MemoryRecallPipeline(MemoryRepository repository, JdbcTemplate jdbc, ObjectMapper mapper) {
-        this.repository = repository;
-        this.jdbc = jdbc;
-        this.mapper = mapper;
+  @Autowired
+  public MemoryRecallPipeline(
+      MemoryRepository repository,
+      FactMemoryRetriever facts,
+      EpisodicMemoryRetriever episodes,
+      ConversationMemoryRetriever conversation,
+      UserProfileRetriever profile,
+      MemorySensitivityFilter sensitivity,
+      MemoryRelevanceRanker relevance,
+      MemoryContextCompressor compressor) {
+    this.repository = repository;
+    this.facts = facts;
+    this.episodes = episodes;
+    this.conversation = conversation;
+    this.profile = profile;
+    this.sensitivity = sensitivity;
+    this.relevance = relevance;
+    this.compressor = compressor;
+  }
+
+  /** Compatibility constructor for focused tests that do not start Spring. */
+  public MemoryRecallPipeline(MemoryRepository repository, JdbcTemplate jdbc, ObjectMapper mapper) {
+    this(
+        repository,
+        new FactMemoryRetriever(repository),
+        new EpisodicMemoryRetriever(jdbc),
+        new ConversationMemoryRetriever(repository),
+        new UserProfileRetriever(jdbc, mapper),
+        new MemorySensitivityFilter(),
+        new MemoryRelevanceRanker(),
+        new MemoryContextCompressor(mapper));
+  }
+
+  public MemoryRecallResult recall(ExecutionContext context) {
+    if (!repository.longTermMemoryEnabled(
+        context.getTenantId(), context.getWorkspaceId(), context.getUserId())) {
+      return new MemoryRecallResult(
+          Collections.emptyList(),
+          Collections.emptyList(),
+          "",
+          Collections.emptyMap(),
+          Collections.singletonList("LONG_TERM_MEMORY_DISABLED"),
+          provenance(context, Collections.emptyList(), Collections.emptyList()));
     }
 
-    public MemoryRecallResult recall(ExecutionContext context) {
-        if (!repository.longTermMemoryEnabled(context.getTenantId(), context.getWorkspaceId(), context.getUserId())) {
-            return new MemoryRecallResult(Collections.emptyList(), Collections.emptyList(), "",
-                    Collections.emptyMap(), Collections.singletonList("LONG_TERM_MEMORY_DISABLED"),
-                    Collections.singletonMap("runId", context.getRunId()));
-        }
-        List<String> warnings = new ArrayList<>();
-        List<Map<String, Object>> facts = facts(context, warnings);
-        List<Map<String, Object>> episodes = episodes(context, warnings);
-        Map<String, Object> profile = profile(context, warnings);
-        String summary = messages(context, warnings);
-        Map<String, Object> provenance = new LinkedHashMap<>();
-        provenance.put("sourceRunId", context.getRunId());
-        provenance.put("conversationId", context.getConversationId());
-        return new MemoryRecallResult(facts, episodes, summary, profile, warnings, provenance);
-    }
+    List<String> warnings = new ArrayList<>();
+    String query = String.valueOf(context.getVariables().getOrDefault("text", ""));
+    int tokenBudget =
+        (int) Math.max(256, Math.min(4000, context.getExecutionBudget().getMaxInputTokens() / 8));
+    List<Map<String, Object>> factValues = safeFacts(context, warnings);
+    List<Map<String, Object>> episodeValues = safeEpisodes(context, warnings);
+    factValues = relevance.rank(sensitivity.filter(factValues), query, 50);
+    episodeValues = relevance.rank(sensitivity.filter(episodeValues), query, 25);
+    factValues = compressor.compress(factValues, tokenBudget / 3);
+    episodeValues = compressor.compress(episodeValues, tokenBudget / 3);
+    String summary = safeConversation(context, warnings);
+    summary = compressor.compressText(summary, tokenBudget / 5);
+    Map<String, Object> userProfile = safeProfile(context, warnings);
+    userProfile = sensitivity.filterProfile(userProfile);
+    Map<String, Object> provenance = provenance(context, factValues, episodeValues);
+    return new MemoryRecallResult(
+        factValues, episodeValues, summary, userProfile, warnings, provenance);
+  }
 
-    private List<Map<String, Object>> facts(ExecutionContext context, List<String> warnings) {
-        List<Map<String, Object>> result = new ArrayList<>();
-        try {
-            for (MemoryFact fact : repository.findFacts(context.getTenantId(), context.getWorkspaceId(),
-                    context.getUserId(), 0, 50)) {
-                if (!fact.isConfirmedByUser() && !"CONFIRMED".equals(fact.getStatus().name())) continue;
-                if ("HIGH".equalsIgnoreCase(fact.getSensitivityLevel())
-                        || "CRITICAL".equalsIgnoreCase(fact.getSensitivityLevel())) continue;
-                Map<String, Object> value = new LinkedHashMap<>();
-                value.put("factType", fact.getFactType());
-                value.put("factValue", fact.getFactValue());
-                value.put("sourceMessageId", fact.getSourceMessageId());
-                value.put("sourceRunId", fact.getSourceRunId());
-                value.put("confidence", fact.getConfidence());
-                result.add(value);
-            }
-        } catch (Exception e) { warnings.add("FACT_RECALL_UNAVAILABLE"); }
-        return result;
+  private List<Map<String, Object>> safeFacts(ExecutionContext context, List<String> warnings) {
+    try {
+      return facts.retrieve(context);
+    } catch (Exception error) {
+      warnings.add("FACT_RECALL_UNAVAILABLE");
+      return Collections.emptyList();
     }
+  }
 
-    private List<Map<String, Object>> episodes(ExecutionContext context, List<String> warnings) {
-        try {
-            return jdbc.query("select source_run_id,task_summary,result_summary,satisfaction,created_at from ai_memory_episode where tenant_id=? and workspace_id=? and user_id=? and status in ('CONFIRMED','ACTIVE') and deleted=0 order by created_at desc limit 10",
-                    (rs, row) -> {
-                        Map<String, Object> value = new LinkedHashMap<>();
-                        value.put("sourceRunId", rs.getString("source_run_id"));
-                        value.put("taskSummary", rs.getString("task_summary"));
-                        value.put("resultSummary", rs.getString("result_summary"));
-                        value.put("satisfaction", rs.getString("satisfaction"));
-                        return value;
-                    }, context.getTenantId(), context.getWorkspaceId(), context.getUserId());
-        } catch (Exception e) { warnings.add("EPISODIC_RECALL_UNAVAILABLE"); return Collections.emptyList(); }
+  private List<Map<String, Object>> safeEpisodes(ExecutionContext context, List<String> warnings) {
+    try {
+      return episodes.retrieve(context);
+    } catch (Exception error) {
+      warnings.add("EPISODIC_RECALL_UNAVAILABLE");
+      return Collections.emptyList();
     }
+  }
 
-    private Map<String, Object> profile(ExecutionContext context, List<String> warnings) {
-        try {
-            String json = jdbc.query("select profile_json from ai_user_profile where tenant_id=? and workspace_id=? and user_id=? and long_term_memory_enabled=1 and status='ACTIVE' and deleted=0",
-                    rs -> rs.next() ? rs.getString(1) : null, context.getTenantId(), context.getWorkspaceId(),
-                    context.getUserId());
-            if (json == null) return Collections.emptyMap();
-            JsonNode value = mapper.readTree(json);
-            return mapper.convertValue(value, Map.class);
-        } catch (Exception e) { warnings.add("PROFILE_RECALL_UNAVAILABLE"); return Collections.emptyMap(); }
+  private String safeConversation(ExecutionContext context, List<String> warnings) {
+    try {
+      return conversation.retrieve(context);
+    } catch (Exception error) {
+      warnings.add("CONVERSATION_RECALL_UNAVAILABLE");
+      return "";
     }
+  }
 
-    private String messages(ExecutionContext context, List<String> warnings) {
-        if (context.getConversationId() == null) return "";
-        try {
-            List<MessageRecord> messages = repository.findMessages(context.getTenantId(), context.getWorkspaceId(),
-                    context.getConversationId(), 0, 12);
-            StringBuilder summary = new StringBuilder();
-            for (MessageRecord message : messages) {
-                if (message.getContent() == null || message.getContent().trim().isEmpty()) continue;
-                if (summary.length() > 5000) break;
-                summary.append(message.getRole().name()).append(": ").append(message.getContent()).append('\n');
-            }
-            return summary.toString();
-        } catch (Exception e) { warnings.add("CONVERSATION_RECALL_UNAVAILABLE"); return ""; }
+  private Map<String, Object> safeProfile(ExecutionContext context, List<String> warnings) {
+    try {
+      return profile.retrieve(context);
+    } catch (Exception error) {
+      warnings.add("PROFILE_RECALL_UNAVAILABLE");
+      return Collections.emptyMap();
     }
+  }
+
+  private Map<String, Object> provenance(
+      ExecutionContext context,
+      List<Map<String, Object>> facts,
+      List<Map<String, Object>> episodes) {
+    Map<String, Object> result = new LinkedHashMap<>();
+    result.put("sourceRunId", context.getRunId());
+    result.put("conversationId", context.getConversationId());
+    result.put("factSourceRunIds", sourceIds(facts, "sourceRunId"));
+    result.put("factSourceMessageIds", sourceIds(facts, "sourceMessageId"));
+    result.put("episodeSourceRunIds", sourceIds(episodes, "sourceRunId"));
+    return result;
+  }
+
+  private List<String> sourceIds(List<Map<String, Object>> values, String key) {
+    List<String> result = new ArrayList<>();
+    for (Map<String, Object> value : values) {
+      Object source = value.get(key);
+      if (source != null && !result.contains(String.valueOf(source)))
+        result.add(String.valueOf(source));
+    }
+    return result;
+  }
 }
