@@ -147,6 +147,14 @@ public class JdbcRunRepository implements RunRepository {
     }
 
     @Override
+    public long latestEventSequence(String tenantId, String workspaceId, String runId) {
+        Long sequence = jdbcTemplate.queryForObject(
+                "select status_version from ai_run where tenant_id=? and workspace_id=? and id=? and deleted=0",
+                Long.class, tenantId, workspaceId, runId);
+        return sequence == null ? 0 : sequence;
+    }
+
+    @Override
     public List<AgentRunRecord> findRecoverable(int limit) {
         return jdbcTemplate.query("select " + COLUMNS + " from ai_run where status='QUEUED' and deadline_at>? " +
                         "and deleted=0 order by queued_at,id limit ?", rowMapper, Timestamp.from(Instant.now()), limit);

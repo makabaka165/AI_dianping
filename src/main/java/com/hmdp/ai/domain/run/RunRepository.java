@@ -27,6 +27,11 @@ public interface RunRepository {
 
     List<RunEvent> findEvents(String tenantId, String workspaceId, String runId, long afterSequence, int limit);
 
+    default long latestEventSequence(String tenantId, String workspaceId, String runId) {
+        return findEvents(tenantId, workspaceId, runId, 0, Integer.MAX_VALUE).stream()
+                .mapToLong(RunEvent::getSequence).max().orElse(0);
+    }
+
     List<AgentRunRecord> findRecoverable(int limit);
 
     int requeueInterruptedRuns();

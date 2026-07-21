@@ -135,9 +135,10 @@ public class AgentRunApplicationService {
     public SseEmitter openEvents(String runId, long afterSequence) {
         AiSecurityContext context = accessGuard.require(AiPermission.AGENT_RUN);
         AgentRunRecord run = requireRun(context, runId);
-        List<AgentRunEventResponse> replay = repository.findEvents(run.getTenantId(), run.getWorkspaceId(),
-                        runId, afterSequence, 1000).stream().map(this::event).collect(Collectors.toList());
-        return eventHub.open(run.getTenantId(), run.getWorkspaceId(), runId, afterSequence, replay,
+        return eventHub.open(run.getTenantId(), run.getWorkspaceId(), runId, afterSequence,
+                () -> repository.latestEventSequence(run.getTenantId(), run.getWorkspaceId(), runId),
+                sequence -> repository.findEvents(run.getTenantId(), run.getWorkspaceId(), runId, sequence, 1000)
+                        .stream().map(this::event).collect(Collectors.toList()),
                 run.getStatus().isTerminal());
     }
 
