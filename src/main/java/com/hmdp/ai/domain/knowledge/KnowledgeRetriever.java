@@ -7,6 +7,12 @@ package com.hmdp.ai.domain.knowledge;
  */
 public interface KnowledgeRetriever {
 
+    default HybridRetrievalResult retrieve(KnowledgeRetrievalRequest request) {
+        return retrieve(request.getTenantId(), request.getWorkspaceId(), request.getUserId(),
+                request.getKnowledgeBaseId(), request.getKnowledgeBaseVersion(), request.getQuery(),
+                request.getTopK());
+    }
+
     HybridRetrievalResult retrieve(String tenantId,
                                    String workspaceId,
                                    String userId,

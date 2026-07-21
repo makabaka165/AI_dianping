@@ -33,6 +33,7 @@ import java.util.EnumSet;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -80,6 +81,11 @@ class ToolExecutionPipelineTest {
 
         assertEquals(ToolCallStatus.SUCCEEDED, result.getStatus());
         assertEquals("ok", result.getData().path("echo").asText());
+        assertNotNull(result.getAuditDetails());
+        assertEquals("VALID", result.getAuditDetails().getInputSchemaValidationResult());
+        assertEquals(1000, result.getAuditDetails().getTimeoutMs());
+        assertEquals(0, result.getAuditDetails().getRetryCount());
+        org.junit.jupiter.api.Assertions.assertTrue(result.getAuditDetails().getResultSizeBytes() > 0);
         verify(idempotency).store(anyString(), anyString(), anyString(), eq(result.getData()), any(Duration.class));
         verify(audit).record(eq(definition), any(), eq(result), anyLongValue(), anyLongValue());
     }

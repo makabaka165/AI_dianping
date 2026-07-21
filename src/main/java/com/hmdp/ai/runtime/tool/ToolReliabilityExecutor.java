@@ -33,8 +33,7 @@ public class ToolReliabilityExecutor {
                                     Callable<T> operation) {
         JsonNode retryPolicy = read(definition.getRetryPolicyJson());
         JsonNode configuration = read(definition.getConfigurationJson());
-        String key = invocation.getContext().getTenantId() + ':' + definition.getProtocol().name() + ':'
-                + definition.getCode() + ":execute";
+        String key = key(definition, invocation);
 
         CircuitBreakerConfig circuitConfig = CircuitBreakerConfig.custom()
                 .failureRateThreshold(configuration.path("failureRateThreshold").floatValue() > 0
@@ -67,6 +66,15 @@ public class ToolReliabilityExecutor {
 
     CircuitBreaker circuitBreaker(String name) {
         return circuitBreakers.circuitBreaker(name);
+    }
+
+    String circuitBreakerState(ToolDefinition definition, ToolInvocation invocation) {
+        return circuitBreakers.circuitBreaker(key(definition, invocation)).getState().name();
+    }
+
+    private String key(ToolDefinition definition, ToolInvocation invocation) {
+        return invocation.getContext().getTenantId() + ':' + definition.getProtocol().name() + ':'
+                + definition.getCode() + ":execute";
     }
 
     private JsonNode read(String value) {

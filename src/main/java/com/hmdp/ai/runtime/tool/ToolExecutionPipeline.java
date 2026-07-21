@@ -3,6 +3,7 @@ package com.hmdp.ai.runtime.tool;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hmdp.ai.domain.tool.ToolAuditPort;
+import com.hmdp.ai.domain.tool.ToolAuditDetails;
 import com.hmdp.ai.domain.tool.ToolBudgetPort;
 import com.hmdp.ai.domain.tool.ToolCallStatus;
 import com.hmdp.ai.domain.tool.ToolDefinition;
@@ -33,6 +34,8 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
 
 @Component
 public class ToolExecutionPipeline {
@@ -107,38 +110,48 @@ public class ToolExecutionPipeline {
                     "tool is not bound to this agent version", false);
         }
 
+        AuditContext auditContext = new AuditContext(definition.getTimeoutMs(), invocation.getApprovalRequestId());
         ToolResult result;
         if (!definition.isEnabled()) {
             result = ToolResult.failure(ToolCallStatus.DENIED, "TOOL_DISABLED", "tool is disabled", false);
         } else if (!permissions.allowed(invocation.getContext(), definition)) {
             result = ToolResult.failure(ToolCallStatus.DENIED, "TOOL_PERMISSION_DENIED",
                     "tool permission denied", false);
-        } else if (!schemas.validateValue(definition.getInputSchema(), invocation.getInput(), "toolInput").isValid()) {
-            result = ToolResult.failure(ToolCallStatus.FAILED, "TOOL_INPUT_SCHEMA_INVALID",
-                    "tool input schema validation failed", false);
-        } else if (requiresApproval(definition) && !invocation.isApproved()) {
-            if (approvals == null) {
-                result = ToolResult.failure(ToolCallStatus.APPROVAL_REQUIRED, "TOOL_APPROVAL_REQUIRED",
-                        "high-risk tool requires TOOL_APPROVE and a matching inputHash", false);
-            } else {
-                ApprovalRequest request = approvals.request(definition, invocation, invocation.getInput());
-                result = ToolResult.failure(ToolCallStatus.APPROVAL_REQUIRED, "TOOL_APPROVAL_REQUIRED",
-                        "approvalRequestId=" + request.getId() + ";inputHash=" + request.getInputHash()
-                                + ";requires=TOOL_APPROVE", false);
-            }
-        } else if (requiresApproval(definition) && !approvals.approved(invocation, invocation.getInput())) {
-            result = ToolResult.failure(ToolCallStatus.DENIED, "TOOL_APPROVAL_INVALID",
-                    "approval is missing, expired, self-approved, or inputHash changed", false);
         } else {
-            result = executeAuthorized(definition, invocation, started);
+            ValidationResult inputValidation = schemas.validateValue(definition.getInputSchema(),
+                    invocation.getInput(), "toolInput");
+            auditContext.inputSchemaValidation = inputValidation.isValid() ? "VALID" : "INVALID";
+            if (!inputValidation.isValid()) {
+                result = ToolResult.failure(ToolCallStatus.FAILED, "TOOL_INPUT_SCHEMA_INVALID",
+                        "tool input schema validation failed", false);
+            } else if (requiresApproval(definition) && !invocation.isApproved()) {
+                if (approvals == null) {
+                    result = ToolResult.failure(ToolCallStatus.APPROVAL_REQUIRED, "TOOL_APPROVAL_REQUIRED",
+                            "high-risk tool requires TOOL_APPROVE and a matching inputHash", false);
+                } else {
+                    ApprovalRequest request = approvals.request(definition, invocation, invocation.getInput());
+                    auditContext.approvalRequestId = request.getId();
+                    result = ToolResult.failure(ToolCallStatus.APPROVAL_REQUIRED, "TOOL_APPROVAL_REQUIRED",
+                            "approvalRequestId=" + request.getId() + ";inputHash=" + request.getInputHash()
+                                    + ";requires=TOOL_APPROVE", false);
+                }
+            } else if (requiresApproval(definition)
+                    && (approvals == null || !approvals.approved(invocation, invocation.getInput()))) {
+                result = ToolResult.failure(ToolCallStatus.DENIED, "TOOL_APPROVAL_INVALID",
+                        "approval is missing, expired, self-approved, or inputHash changed", false);
+            } else {
+                result = executeAuthorized(definition, invocation, started, auditContext);
+            }
         }
+        result = result.withAuditDetails(auditContext.details(result, mapper));
         if (definition != null) {
             audit.record(definition, invocation, result, started, System.currentTimeMillis() - started);
         }
         return result;
     }
 
-    private ToolResult executeAuthorized(ToolDefinition definition, ToolInvocation invocation, long started) {
+    private ToolResult executeAuthorized(ToolDefinition definition, ToolInvocation invocation, long started,
+                                         AuditContext auditContext) {
         JsonNode configuration = configuration(definition);
         String idempotencyKey = definition.getVersionId() + ':' + invocation.getIdempotencyKey();
         if (definition.isIdempotent()) {
@@ -163,7 +176,7 @@ public class ToolExecutionPipeline {
                     "tool rate limit exceeded", true);
         }
 
-        ToolResult result = invoke(definition, invocation, configuration, started);
+        ToolResult result = invoke(definition, invocation, configuration, started, auditContext);
         if (result.getStatus() == ToolCallStatus.SUCCEEDED && definition.isIdempotent()) {
             long seconds = Math.max(60, configuration.path("idempotencyTtlSeconds")
                     .asLong(DEFAULT_IDEMPOTENCY_TTL.getSeconds()));
@@ -174,14 +187,19 @@ public class ToolExecutionPipeline {
     }
 
     private ToolResult invoke(ToolDefinition definition, ToolInvocation invocation, JsonNode configuration,
-                              long started) {
-        Callable<ToolResult> operation = () -> executeProtocol(definition, invocation, configuration);
+                              long started, AuditContext auditContext) {
+        AtomicInteger attempts = new AtomicInteger();
+        Callable<ToolResult> operation = () -> {
+            attempts.incrementAndGet();
+            return executeProtocol(definition, invocation, configuration);
+        };
         Callable<ToolResult> decorated = reliability.decorate(definition, invocation, operation);
         Future<ToolResult> future = executor.submit(decorated);
         if (cancellations != null) cancellations.track(invocation.getContext().getRunId(), future);
         try {
             long remainingMs = Duration.between(Instant.now(), invocation.getContext().getDeadline()).toMillis();
             long timeoutMs = Math.max(1, Math.min(definition.getTimeoutMs(), remainingMs));
+            auditContext.timeoutMs = (int) Math.min(Integer.MAX_VALUE, timeoutMs);
             ToolResult protocolResult = future.get(timeoutMs, TimeUnit.MILLISECONDS);
             if (protocolResult.getStatus() != ToolCallStatus.SUCCEEDED) {
                 return protocolResult;
@@ -191,7 +209,9 @@ public class ToolExecutionPipeline {
                             .asInt(DEFAULT_MAX_RESULT_BYTES),
                     (int) Math.min(Integer.MAX_VALUE,
                             invocation.getContext().getExecutionBudget().getMaxArtifactBytes())));
-            if (mapper.writeValueAsString(data).getBytes(StandardCharsets.UTF_8).length > resultLimit) {
+            int resultSize = mapper.writeValueAsString(data).getBytes(StandardCharsets.UTF_8).length;
+            auditContext.resultSizeBytes = resultSize;
+            if (resultSize > resultLimit) {
                 return ToolResult.failure(ToolCallStatus.FAILED, "TOOL_RESULT_TOO_LARGE",
                         "tool result exceeds configured size limit", false);
             }
@@ -215,6 +235,8 @@ public class ToolExecutionPipeline {
             return ToolResult.failure(ToolCallStatus.FAILED, "TOOL_EXECUTION_FAILED",
                     "tool execution failed", false);
         } finally {
+            auditContext.retryCount = Math.max(0, attempts.get() - 1);
+            auditContext.circuitBreakerState = reliability.circuitBreakerState(definition, invocation);
             if (cancellations != null) cancellations.untrack(invocation.getContext().getRunId(), future);
         }
     }
@@ -243,6 +265,37 @@ public class ToolExecutionPipeline {
             return mapper.readTree(definition.getConfigurationJson());
         } catch (Exception e) {
             throw new IllegalStateException("stored tool configuration is invalid", e);
+        }
+    }
+
+    private static final class AuditContext {
+        private String inputSchemaValidation = "NOT_EVALUATED";
+        private String approvalRequestId;
+        private int retryCount;
+        private String circuitBreakerState = "NOT_INVOKED";
+        private int timeoutMs;
+        private long resultSizeBytes;
+
+        private AuditContext(int timeoutMs, String approvalRequestId) {
+            this.timeoutMs = timeoutMs;
+            this.approvalRequestId = approvalRequestId;
+        }
+
+        private ToolAuditDetails details(ToolResult result, ObjectMapper mapper) {
+            long size = resultSizeBytes;
+            if (size == 0 && result.getData() != null) {
+                try {
+                    size = mapper.writeValueAsBytes(result.getData()).length;
+                } catch (Exception ignored) {
+                    size = 0;
+                }
+            }
+            return new ToolAuditDetails(inputSchemaValidation, approvalRequestId, retryCount,
+                    circuitBreakerState, timeoutMs, size,
+                    result.getArtifacts().stream().map(value -> value.getArtifactId())
+                            .collect(Collectors.toList()),
+                    result.getCitations().stream().map(value -> value.getCitationId())
+                            .collect(Collectors.toList()));
         }
     }
 }
