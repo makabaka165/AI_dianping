@@ -5,6 +5,7 @@ import com.hmdp.ai.domain.run.ExecutionContext;
 import com.hmdp.ai.domain.workflow.WorkflowDefinition;
 import com.hmdp.ai.domain.workflow.WorkflowEdgeDefinition;
 import com.hmdp.ai.domain.workflow.WorkflowNodeDefinition;
+import com.hmdp.ai.runtime.cancellation.NodeCancellationToken;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -19,6 +20,7 @@ public final class NodeExecutionContext {
     private final Map<String, Object> variables;
     private final List<WorkflowEdgeDefinition> outgoingEdges;
     private final String nodeRunId;
+    private final NodeCancellationToken cancellationToken;
 
     public NodeExecutionContext(ExecutionContext executionContext, PublishedAgentDefinition agent,
                                 WorkflowDefinition workflow, WorkflowNodeDefinition node,
@@ -30,6 +32,14 @@ public final class NodeExecutionContext {
                                 WorkflowDefinition workflow, WorkflowNodeDefinition node,
                                 Map<String, Object> variables, List<WorkflowEdgeDefinition> outgoingEdges,
                                 String nodeRunId) {
+        this(executionContext, agent, workflow, node, variables, outgoingEdges, nodeRunId,
+                executionContext == null ? null : new NodeCancellationToken(null, executionContext.getDeadline()));
+    }
+
+    public NodeExecutionContext(ExecutionContext executionContext, PublishedAgentDefinition agent,
+                                WorkflowDefinition workflow, WorkflowNodeDefinition node,
+                                Map<String, Object> variables, List<WorkflowEdgeDefinition> outgoingEdges,
+                                String nodeRunId, NodeCancellationToken cancellationToken) {
         this.executionContext = executionContext;
         this.agent = agent;
         this.workflow = workflow;
@@ -37,6 +47,7 @@ public final class NodeExecutionContext {
         this.variables = variables;
         this.outgoingEdges = Collections.unmodifiableList(new ArrayList<>(outgoingEdges));
         this.nodeRunId = nodeRunId;
+        this.cancellationToken = cancellationToken;
     }
 
     public ExecutionContext getExecutionContext() { return executionContext; }
@@ -46,4 +57,5 @@ public final class NodeExecutionContext {
     public Map<String, Object> getVariables() { return variables; }
     public List<WorkflowEdgeDefinition> getOutgoingEdges() { return outgoingEdges; }
     public String getNodeRunId() { return nodeRunId; }
+    public NodeCancellationToken getCancellationToken() { return cancellationToken; }
 }

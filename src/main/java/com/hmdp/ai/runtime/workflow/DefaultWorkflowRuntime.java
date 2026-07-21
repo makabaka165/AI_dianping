@@ -24,6 +24,7 @@ import com.hmdp.ai.runtime.node.NodeExecutionContext;
 import com.hmdp.ai.runtime.node.NodeExecutionResult;
 import com.hmdp.ai.runtime.node.WorkflowNodeRegistry;
 import com.hmdp.ai.runtime.cancellation.CancellationToken;
+import com.hmdp.ai.runtime.cancellation.NodeCancellationToken;
 import com.hmdp.ai.runtime.cancellation.RunCancellationRegistry;
 import com.hmdp.ai.shared.json.ContentHashService;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -63,7 +64,7 @@ public class DefaultWorkflowRuntime implements WorkflowRuntime {
     private final NodeRunRepository nodeRuns;
     private final WorkflowStateRepository states;
     private final ObjectMapper mapper;
-    private final ThreadPoolTaskExecutor executor;
+    private final NodeReliabilityExecutor nodeReliability;
     private final AsyncTaskExecutor branchExecutor;
     private final ConditionDslEvaluator conditions;
     private final ContentHashService hashes;
@@ -74,7 +75,7 @@ public class DefaultWorkflowRuntime implements WorkflowRuntime {
     @org.springframework.beans.factory.annotation.Autowired
     public DefaultWorkflowRuntime(WorkflowNodeRegistry registry, NodeRunRepository nodeRuns,
                                   WorkflowStateRepository states, ObjectMapper mapper,
-                                  @Qualifier("workflowNodeExecutor") ThreadPoolTaskExecutor executor,
+                                  NodeReliabilityExecutor nodeReliability,
                                   @Qualifier("workflowBranchExecutor") AsyncTaskExecutor branchExecutor,
                                   ConditionDslEvaluator conditions, ContentHashService hashes,
                                   WorkflowPauseCoordinator pauseCoordinator,
@@ -83,7 +84,7 @@ public class DefaultWorkflowRuntime implements WorkflowRuntime {
         this.nodeRuns = nodeRuns;
         this.states = states;
         this.mapper = mapper;
-        this.executor = executor;
+        this.nodeReliability = nodeReliability;
         this.branchExecutor = branchExecutor;
         this.conditions = conditions;
         this.hashes = hashes;
@@ -97,6 +98,17 @@ public class DefaultWorkflowRuntime implements WorkflowRuntime {
                                   ContentHashService hashes, WorkflowPauseCoordinator pauseCoordinator) {
         this(registry, nodeRuns, states, mapper, executor,
                 new TaskExecutorAdapter(ForkJoinPool.commonPool()), conditions, hashes, pauseCoordinator, null);
+    }
+
+    private DefaultWorkflowRuntime(WorkflowNodeRegistry registry, NodeRunRepository nodeRuns,
+                                   WorkflowStateRepository states, ObjectMapper mapper,
+                                   ThreadPoolTaskExecutor executor, AsyncTaskExecutor branchExecutor,
+                                   ConditionDslEvaluator conditions, ContentHashService hashes,
+                                   WorkflowPauseCoordinator pauseCoordinator,
+                                   RunCancellationRegistry cancellations) {
+        this(registry, nodeRuns, states, mapper,
+                new NodeReliabilityExecutor(executor, cancellations, mapper), branchExecutor, conditions,
+                hashes, pauseCoordinator, cancellations);
     }
 
     @Override
@@ -344,9 +356,13 @@ public class DefaultWorkflowRuntime implements WorkflowRuntime {
                 idempotencyKey);
         if (!claim.isClaimed()) return restore(claim.getOutputJson(), outgoing, variables);
 
+        CancellationToken runToken = cancellations == null ? null : cancellations.token(context.getRunId());
+        NodeCancellationToken nodeToken = new NodeCancellationToken(runToken, context.getDeadline());
         NodeExecutionContext nodeContext = new NodeExecutionContext(context, agent, workflow, node,
-                Collections.unmodifiableMap(new LinkedHashMap<>(variables)), outgoing, claim.getNodeRunId());
-        NodeExecutionResult result = executeWithPolicy(node, nodeContext);
+                Collections.unmodifiableMap(new LinkedHashMap<>(variables)), outgoing, claim.getNodeRunId(),
+                nodeToken);
+        NodeExecutionResult result = nodeReliability.execute(node, nodeContext,
+                () -> registry.require(node.getType()).execute(nodeContext));
         List<String> next = result.getNextNodeIds().isEmpty()
                 ? defaultNext(outgoing, variables, result.getVariableUpdates()) : result.getNextNodeIds();
         if (result.getStatus() == NodeRunStatus.FAILED) {
@@ -368,42 +384,6 @@ public class DefaultWorkflowRuntime implements WorkflowRuntime {
                     json(persisted), json(result.getUsage()));
         }
         return new NodeOutcome(result, next);
-    }
-
-    private NodeExecutionResult executeWithPolicy(WorkflowNodeDefinition node, NodeExecutionContext context) {
-        int maxAttempts = Math.max(1, node.getMaxAttempts());
-        long timeoutMs = Math.max(1, node.getTimeoutMs());
-        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
-            CancellationToken token = cancellations == null ? null : cancellations.token(context.getExecutionContext().getRunId());
-            if (token != null) token.throwIfCancelled();
-            Future<NodeExecutionResult> future = executor.submit(
-                    () -> registry.require(node.getType()).execute(context));
-            if (cancellations != null) cancellations.track(context.getExecutionContext().getRunId(), future);
-            try {
-                NodeExecutionResult result = future.get(timeoutMs, TimeUnit.MILLISECONDS);
-                if (result.getStatus() != NodeRunStatus.FAILED || !result.isRetryable()
-                        || attempt == maxAttempts) {
-                    return result;
-                }
-            } catch (java.util.concurrent.TimeoutException e) {
-                future.cancel(true);
-                if (attempt == maxAttempts) return NodeExecutionResult.failure("NODE_TIMEOUT", true);
-            } catch (InterruptedException e) {
-                future.cancel(true);
-                Thread.currentThread().interrupt();
-                throw new java.util.concurrent.CancellationException("RUN_CANCELLED");
-            } catch (java.util.concurrent.CancellationException e) {
-                future.cancel(true);
-                throw e;
-            } catch (java.util.concurrent.ExecutionException e) {
-                if (attempt == maxAttempts) {
-                    return NodeExecutionResult.failure("NODE_EXECUTION_FAILED", true);
-                }
-            } finally {
-                if (cancellations != null) cancellations.untrack(context.getExecutionContext().getRunId(), future);
-            }
-        }
-        return NodeExecutionResult.failure("NODE_MAX_ATTEMPTS_EXCEEDED", true);
     }
 
     private void track(String runId, Future<?> future) {
