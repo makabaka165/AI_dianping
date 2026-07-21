@@ -4,7 +4,7 @@
 @workspace = default
 
 POST {{baseUrl}}/api/v1/feedback
-satoken: {{token}}
+Authorization: Bearer {{token}}
 X-Tenant-Id: {{tenant}}
 X-Workspace-Id: {{workspace}}
 Content-Type: application/json

@@ -4,7 +4,7 @@
 @workspace = default
 
 POST {{baseUrl}}/api/v1/workflows
-satoken: {{token}}
+Authorization: Bearer {{token}}
 X-Tenant-Id: {{tenant}}
 X-Workspace-Id: {{workspace}}
 Content-Type: application/json
@@ -13,6 +13,6 @@ Content-Type: application/json
 
 ### Validate a created version
 POST {{baseUrl}}/api/v1/workflows/WORKFLOW_ID/versions/1/validate
-satoken: {{token}}
+Authorization: Bearer {{token}}
 X-Tenant-Id: {{tenant}}
 X-Workspace-Id: {{workspace}}

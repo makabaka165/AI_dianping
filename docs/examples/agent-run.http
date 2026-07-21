@@ -5,7 +5,7 @@
 
 ### Create run
 POST {{baseUrl}}/api/v1/agent-runs
-satoken: {{token}}
+Authorization: Bearer {{token}}
 X-Tenant-Id: {{tenant}}
 X-Workspace-Id: {{workspace}}
 Content-Type: application/json
@@ -14,6 +14,6 @@ Content-Type: application/json
 
 ### Replace RUN_ID, then stream events
 GET {{baseUrl}}/api/v1/agent-runs/RUN_ID/events
-satoken: {{token}}
+Authorization: Bearer {{token}}
 X-Tenant-Id: {{tenant}}
 X-Workspace-Id: {{workspace}}

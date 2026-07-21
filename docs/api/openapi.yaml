@@ -1,16 +1,41 @@
 openapi: 3.0.3
 info:
   title: AI Dianping Agent Platform API
-  version: 1.0.0
+  version: 1.1.0
 servers:
   - url: http://localhost:8081
 security:
-  - saToken: []
+  - bearerAuth: []
 paths:
+  /api/v1/agents:
+    get: { summary: List agents, responses: { '200': { $ref: '#/components/responses/Success' } } }
+    post: { summary: Create agent, responses: { '200': { $ref: '#/components/responses/Success' } } }
+  /api/v1/agents/{id}:
+    parameters: [ { $ref: '#/components/parameters/IdPath' } ]
+    get: { summary: Get agent, responses: { '200': { $ref: '#/components/responses/Success' } } }
+  /api/v1/agents/{id}/versions:
+    parameters: [ { $ref: '#/components/parameters/IdPath' } ]
+    get: { summary: List agent versions, responses: { '200': { $ref: '#/components/responses/Success' } } }
+    post: { summary: Create agent version, responses: { '200': { $ref: '#/components/responses/Success' } } }
+  /api/v1/agents/{id}/versions/{version}:
+    parameters: [ { $ref: '#/components/parameters/IdPath' }, { $ref: '#/components/parameters/VersionPath' } ]
+    get: { summary: Get agent version, responses: { '200': { $ref: '#/components/responses/Success' } } }
+  /api/v1/agents/{id}/versions/{version}/validate:
+    parameters: [ { $ref: '#/components/parameters/IdPath' }, { $ref: '#/components/parameters/VersionPath' } ]
+    post: { summary: Validate agent version, responses: { '200': { $ref: '#/components/responses/Success' } } }
+  /api/v1/agents/{id}/versions/{version}/publish:
+    parameters: [ { $ref: '#/components/parameters/IdPath' }, { $ref: '#/components/parameters/VersionPath' } ]
+    post: { summary: Publish agent version, responses: { '200': { $ref: '#/components/responses/Success' } } }
+  /api/v1/agents/{id}/versions/{version}/rollback:
+    parameters: [ { $ref: '#/components/parameters/IdPath' }, { $ref: '#/components/parameters/VersionPath' } ]
+    post: { summary: Roll back agent version, responses: { '200': { $ref: '#/components/responses/Success' } } }
+  /api/v1/agents/{id}/versions/{left}/diff/{right}:
+    parameters: [ { $ref: '#/components/parameters/IdPath' }, { $ref: '#/components/parameters/LeftPath' }, { $ref: '#/components/parameters/RightPath' } ]
+    get: { summary: Diff agent versions, responses: { '200': { $ref: '#/components/responses/Success' } } }
+
   /api/v1/agent-runs:
     post:
       summary: Create an Agent run
-      parameters: [ { $ref: '#/components/parameters/TenantHeader' }, { $ref: '#/components/parameters/WorkspaceHeader' } ]
       requestBody:
         required: true
         content:
@@ -21,110 +46,210 @@ paths:
           description: Run queued
           content: { application/json: { schema: { $ref: '#/components/schemas/RunCreated' } } }
   /api/v1/agent-runs/{runId}:
-    get:
-      summary: Get run details
-      parameters:
-        - { $ref: '#/components/parameters/TenantHeader' }
-        - { $ref: '#/components/parameters/WorkspaceHeader' }
-        - { name: runId, in: path, required: true, schema: { type: string } }
-      responses: { '200': { description: Run details } }
+    parameters: [ { $ref: '#/components/parameters/RunIdPath' } ]
+    get: { summary: Get run details, responses: { '200': { $ref: '#/components/responses/Success' } } }
   /api/v1/agent-runs/{runId}/events:
+    parameters: [ { $ref: '#/components/parameters/RunIdPath' } ]
     get:
       summary: Stream run events
       parameters:
-        - { $ref: '#/components/parameters/TenantHeader' }
-        - { $ref: '#/components/parameters/WorkspaceHeader' }
-        - { name: runId, in: path, required: true, schema: { type: string } }
-      responses: { '200': { description: SSE stream, content: { text/event-stream: {} } } }
+        - { name: Last-Event-ID, in: header, required: false, schema: { type: integer, format: int64, minimum: 0 } }
+      responses: { '200': { description: SSE stream, content: { text/event-stream: { schema: { type: string } } } } }
   /api/v1/agent-runs/{runId}/cancel:
-    post:
-      summary: Cancel a run
-      parameters:
-        - { $ref: '#/components/parameters/TenantHeader' }
-        - { $ref: '#/components/parameters/WorkspaceHeader' }
-        - { name: runId, in: path, required: true, schema: { type: string } }
-      responses: { '200': { description: Cancellation result } }
+    parameters: [ { $ref: '#/components/parameters/RunIdPath' } ]
+    post: { summary: Cancel run, responses: { '200': { content: { application/json: { schema: { $ref: '#/components/schemas/RunCreated' } } }, description: Run cancelled } } }
   /api/v1/agent-runs/{runId}/retry:
-    post:
-      summary: Retry a terminal run
-      parameters:
-        - { $ref: '#/components/parameters/TenantHeader' }
-        - { $ref: '#/components/parameters/WorkspaceHeader' }
-        - { name: runId, in: path, required: true, schema: { type: string } }
-      responses: { '200': { description: New run } }
+    parameters: [ { $ref: '#/components/parameters/RunIdPath' } ]
+    post: { summary: Retry run, responses: { '200': { content: { application/json: { schema: { $ref: '#/components/schemas/RunCreated' } } }, description: Run queued } } }
   /api/v1/agent-runs/{runId}/resume:
-    post:
-      summary: Resume a waiting run
-      parameters:
-        - { $ref: '#/components/parameters/TenantHeader' }
-        - { $ref: '#/components/parameters/WorkspaceHeader' }
-        - { name: runId, in: path, required: true, schema: { type: string } }
-      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [resumeToken, variables], properties: { resumeToken: { type: string }, variables: { type: object } } } } } }
-      responses: { '200': { description: Run requeued } }
-  /api/v1/knowledge-bases:
-    post:
-      summary: Create a knowledge base
-      parameters: [ { $ref: '#/components/parameters/TenantHeader' }, { $ref: '#/components/parameters/WorkspaceHeader' } ]
-      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [code, name], properties: { code: { type: string }, name: { type: string }, description: { type: string } } } } } }
-      responses: { '200': { description: Created } }
-    get:
-      summary: List knowledge bases
-      parameters: [ { $ref: '#/components/parameters/TenantHeader' }, { $ref: '#/components/parameters/WorkspaceHeader' } ]
-      responses: { '200': { description: Page } }
-  /api/v1/knowledge-bases/{id}/documents:
-    post:
-      summary: Upload a document and create an ingestion job
-      parameters:
-        - { $ref: '#/components/parameters/TenantHeader' }
-        - { $ref: '#/components/parameters/WorkspaceHeader' }
-        - { name: id, in: path, required: true, schema: { type: string } }
-      requestBody: { required: true, content: { multipart/form-data: { schema: { type: object, required: [file], properties: { file: { type: string, format: binary } } } } } }
-      responses: { '200': { description: Ingestion job created } }
-  /api/v1/knowledge-bases/{id}/search:
-    post:
-      summary: Hybrid knowledge search
-      parameters:
-        - { $ref: '#/components/parameters/TenantHeader' }
-        - { $ref: '#/components/parameters/WorkspaceHeader' }
-        - { name: id, in: path, required: true, schema: { type: string } }
-      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [query], properties: { query: { type: string, maxLength: 4000 }, topK: { type: integer, minimum: 1, maximum: 50 } } } } } }
-      responses: { '200': { description: Structured chunks and citations } }
+    parameters: [ { $ref: '#/components/parameters/RunIdPath' } ]
+    post: { summary: Resume run, responses: { '200': { content: { application/json: { schema: { $ref: '#/components/schemas/RunCreated' } } }, description: Run queued } } }
+
+  /api/v1/approvals:
+    get: { summary: List approvals, responses: { '200': { $ref: '#/components/responses/Success' } } }
+  /api/v1/approvals/{id}:
+    parameters: [ { $ref: '#/components/parameters/IdPath' } ]
+    get: { summary: Get approval, responses: { '200': { $ref: '#/components/responses/Success' } } }
+  /api/v1/approvals/{id}/approve:
+    parameters: [ { $ref: '#/components/parameters/IdPath' } ]
+    post: { summary: Approve tool call, responses: { '200': { $ref: '#/components/responses/Success' } } }
+  /api/v1/approvals/{id}/reject:
+    parameters: [ { $ref: '#/components/parameters/IdPath' } ]
+    post: { summary: Reject tool call, responses: { '200': { $ref: '#/components/responses/Success' } } }
+  /api/v1/artifacts/{id}:
+    parameters: [ { $ref: '#/components/parameters/IdPath' } ]
+    get: { summary: Download artifact, responses: { '200': { description: Artifact content } } }
+
+  /api/v1/evaluation-datasets:
+    post: { summary: Create evaluation dataset, responses: { '200': { $ref: '#/components/responses/Success' } } }
+  /api/v1/evaluation-datasets/{id}/cases:
+    parameters: [ { $ref: '#/components/parameters/IdPath' } ]
+    post: { summary: Create evaluation case, responses: { '200': { $ref: '#/components/responses/Success' } } }
+  /api/v1/evaluation-runs:
+    post: { summary: Execute evaluation target, responses: { '200': { $ref: '#/components/responses/Success' } } }
+  /api/v1/evaluation-runs/{id}:
+    parameters: [ { $ref: '#/components/parameters/IdPath' } ]
+    get: { summary: Get evaluation run, responses: { '200': { $ref: '#/components/responses/Success' } } }
   /api/v1/feedback:
-    post:
-      summary: Submit feedback
-      parameters: [ { $ref: '#/components/parameters/TenantHeader' }, { $ref: '#/components/parameters/WorkspaceHeader' } ]
-      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [runId], properties: { runId: { type: string }, messageId: { type: string }, rating: { type: integer, minimum: -1, maximum: 1 }, tags: { type: array, items: { type: string } }, comment: { type: string, maxLength: 4000 }, correctedAnswer: { type: string } } } } } }
-      responses: { '200': { description: Feedback stored } }
+    post: { summary: Submit run feedback, responses: { '200': { $ref: '#/components/responses/Success' } } }
+
+  /api/v1/knowledge-bases:
+    get: { summary: List knowledge bases, responses: { '200': { $ref: '#/components/responses/Success' } } }
+    post: { summary: Create knowledge base, responses: { '200': { $ref: '#/components/responses/Success' } } }
+  /api/v1/knowledge-bases/{id}/versions:
+    parameters: [ { $ref: '#/components/parameters/IdPath' } ]
+    post: { summary: Create knowledge base version, responses: { '200': { $ref: '#/components/responses/Success' } } }
+  /api/v1/knowledge-bases/{id}/versions/{version}/publish:
+    parameters: [ { $ref: '#/components/parameters/IdPath' }, { $ref: '#/components/parameters/VersionPath' } ]
+    post: { summary: Publish knowledge base version, responses: { '200': { $ref: '#/components/responses/Success' } } }
+  /api/v1/knowledge-bases/{id}/documents:
+    parameters: [ { $ref: '#/components/parameters/IdPath' } ]
+    post: { summary: Upload document to an explicit DRAFT version, responses: { '200': { $ref: '#/components/responses/Success' } } }
+  /api/v1/knowledge-bases/{id}/search:
+    parameters: [ { $ref: '#/components/parameters/IdPath' } ]
+    post: { summary: Hybrid knowledge search, responses: { '200': { $ref: '#/components/responses/Success' } } }
+  /api/v1/documents/{id}:
+    parameters: [ { $ref: '#/components/parameters/IdPath' } ]
+    delete: { summary: Delete draft-only document, responses: { '200': { $ref: '#/components/responses/Success' } } }
+  /api/v1/documents/{id}/versions:
+    parameters: [ { $ref: '#/components/parameters/IdPath' } ]
+    post: { summary: Upload document version, responses: { '200': { $ref: '#/components/responses/Success' } } }
+  /api/v1/documents/{id}/reindex:
+    parameters: [ { $ref: '#/components/parameters/IdPath' } ]
+    post: { summary: Reindex into a DRAFT knowledge version, responses: { '200': { $ref: '#/components/responses/Success' } } }
+  /api/v1/ingestion-jobs/{jobId}:
+    parameters: [ { $ref: '#/components/parameters/JobIdPath' } ]
+    get: { summary: Get ingestion job, responses: { '200': { $ref: '#/components/responses/Success' } } }
+
   /api/v1/mcp-servers:
-    post:
-      summary: Register MCP server (ADMIN)
-      parameters: [ { $ref: '#/components/parameters/TenantHeader' }, { $ref: '#/components/parameters/WorkspaceHeader' } ]
-      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [code, name, namespace, transport, endpoint], properties: { code: { type: string }, name: { type: string }, namespace: { type: string }, transport: { type: string, enum: [HTTP] }, endpoint: { type: string, format: uri }, secretRef: { type: string, example: 'env:MCP_API_KEY' }, allowedTools: { type: array, items: { type: string } }, timeoutMs: { type: integer } } } } } }
-      responses: { '200': { description: Registered without resolved secret } }
-    get:
-      summary: List MCP servers
-      parameters: [ { $ref: '#/components/parameters/TenantHeader' }, { $ref: '#/components/parameters/WorkspaceHeader' } ]
-      responses: { '200': { description: MCP servers } }
+    get: { summary: List MCP servers, responses: { '200': { $ref: '#/components/responses/Success' } } }
+    post: { summary: Register MCP server, responses: { '200': { $ref: '#/components/responses/Success' } } }
+  /api/v1/mcp-servers/{id}/health-check:
+    parameters: [ { $ref: '#/components/parameters/IdPath' } ]
+    post: { summary: Check MCP server, responses: { '200': { $ref: '#/components/responses/Success' } } }
+  /api/v1/mcp-servers/{id}/sync-tools:
+    parameters: [ { $ref: '#/components/parameters/IdPath' } ]
+    post: { summary: Synchronize MCP tools, responses: { '200': { $ref: '#/components/responses/Success' } } }
+
+  /api/v1/conversations/{id}:
+    parameters: [ { $ref: '#/components/parameters/IdPath' } ]
+    get: { summary: Get conversation, responses: { '200': { $ref: '#/components/responses/Success' } } }
+  /api/v1/memories:
+    get: { summary: List memory facts, responses: { '200': { $ref: '#/components/responses/Success' } } }
+    delete: { summary: Delete all user memory facts, responses: { '200': { $ref: '#/components/responses/Success' } } }
+  /api/v1/memories/{id}:
+    parameters: [ { $ref: '#/components/parameters/IdPath' } ]
+    put: { summary: Correct memory fact, responses: { '200': { $ref: '#/components/responses/Success' } } }
+    delete: { summary: Delete memory fact, responses: { '200': { $ref: '#/components/responses/Success' } } }
+  /api/v1/memories/{id}/confirm:
+    parameters: [ { $ref: '#/components/parameters/IdPath' } ]
+    post: { summary: Confirm memory fact, responses: { '200': { $ref: '#/components/responses/Success' } } }
+  /api/v1/memories/preferences:
+    post: { summary: Update long-term memory preference, responses: { '200': { $ref: '#/components/responses/Success' } } }
+
+  /api/v1/model-profiles:
+    get: { summary: List model profiles, responses: { '200': { $ref: '#/components/responses/Success' } } }
+    post: { summary: Create model profile, responses: { '200': { $ref: '#/components/responses/Success' } } }
+  /api/v1/model-profiles/{id}:
+    parameters: [ { $ref: '#/components/parameters/IdPath' } ]
+    put: { summary: Create compatibility DRAFT version, responses: { '200': { $ref: '#/components/responses/Success' } } }
+  /api/v1/model-profiles/{id}/health-check:
+    parameters: [ { $ref: '#/components/parameters/IdPath' } ]
+    post: { summary: Check model profile, responses: { '200': { $ref: '#/components/responses/Success' } } }
+  /api/v1/model-profiles/{id}/versions:
+    parameters: [ { $ref: '#/components/parameters/IdPath' } ]
+    get: { summary: List model versions, responses: { '200': { $ref: '#/components/responses/Success' } } }
+    post: { summary: Create model version, responses: { '200': { $ref: '#/components/responses/Success' } } }
+  /api/v1/model-profiles/{id}/versions/{version}:
+    parameters: [ { $ref: '#/components/parameters/IdPath' }, { $ref: '#/components/parameters/VersionPath' } ]
+    get: { summary: Get model version, responses: { '200': { $ref: '#/components/responses/Success' } } }
+  /api/v1/model-profiles/{id}/versions/{version}/publish:
+    parameters: [ { $ref: '#/components/parameters/IdPath' }, { $ref: '#/components/parameters/VersionPath' } ]
+    post: { summary: Publish model version, responses: { '200': { $ref: '#/components/responses/Success' } } }
+  /api/v1/model-profiles/{id}/versions/{left}/diff/{right}:
+    parameters: [ { $ref: '#/components/parameters/IdPath' }, { $ref: '#/components/parameters/LeftPath' }, { $ref: '#/components/parameters/RightPath' } ]
+    get: { summary: Diff model versions, responses: { '200': { $ref: '#/components/responses/Success' } } }
+
+  /api/v1/admin/runs/{id}/nodes:
+    parameters: [ { $ref: '#/components/parameters/IdPath' } ]
+    get: { summary: Inspect node runs, responses: { '200': { $ref: '#/components/responses/Success' } } }
+  /api/v1/admin/runs/{id}/model-calls:
+    parameters: [ { $ref: '#/components/parameters/IdPath' } ]
+    get: { summary: Inspect model calls, responses: { '200': { $ref: '#/components/responses/Success' } } }
+  /api/v1/admin/runs/{id}/tool-calls:
+    parameters: [ { $ref: '#/components/parameters/IdPath' } ]
+    get: { summary: Inspect tool calls, responses: { '200': { $ref: '#/components/responses/Success' } } }
+  /api/v1/admin/runs/{id}/retrievals:
+    parameters: [ { $ref: '#/components/parameters/IdPath' } ]
+    get: { summary: Inspect retrievals, responses: { '200': { $ref: '#/components/responses/Success' } } }
+  /api/v1/admin/runs/{id}/artifacts:
+    parameters: [ { $ref: '#/components/parameters/IdPath' } ]
+    get: { summary: Inspect artifacts, responses: { '200': { $ref: '#/components/responses/Success' } } }
+  /api/v1/admin/runs/{id}/usage:
+    parameters: [ { $ref: '#/components/parameters/IdPath' } ]
+    get: { summary: Inspect usage and cost, responses: { '200': { $ref: '#/components/responses/Success' } } }
+
+  /api/v1/prompts:
+    get: { summary: List prompts, responses: { '200': { $ref: '#/components/responses/Success' } } }
+    post: { summary: Create prompt, responses: { '200': { $ref: '#/components/responses/Success' } } }
+  /api/v1/prompts/{id}/versions:
+    parameters: [ { $ref: '#/components/parameters/IdPath' } ]
+    get: { summary: List prompt versions, responses: { '200': { $ref: '#/components/responses/Success' } } }
+    post: { summary: Create prompt version, responses: { '200': { $ref: '#/components/responses/Success' } } }
+  /api/v1/prompts/{id}/versions/{version}/publish:
+    parameters: [ { $ref: '#/components/parameters/IdPath' }, { $ref: '#/components/parameters/VersionPath' } ]
+    post: { summary: Publish prompt version, responses: { '200': { $ref: '#/components/responses/Success' } } }
+  /api/v1/prompts/{id}/versions/{version}/rollback:
+    parameters: [ { $ref: '#/components/parameters/IdPath' }, { $ref: '#/components/parameters/VersionPath' } ]
+    post: { summary: Roll back prompt version, responses: { '200': { $ref: '#/components/responses/Success' } } }
+  /api/v1/prompts/{id}/versions/{left}/diff/{right}:
+    parameters: [ { $ref: '#/components/parameters/IdPath' }, { $ref: '#/components/parameters/LeftPath' }, { $ref: '#/components/parameters/RightPath' } ]
+    get: { summary: Diff prompt versions, responses: { '200': { $ref: '#/components/responses/Success' } } }
+
+  /api/v1/tools:
+    get: { summary: List tools, responses: { '200': { $ref: '#/components/responses/Success' } } }
+    post: { summary: Create tool, responses: { '200': { $ref: '#/components/responses/Success' } } }
+  /api/v1/workflows:
+    post: { summary: Create workflow, responses: { '200': { $ref: '#/components/responses/Success' } } }
+  /api/v1/workflows/{id}/versions:
+    parameters: [ { $ref: '#/components/parameters/IdPath' } ]
+    post: { summary: Create workflow version, responses: { '200': { $ref: '#/components/responses/Success' } } }
+  /api/v1/workflows/{id}/versions/{version}:
+    parameters: [ { $ref: '#/components/parameters/IdPath' }, { $ref: '#/components/parameters/VersionPath' } ]
+    get: { summary: Get workflow version, responses: { '200': { $ref: '#/components/responses/Success' } } }
+  /api/v1/workflows/{id}/versions/{version}/validate:
+    parameters: [ { $ref: '#/components/parameters/IdPath' }, { $ref: '#/components/parameters/VersionPath' } ]
+    post: { summary: Validate workflow version, responses: { '200': { $ref: '#/components/responses/Success' } } }
+  /api/v1/workflows/{id}/versions/{version}/publish:
+    parameters: [ { $ref: '#/components/parameters/IdPath' }, { $ref: '#/components/parameters/VersionPath' } ]
+    post: { summary: Publish workflow version, responses: { '200': { $ref: '#/components/responses/Success' } } }
+  /api/v1/workflows/{id}/versions/{left}/diff/{right}:
+    parameters: [ { $ref: '#/components/parameters/IdPath' }, { $ref: '#/components/parameters/LeftPath' }, { $ref: '#/components/parameters/RightPath' } ]
+    get: { summary: Diff workflow versions, responses: { '200': { $ref: '#/components/responses/Success' } } }
+
 components:
-  parameters:
-    TenantHeader:
-      name: X-Tenant-Id
-      in: header
-      required: true
-      schema: { type: string, maxLength: 64 }
-    WorkspaceHeader:
-      name: X-Workspace-Id
-      in: header
-      required: true
-      schema: { type: string, maxLength: 64 }
   securitySchemes:
-    saToken:
-      type: apiKey
-      in: header
-      name: satoken
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque
+  parameters:
+    TenantHeader: { name: X-Tenant-Id, in: header, required: true, schema: { type: string, maxLength: 64 } }
+    WorkspaceHeader: { name: X-Workspace-Id, in: header, required: true, schema: { type: string, maxLength: 64 } }
+    IdPath: { name: id, in: path, required: true, schema: { type: string, maxLength: 64 } }
+    RunIdPath: { name: runId, in: path, required: true, schema: { type: string, maxLength: 64 } }
+    JobIdPath: { name: jobId, in: path, required: true, schema: { type: string, maxLength: 64 } }
+    VersionPath: { name: version, in: path, required: true, schema: { type: integer, minimum: 1 } }
+    LeftPath: { name: left, in: path, required: true, schema: { type: integer, minimum: 1 } }
+    RightPath: { name: right, in: path, required: true, schema: { type: integer, minimum: 1 } }
+  responses:
+    Success:
+      description: Successful response
+      content: { application/json: { schema: { type: object } } }
   schemas:
     AgentRunRequest:
       type: object
+      additionalProperties: false
       required: [agentId, agentVersion, sessionId, input, responseMode]
       properties:
         agentId: { type: string, maxLength: 64 }
@@ -142,9 +267,11 @@ components:
         metadata: { type: object }
     RunCreated:
       type: object
-      required: [runId, status, agentId, agentVersion]
+      additionalProperties: false
+      required: [runId, status, agentDefinitionId, agentCode, agentVersion]
       properties:
         runId: { type: string }
-        status: { type: string }
-        agentId: { type: string }
-        agentVersion: { type: integer }
+        status: { type: string, enum: [QUEUED, CANCELLED] }
+        agentDefinitionId: { type: string }
+        agentCode: { type: string }
+        agentVersion: { type: integer, minimum: 1 }

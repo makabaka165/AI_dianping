@@ -113,10 +113,10 @@ public class AiModelConfig {
 
     @Bean
     public ChatMemoryProvider chatMemoryProvider(RedissonChatMemoryStore chatMemoryStore) {
-        log.info("鍒濆鍖?ChatMemoryProvider锛屾渶澶ф秷鎭暟: {}", maxMessages);
+        log.info("Initialized ChatMemoryProvider, maxMessages={}", maxMessages);
 
         return memoryId -> {
-            log.debug("涓鸿蹇咺D {} 鍒涘缓ChatMemory", memoryId);
+            log.debug("Created ChatMemory for memoryId={}", memoryId);
             return MessageWindowChatMemory.builder()
                     .id(memoryId)
                     .maxMessages(maxMessages)
@@ -125,11 +125,11 @@ public class AiModelConfig {
         };
     }
 
-    // ========== AI妯″瀷閰嶇疆 ==========
+    // ========== AI model configuration ==========
 
     @Bean
     public ChatLanguageModel chatLanguageModel() {
-        log.info("鍒濆鍖?ChatLanguageModel: {}", modelName);
+        log.info("Initialized ChatLanguageModel, model={}", modelName);
         return OpenAiChatModel.builder()
                 .apiKey(apiKey)
                 .modelName(modelName)
@@ -144,7 +144,7 @@ public class AiModelConfig {
 
     @Bean("repairChatLanguageModel")
     public ChatLanguageModel repairChatLanguageModel() {
-        log.info("鍒濆鍖?Repair ChatLanguageModel: {}, temperature={}", modelName, repairTemperature);
+        log.info("Initialized repair ChatLanguageModel, model={}, temperature={}", modelName, repairTemperature);
         return OpenAiChatModel.builder()
                 .apiKey(apiKey)
                 .modelName(modelName)
@@ -159,7 +159,7 @@ public class AiModelConfig {
 
     @Bean
     public StreamingChatLanguageModel streamingChatModel() {
-        log.info("鍒濆鍖?StreamingChatModel: {}", streamingModelName);
+        log.info("Initialized StreamingChatModel, model={}", streamingModelName);
         return OpenAiStreamingChatModel.builder()
                 .apiKey(streamingApiKey)
                 .modelName(streamingModelName)
@@ -174,7 +174,7 @@ public class AiModelConfig {
 
     @Bean
     public EmbeddingModel embeddingModel() {
-        log.info("鍒濆鍖?EmbeddingModel: {}", embeddingModelName);
+        log.info("Initialized EmbeddingModel, model={}", embeddingModelName);
         return OpenAiEmbeddingModel.builder()
                 .apiKey(embeddingApiKey)
                 .modelName(embeddingModelName)
@@ -193,10 +193,10 @@ public class AiModelConfig {
 
 
     /**
-     * 鍒涘缓 Redis 鍚戦噺瀛樺偍銆傚钩鍙版斂绛?FAQ 涓庡簵閾鸿瘎璁轰娇鐢ㄧ嫭绔嬬储寮曪紝閬垮厤涓嶅悓 RAG 鍦烘櫙鐩镐簰姹℃煋銆?
+     * Creates a Redis embedding store. Platform policy and shop review use separate indexes.
      */
     private RedisEmbeddingStore buildRedisEmbeddingStore(String indexName, int dimension) {
-        log.info("鍒涘缓 RedisEmbeddingStore - RAG瀛樺偍 - 涓绘満: {}, 绔彛: {}, 绱㈠紩: {}, 缁村害: {}",
+        log.info("Creating RedisEmbeddingStore, host={}, port={}, index={}, dimension={}",
                 redisHost, redisPort, indexName, dimension);
 
         RedisEmbeddingStore store = RedisEmbeddingStore.builder()
@@ -205,7 +205,7 @@ public class AiModelConfig {
                 .indexName(indexName)
                 .dimension(dimension)
                 .build();
-        log.info("RedisEmbeddingStore 鍒涘缓瀹屾垚, index={}", indexName);
+        log.info("RedisEmbeddingStore ready, index={}", indexName);
         return store;
     }
 
@@ -213,7 +213,7 @@ public class AiModelConfig {
     @org.springframework.context.annotation.Profile({"local", "dev", "test"})
     @ConditionalOnProperty(value = "rag.enabled", havingValue = "true", matchIfMissing = false)
     public InMemoryEmbeddingStore<TextSegment> platformPolicyInMemoryEmbeddingStore() {
-        log.info("鍒濆鍖栧钩鍙版斂绛?InMemoryEmbeddingStore - 鍐呭瓨鍥為€€");
+        log.info("Initialized platform policy in-memory embedding store");
         return new InMemoryEmbeddingStore<>();
     }
 
@@ -221,7 +221,7 @@ public class AiModelConfig {
     @org.springframework.context.annotation.Profile({"local", "dev", "test"})
     @ConditionalOnProperty(value = "rag.enabled", havingValue = "true", matchIfMissing = false)
     public InMemoryEmbeddingStore<TextSegment> shopReviewInMemoryEmbeddingStore() {
-        log.info("鍒濆鍖栧簵閾鸿瘎璁?InMemoryEmbeddingStore - 鍐呭瓨鍥為€€");
+        log.info("Initialized shop review in-memory embedding store");
         return new InMemoryEmbeddingStore<>();
     }
 
@@ -229,7 +229,7 @@ public class AiModelConfig {
     @ConditionalOnProperty(value = "rag.enabled", havingValue = "true")
     public EmbeddingStore<TextSegment> platformPolicyEmbeddingStore() {
 
-        log.info("鍒濆鍖栧钩鍙版斂绛栧悜閲忓瓨鍌?..");
+        log.info("Initializing platform policy embedding store");
         try {
             RedisEmbeddingStore redisEmbeddingStore = buildRedisEmbeddingStore(platformPolicyIndexName, platformPolicyDimension);
             log.info("Platform policy bootstrap is managed by KnowledgeBootstrapRunner");
@@ -244,7 +244,7 @@ public class AiModelConfig {
     @ConditionalOnProperty(value = "rag.enabled", havingValue = "true")
     public EmbeddingStore<TextSegment> shopReviewEmbeddingStore() {
 
-        log.info("鍒濆鍖栧簵閾鸿瘎璁哄悜閲忓瓨鍌?..");
+        log.info("Initializing shop review embedding store");
         try {
             return buildRedisEmbeddingStore(reviewIndexName, reviewDimension);
         } catch (Exception e) {
@@ -262,7 +262,7 @@ public class AiModelConfig {
             DocumentQualityAssessor documentQualityAssessor,
             PlatformPolicyDocumentPort platformPolicyDocumentPort) {
 
-        log.info("鍒濆鍖栧钩鍙版斂绛?ContentRetriever锛屾渶灏忓垎鏁? 0.5, 鏈€澶х粨鏋滄暟: 5");
+        log.info("Initialized platform policy ContentRetriever, minScore=0.5, maxResults=5");
         ContentRetriever delegate = QualityBasedContentRetriever.builder()
                 .embeddingStore(platformPolicyEmbeddingStore)
                 .embeddingModel(embeddingModel)
@@ -276,7 +276,7 @@ public class AiModelConfig {
     @Bean("platformPolicyContentRetriever")
     @ConditionalOnProperty(value = "rag.enabled", havingValue = "false", matchIfMissing = true)
     public ContentRetriever noopPlatformPolicyContentRetriever() {
-        log.info("rag.enabled=false, 浣跨敤绌哄钩鍙版斂绛?ContentRetriever");
+        log.info("rag.enabled=false, using empty platform policy ContentRetriever");
         return query -> Collections.emptyList();
     }
 

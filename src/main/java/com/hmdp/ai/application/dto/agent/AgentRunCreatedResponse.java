@@ -1,6 +1,7 @@
 package com.hmdp.ai.application.dto.agent;
 
 import com.hmdp.ai.domain.run.RunStatus;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 
 public final class AgentRunCreatedResponse {
     private final String runId;
@@ -27,6 +28,7 @@ public final class AgentRunCreatedResponse {
     public RunStatus getStatus() { return status; }
     public String getAgentDefinitionId() { return agentDefinitionId; }
     public String getAgentCode() { return agentCode; }
+    @JsonIgnore
     public String getAgentId() { return agentDefinitionId; }
     public int getAgentVersion() { return agentVersion; }
 }

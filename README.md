@@ -42,13 +42,13 @@ Model calls require published `ai_model_profile` records whose `secret_ref` poin
 
 ## Primary API flow
 
-All `/api/v1/**` calls require a Sa-Token login plus `X-Tenant-Id` and `X-Workspace-Id` headers.
+All `/api/v1/**` calls require `Authorization: Bearer <token>` plus `X-Tenant-Id` and `X-Workspace-Id` headers.
 
 Create an Agent definition (management permission required):
 
 ```bash
 curl -X POST "$BASE_URL/api/v1/agents" \
-  -H "satoken: $TOKEN" -H "X-Tenant-Id: $TENANT_ID" -H "X-Workspace-Id: $WORKSPACE_ID" \
+  -H "Authorization: Bearer $TOKEN" -H "X-Tenant-Id: $TENANT_ID" -H "X-Workspace-Id: $WORKSPACE_ID" \
   -H 'Content-Type: application/json' \
   -d '{"code":"support-agent","name":"Support Agent","description":"Tenant support workflow"}'
 ```
@@ -57,7 +57,7 @@ Create an Agent run:
 
 ```bash
 curl -X POST "$BASE_URL/api/v1/agent-runs" \
-  -H "satoken: $TOKEN" \
+  -H "Authorization: Bearer $TOKEN" \
   -H "X-Tenant-Id: $TENANT_ID" \
   -H "X-Workspace-Id: $WORKSPACE_ID" \
   -H 'Content-Type: application/json' \
@@ -68,17 +68,17 @@ Watch SSE events:
 
 ```bash
 curl -N "$BASE_URL/api/v1/agent-runs/$RUN_ID/events" \
-  -H "satoken: $TOKEN" -H "X-Tenant-Id: $TENANT_ID" -H "X-Workspace-Id: $WORKSPACE_ID"
+  -H "Authorization: Bearer $TOKEN" -H "X-Tenant-Id: $TENANT_ID" -H "X-Workspace-Id: $WORKSPACE_ID"
 ```
 
 Create a knowledge base and upload a document:
 
 ```bash
-curl -X POST "$BASE_URL/api/v1/knowledge-bases" -H "satoken: $TOKEN" \
+curl -X POST "$BASE_URL/api/v1/knowledge-bases" -H "Authorization: Bearer $TOKEN" \
   -H "X-Tenant-Id: $TENANT_ID" -H "X-Workspace-Id: $WORKSPACE_ID" \
   -H 'Content-Type: application/json' -d '{"code":"shop-enterprise-knowledge","name":"Shop enterprise knowledge","description":"Policies and operating knowledge"}'
 
-curl -X POST "$BASE_URL/api/v1/knowledge-bases/$KB_ID/documents" -H "satoken: $TOKEN" \
+curl -X POST "$BASE_URL/api/v1/knowledge-bases/$KB_ID/documents" -H "Authorization: Bearer $TOKEN" \
   -H "X-Tenant-Id: $TENANT_ID" -H "X-Workspace-Id: $WORKSPACE_ID" \
   -F 'file=@docs/example.pdf'
 ```
