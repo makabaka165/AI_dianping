@@ -1,3 +1,55 @@
 package com.hmdp.ai.runtime.node;
-import com.fasterxml.jackson.databind.*;import com.fasterxml.jackson.databind.node.*;import com.hmdp.ai.domain.workflow.WorkflowNodeType;import org.springframework.stereotype.Component;import java.util.*;import java.util.regex.*;
-@Component public class IntentNodeExecutor implements NodeExecutor {private final ObjectMapper mapper;public IntentNodeExecutor(ObjectMapper m){mapper=m;}public Set<WorkflowNodeType>supportedTypes(){return EnumSet.of(WorkflowNodeType.INTENT_CLASSIFY,WorkflowNodeType.ENTITY_EXTRACT);}public NodeExecutionResult execute(NodeExecutionContext c){String text=String.valueOf(c.getVariables().getOrDefault("text","")).toLowerCase();if(c.getNode().getType()==WorkflowNodeType.INTENT_CLASSIFY){String intent=classify(text);return NodeExecutionResult.success(new TextNode(intent),null,Collections.singletonMap("intent",intent));}List<Long>ids=new ArrayList<>();Matcher m=Pattern.compile("(?<!\\d)(\\d{1,12})(?!\\d)").matcher(text);while(m.find()&&ids.size()<10){long id=Long.parseLong(m.group(1));if(id>0&&!ids.contains(id))ids.add(id);}ObjectNode out=mapper.createObjectNode();out.set("shopIds",mapper.valueToTree(ids));Map<String,Object>u=new LinkedHashMap<>();u.put("shopIds",ids);if(ids.size()==1)u.put("shopId",ids.get(0));return NodeExecutionResult.success(out,null,u);}private String classify(String t){if(t.matches(".*(对比|比较|compare|区别).*"))return "SHOP_COMPARE";if(t.matches(".*(推荐|recommend|适合).*"))return "SHOP_RECOMMEND";if(t.matches(".*(总结|概括|summary|评价如何).*"))return "SHOP_SUMMARY";if(t.matches(".*(知识|制度|文档|knowledge).*"))return "KNOWLEDGE_QUERY";if(t.matches(".*(店|shop|评价|服务|价格|环境).*"))return "SHOP_QA";return "UNKNOWN";}}
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.hmdp.ai.domain.workflow.WorkflowNodeType;
+import com.hmdp.ai.runtime.intent.EntityExtractionService;
+import com.hmdp.ai.runtime.intent.IntentClassification;
+import com.hmdp.ai.runtime.intent.IntentFusionService;
+import org.springframework.stereotype.Component;
+
+import java.util.Collections;
+import java.util.EnumSet;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.Set;
+
+@Component
+public class IntentNodeExecutor implements NodeExecutor {
+    private final ObjectMapper mapper;
+    private final EntityExtractionService entities;
+    private final IntentFusionService fusion;
+
+    public IntentNodeExecutor(ObjectMapper mapper, EntityExtractionService entities, IntentFusionService fusion) {
+        this.mapper = mapper;
+        this.entities = entities;
+        this.fusion = fusion;
+    }
+
+    @Override
+    public Set<WorkflowNodeType> supportedTypes() {
+        return EnumSet.of(WorkflowNodeType.INTENT_CLASSIFY, WorkflowNodeType.ENTITY_EXTRACT);
+    }
+
+    @Override
+    public NodeExecutionResult execute(NodeExecutionContext context) {
+        String text = String.valueOf(context.getVariables().getOrDefault("text", ""));
+        Map<String, Object> extracted = entities.extract(text, context.getVariables());
+        if (context.getNode().getType() == WorkflowNodeType.ENTITY_EXTRACT) {
+            Map<String, Object> updates = new LinkedHashMap<>(extracted);
+            updates.put("entities", extracted);
+            return NodeExecutionResult.success(mapper.valueToTree(extracted), null, updates);
+        }
+
+        IntentClassification classification = fusion.classify(text, extracted, context);
+        Map<String, Object> updates = new LinkedHashMap<>();
+        updates.put("intent", classification.getPrimaryIntent());
+        updates.put("primaryIntent", classification.getPrimaryIntent());
+        updates.put("secondaryIntents", classification.getSecondaryIntents());
+        updates.put("intentConfidence", classification.getConfidence());
+        updates.put("entities", classification.getEntities());
+        updates.put("missingSlots", classification.getMissingSlots());
+        updates.put("requiresClarification", classification.isRequiresClarification());
+        updates.putAll(classification.getEntities());
+        return NodeExecutionResult.success(mapper.valueToTree(classification), null, updates);
+    }
+}
