@@ -542,6 +542,19 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
     }
 
     @Override
+    public boolean isDocumentBoundToImmutableVersion(String tenant, String workspace, String documentId) {
+        Integer count = jdbc.queryForObject(
+                "select count(1) from ai_document_chunk c "
+                        + "join ai_knowledge_base_version v on v.tenant_id=c.tenant_id "
+                        + "and v.workspace_id=c.workspace_id and v.knowledge_base_id=c.knowledge_base_id "
+                        + "and v.version=c.knowledge_base_version and v.deleted=0 "
+                        + "where c.tenant_id=? and c.workspace_id=? and c.document_id=? "
+                        + "and c.deleted=0 and v.status in ('PUBLISHED','ARCHIVED')",
+                Integer.class, tenant, workspace, documentId);
+        return count != null && count > 0;
+    }
+
+    @Override
     public List<String> findChunkIds(String tenant, String workspace, String documentId) {
         return jdbc.query("select id from ai_document_chunk where tenant_id=? and workspace_id=? " +
                         "and document_id=? and deleted=0", (rs, row) -> rs.getString(1),

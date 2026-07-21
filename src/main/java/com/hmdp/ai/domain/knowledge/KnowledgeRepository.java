@@ -62,6 +62,7 @@ public interface KnowledgeRepository {
     void publishIngestion(String jobId, String documentVersionId, String documentId, String actorId);
     List<KnowledgeChunk> findChunksByIds(String tenantId, String workspaceId, List<String> chunkIds);
     boolean deleteDocument(String tenantId, String workspaceId, String documentId, String actorId);
+    boolean isDocumentBoundToImmutableVersion(String tenantId, String workspaceId, String documentId);
     List<String> findChunkIds(String tenantId, String workspaceId, String documentId);
 
     final class UploadRegistration {

@@ -126,9 +126,6 @@ public class KnowledgeIngestionApplicationService {
     @Transactional
     public KnowledgeBaseVersionResponse publishVersion(String knowledgeBaseId, int version) {
         AiSecurityContext context = access.require(AiPermission.KNOWLEDGE_PUBLISH);
-        KnowledgeBaseVersion draft = repository.findVersionNumber(context.getTenant().getTenantId(),
-                        context.getWorkspace().getWorkspaceId(), knowledgeBaseId, version)
-                .orElseThrow(() -> new IllegalArgumentException("knowledge version not found"));
         KnowledgeBaseVersion ready = repository.findVersionNumber(context.getTenant().getTenantId(),
                         context.getWorkspace().getWorkspaceId(), knowledgeBaseId, version)
                 .orElseThrow(() -> new IllegalArgumentException("knowledge version not found"));
@@ -231,6 +228,10 @@ public class KnowledgeIngestionApplicationService {
     @Transactional
     public void deleteDocument(String documentId) {
         AiSecurityContext context = access.require(AiPermission.KNOWLEDGE_WRITE);
+        if (repository.isDocumentBoundToImmutableVersion(context.getTenant().getTenantId(),
+                context.getWorkspace().getWorkspaceId(), documentId)) {
+            throw new IllegalArgumentException("PUBLISHED_KNOWLEDGE_VERSION_IMMUTABLE");
+        }
         List<String> ids = repository.findChunkIds(context.getTenant().getTenantId(),
                 context.getWorkspace().getWorkspaceId(), documentId);
         List<KnowledgeChunk> chunks = repository.findChunksByIds(context.getTenant().getTenantId(),
@@ -295,9 +296,7 @@ public class KnowledgeIngestionApplicationService {
     private KnowledgeBaseVersion resolveIngestionVersion(AiSecurityContext context, String knowledgeBaseId,
                                                          Integer version) {
         if (version == null) {
-            return repository.findPublishedVersion(context.getTenant().getTenantId(),
-                            context.getWorkspace().getWorkspaceId(), knowledgeBaseId, null)
-                    .orElseThrow(() -> new IllegalArgumentException("published knowledge base version not found"));
+            throw new IllegalArgumentException("KNOWLEDGE_DRAFT_VERSION_REQUIRED");
         }
         KnowledgeBaseVersion target = repository.findVersionNumber(context.getTenant().getTenantId(),
                         context.getWorkspace().getWorkspaceId(), knowledgeBaseId, version)
