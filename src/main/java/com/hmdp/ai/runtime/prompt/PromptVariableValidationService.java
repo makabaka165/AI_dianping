@@ -48,7 +48,7 @@ public class PromptVariableValidationService {
     }
 
     private AiPlatformException missing(String name) {
-        return new AiPlatformException(ErrorCode.AI_INPUT_SCHEMA_INVALID,
+        return new AiPlatformException(ErrorCode.PROMPT_VARIABLE_MISSING,
                 "PROMPT_VARIABLE_MISSING: " + name);
     }
 }

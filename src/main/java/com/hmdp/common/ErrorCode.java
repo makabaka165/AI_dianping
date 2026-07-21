@@ -24,6 +24,7 @@ public enum ErrorCode {
     AI_RUN_NOT_RETRYABLE(40952, "AI run cannot be retried"),
     AI_PUBLISH_VALIDATION_FAILED(42250, "AI publish validation failed"),
     AI_INPUT_SCHEMA_INVALID(42251, "Agent input does not match its schema"),
+    PROMPT_VARIABLE_MISSING(42253, "Required prompt variable is missing"),
     AI_OUTPUT_SCHEMA_INVALID(50050, "Agent output does not match its schema"),
     AI_MODEL_CAPABILITY_MISMATCH(42252, "Model capability does not match the input"),
     AI_PROVIDER_NOT_CONFIGURED(50350, "AI provider is not configured"),

@@ -57,7 +57,7 @@ public class PromptRenderer {
             String name = matcher.group(1) == null ? matcher.group(2) : matcher.group(1);
             Object value = resolver.resolve(name, context);
             if (value == null) throw new com.hmdp.ai.shared.exception.AiPlatformException(
-                    com.hmdp.common.ErrorCode.AI_INPUT_SCHEMA_INVALID, "PROMPT_VARIABLE_MISSING: " + name);
+                    com.hmdp.common.ErrorCode.PROMPT_VARIABLE_MISSING, "PROMPT_VARIABLE_MISSING: " + name);
             String replacement = String.valueOf(value).replace("env:", "[REDACTED_REF]:");
             matcher.appendReplacement(result, Matcher.quoteReplacement(replacement));
         }
