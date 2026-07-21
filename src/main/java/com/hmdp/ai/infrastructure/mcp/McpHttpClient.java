@@ -26,6 +26,7 @@ public final class McpHttpClient {
     private final SecretResolutionService secrets;
     private final ObjectMapper mapper;
     private volatile boolean initialized;
+    private volatile boolean ready;
     private volatile String sessionId;
 
     McpHttpClient(SafeHttpClient http, SecretResolutionService secrets, ObjectMapper mapper) {
@@ -39,7 +40,8 @@ public final class McpHttpClient {
     }
 
     public synchronized JsonNode initialize(McpServer server, String runId) {
-        if (initialized) return mapper.createObjectNode().put("initialized", true);
+        if (initialized) return mapper.createObjectNode().put("initialized", true)
+                .put("ready", ready);
         ObjectNode params = mapper.createObjectNode().put("protocolVersion", "2025-03-26");
         params.set("capabilities", mapper.createObjectNode());
         params.set("clientInfo", mapper.createObjectNode().put("name", "hmdp-agent-platform").put("version", "1"));
@@ -53,7 +55,20 @@ public final class McpHttpClient {
     }
 
     public JsonNode initialized(McpServer server, String runId) {
-        return call(server, "notifications/initialized", mapper.createObjectNode(), runId, true);
+        synchronized (this) {
+            if (ready) return mapper.createObjectNode().put("ready", true);
+            if (!initialized) initialize(server, runId);
+            try {
+                JsonNode result = call(server, "notifications/initialized", mapper.createObjectNode(), runId, true);
+                ready = true;
+                return result;
+            } catch (RuntimeException error) {
+                initialized = false;
+                ready = false;
+                sessionId = null;
+                throw error;
+            }
+        }
     }
 
     public List<McpToolDescriptor> tools(McpServer server) {
@@ -90,7 +105,7 @@ public final class McpHttpClient {
     }
 
     private synchronized void ensureInitialized(McpServer server, String runId) {
-        if (!initialized) {
+        if (!ready) {
             initialize(server, runId);
             initialized(server, runId);
         }
