@@ -121,9 +121,18 @@ public class LlmNodeExecutor implements NodeExecutor {
     String outputVariable = configuration.path("outputVariable").asText("agentOutput");
     Map<String, Object> updates = new LinkedHashMap<>();
     updates.put("agentOutput", output);
-    updates.put(outputVariable, output);
-    if (!"agentOutput".equals(outputVariable)) updates.put("agentOutput", output);
+    if (!"agentOutput".equals(outputVariable)) {
+      updates.put(outputVariable, workflowValue(result));
+    }
     return NodeExecutionResult.success(mapper.valueToTree(output), null, updates);
+  }
+
+  private Object workflowValue(ModelInvocationResult result) {
+    JsonNode structured = result.getStructuredOutput();
+    if (structured != null && !structured.isNull()) {
+      return mapper.convertValue(structured, Object.class);
+    }
+    return result.getContent();
   }
 
   private PromptVersion prompt(NodeExecutionContext context, JsonNode configuration) {

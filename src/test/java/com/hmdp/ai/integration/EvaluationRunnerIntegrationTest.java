@@ -208,7 +208,7 @@ class EvaluationRunnerIntegrationTest {
         PromptVersion prompt = new PromptVersion("prompt-version", "tenant", "workspace", "prompt", 4,
                 "You are a deterministic evaluator.", "Answer {{text}}", null, null, null,
                 "{\"type\":\"object\",\"required\":[\"text\"]}", "{\"type\":\"object\"}",
-                "{\"type\":\"object\"}", "[]", VersionStatus.PUBLISHED, "prompt-hash", "published",
+                "{\"type\":\"string\"}", "[]", VersionStatus.PUBLISHED, "prompt-hash", "published",
                 now, "publisher", now);
         com.hmdp.ai.domain.run.VersionSnapshot snapshot = new com.hmdp.ai.domain.run.VersionSnapshot(
                 "agent-id", 3, "prompt", 4, "workflow", 2, "model-profile", modelVersion.getId(),

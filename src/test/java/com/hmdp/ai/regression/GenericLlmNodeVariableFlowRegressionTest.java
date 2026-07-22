@@ -67,7 +67,9 @@ class GenericLlmNodeVariableFlowRegressionTest {
     assertThat(captured.get().getModelProfileVersionId()).isEqualTo("model-version-2");
     assertThat(captured.get().getUserPrompt())
         .contains("What is the service quality?", "shopId=7");
-    assertThat(result.getVariableUpdates()).containsKeys("firstAnswer", "agentOutput");
+    assertThat(result.getVariableUpdates())
+        .containsEntry("firstAnswer", "service is reliable")
+        .containsKey("agentOutput");
   }
 
   private PromptRenderer renderer() {
