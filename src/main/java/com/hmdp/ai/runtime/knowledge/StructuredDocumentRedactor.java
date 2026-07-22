@@ -2,6 +2,7 @@ package com.hmdp.ai.runtime.knowledge;
 
 import com.hmdp.ai.domain.knowledge.parsing.ParsedCell;
 import com.hmdp.ai.domain.knowledge.parsing.ParsedDocument;
+import com.hmdp.ai.domain.knowledge.parsing.ParseWarning;
 import com.hmdp.ai.domain.knowledge.parsing.ParsedSection;
 import com.hmdp.ai.domain.knowledge.parsing.ParsedTable;
 import org.springframework.stereotype.Component;
@@ -28,8 +29,11 @@ public class StructuredDocumentRedactor {
         List<ParsedTable> tables = document.getTables().stream()
                 .map(this::redactTable)
                 .collect(Collectors.toList());
+        List<ParseWarning> warnings = document.getWarnings().stream()
+                .map(warning -> new ParseWarning(warning.getCode(), redactText(warning.getMessage())))
+                .collect(Collectors.toList());
         return new ParsedDocument(redactText(document.getTitle()), document.getMimeType(), sections, tables,
-                document.getWarnings());
+                warnings);
     }
 
     private ParsedSection redactSection(ParsedSection section) {

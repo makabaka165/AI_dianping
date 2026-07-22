@@ -217,9 +217,7 @@ public class DefaultAgentRuntime implements AgentRuntime {
     private void revalidate(AgentRunRecord run) {
         if (!authorization.authorize(run.getUserId(), run.getTenantId(), run.getWorkspaceId())
                 .has(AiPermission.AGENT_RUN)) {
-            runs.fail(run.getTenantId(), run.getWorkspaceId(), run.getId(),
-                    "PERMISSION_REVOKED", "agent run permission was revoked", RunStatus.FAILED);
-            throw new AiPlatformException(ErrorCode.FORBIDDEN, "agent run permission was revoked");
+            throw new PermissionRevokedException();
         }
     }
 
@@ -257,6 +255,9 @@ public class DefaultAgentRuntime implements AgentRuntime {
     }
 
     private String errorCode(Exception error) {
+        if (error instanceof PermissionRevokedException) {
+            return "PERMISSION_REVOKED";
+        }
         if (error instanceof AiPlatformException) {
             return ((AiPlatformException) error).getErrorCode().name();
         }
@@ -264,6 +265,12 @@ public class DefaultAgentRuntime implements AgentRuntime {
             return "AGENT_EXECUTION_TIMEOUT";
         }
         return ErrorCode.AI_EXECUTION_FAILED.name();
+    }
+
+    private static final class PermissionRevokedException extends RuntimeException {
+        private PermissionRevokedException() {
+            super("agent run permission was revoked");
+        }
     }
 
     private void notifyCompletion(AgentRunRecord run,String outputJson){for(RunCompletionObserver observer:completionObservers){

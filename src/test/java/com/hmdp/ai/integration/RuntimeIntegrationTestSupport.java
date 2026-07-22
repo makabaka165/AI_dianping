@@ -84,6 +84,12 @@ final class RuntimeIntegrationTestSupport {
 
     static WorkflowHarness workflowHarness(PromptRepository prompts, ModelProfileVersion model,
                                            Function<ModelInvocation, ModelInvocationResult> modelOperation) {
+        return workflowHarness(prompts, model, modelOperation, new NodeExecutor[0]);
+    }
+
+    static WorkflowHarness workflowHarness(PromptRepository prompts, ModelProfileVersion model,
+                                           Function<ModelInvocation, ModelInvocationResult> modelOperation,
+                                           NodeExecutor... additionalExecutors) {
         FixedModelProfileVersionRepository profiles = new FixedModelProfileVersionRepository(model);
         RecordingModelCallRecorder modelCalls = new RecordingModelCallRecorder();
         ModelClientFactory clientFactory = new ModelClientFactory(null, MAPPER) {
@@ -104,16 +110,25 @@ final class RuntimeIntegrationTestSupport {
         AgentOutputValidator outputValidator = new AgentOutputValidator(MAPPER, schemas);
         Set<WorkflowNodeType> realTypes = EnumSet.of(WorkflowNodeType.START, WorkflowNodeType.LLM,
                 WorkflowNodeType.OUTPUT_VALIDATION, WorkflowNodeType.END);
-        WorkflowNodeRegistry registry = new WorkflowNodeRegistry(java.util.Arrays.asList(
-                new StartNodeExecutor(MAPPER), llm, new OutputNodeExecutor(outputValidator, MAPPER),
-                new EndNodeExecutor(MAPPER), new PassThroughNodeExecutor(realTypes)));
+        List<NodeExecutor> executors = new ArrayList<>();
+        executors.add(new StartNodeExecutor(MAPPER));
+        executors.add(llm);
+        executors.add(new OutputNodeExecutor(outputValidator, MAPPER));
+        executors.add(new EndNodeExecutor(MAPPER));
+        for (NodeExecutor executor : additionalExecutors) {
+            realTypes.addAll(executor.supportedTypes());
+            executors.add(executor);
+        }
+        executors.add(new PassThroughNodeExecutor(realTypes));
+        WorkflowNodeRegistry registry = new WorkflowNodeRegistry(executors);
         RecordingNodeRunRepository nodeRuns = new RecordingNodeRunRepository();
         RecordingWorkflowStateRepository states = new RecordingWorkflowStateRepository();
+        RecordingRunRepository pauseRuns = new RecordingRunRepository();
         ThreadPoolTaskExecutor executor = executor("workflow-integration-");
-        WorkflowPauseCoordinator pauses = new WorkflowPauseCoordinator(states, new RecordingRunRepository());
+        WorkflowPauseCoordinator pauses = new WorkflowPauseCoordinator(states, pauseRuns);
         DefaultWorkflowRuntime runtime = new DefaultWorkflowRuntime(registry, nodeRuns, states, MAPPER,
                 executor, new ConditionDslEvaluator(MAPPER), new ContentHashService(MAPPER), pauses);
-        return new WorkflowHarness(runtime, nodeRuns, states, modelCalls, outputValidator, executor);
+        return new WorkflowHarness(runtime, nodeRuns, states, pauseRuns, modelCalls, outputValidator, executor);
     }
 
     static ModelProfileVersion modelProfileVersion() {
@@ -146,10 +161,10 @@ final class RuntimeIntegrationTestSupport {
                 prompt.getId(), workflowVersionId, "{}", "{\"type\":\"object\"}", outputSchema,
                 "{\"maxWorkflowNodes\":64,\"maxRunDurationSeconds\":120}", "{}",
                 VersionStatus.PUBLISHED, "agent-content-hash", "published", now, "publisher", now);
-        VersionSnapshot snapshot = new VersionSnapshot(definition.getId(), version.getVersion(),
-                prompt.getPromptId(), prompt.getVersion(), "workflow", 1, "model-profile", model.getId(),
-                model.getVersion(), model.getContentHash(), Collections.emptyMap(), Collections.emptyMap(),
-                Collections.emptyMap());
+        VersionSnapshot snapshot = new VersionSnapshot(definition.getId(), definition.getCode(),
+                version.getVersion(), prompt.getPromptId(), prompt.getVersion(), "workflow", 1,
+                "model-profile", model.getId(), model.getVersion(), model.getContentHash(),
+                Collections.emptyMap(), Collections.emptyMap(), Collections.emptyMap());
         return new PublishedAgentDefinition(definition, version, null, model, prompt, "workflow", 1,
                 "PUBLISHED", Collections.emptyList(), Collections.emptyList(), snapshot);
     }
@@ -183,18 +198,21 @@ final class RuntimeIntegrationTestSupport {
         final DefaultWorkflowRuntime runtime;
         final RecordingNodeRunRepository nodeRuns;
         final RecordingWorkflowStateRepository states;
+        final RecordingRunRepository runs;
         final RecordingModelCallRecorder modelCalls;
         final AgentOutputValidator outputValidator;
         private final ThreadPoolTaskExecutor executor;
 
         private WorkflowHarness(DefaultWorkflowRuntime runtime, RecordingNodeRunRepository nodeRuns,
                                 RecordingWorkflowStateRepository states,
+                                RecordingRunRepository runs,
                                 RecordingModelCallRecorder modelCalls,
                                 AgentOutputValidator outputValidator,
                                 ThreadPoolTaskExecutor executor) {
             this.runtime = runtime;
             this.nodeRuns = nodeRuns;
             this.states = states;
+            this.runs = runs;
             this.modelCalls = modelCalls;
             this.outputValidator = outputValidator;
             this.executor = executor;
@@ -341,6 +359,8 @@ final class RuntimeIntegrationTestSupport {
 
     static final class RecordingWorkflowStateRepository implements WorkflowStateRepository {
         private final Map<String, WorkflowState> states = new ConcurrentHashMap<>();
+        private final Map<String, String> resumeTokenHashes = new ConcurrentHashMap<>();
+        private final Map<String, Instant> resumeExpiresAt = new ConcurrentHashMap<>();
 
         @Override
         public Optional<WorkflowState> find(String tenantId, String workspaceId, String runId) {
@@ -370,6 +390,8 @@ final class RuntimeIntegrationTestSupport {
                     state.getCompletedNodeKeys(), state.getExecutionCounts(), waitingNodeCode,
                     waitingStatus, expiresAt);
             states.put(state.getRunId(), stored);
+            resumeTokenHashes.put(state.getRunId(), resumeTokenHash);
+            resumeExpiresAt.put(state.getRunId(), expiresAt);
             return stored;
         }
 
@@ -377,12 +399,16 @@ final class RuntimeIntegrationTestSupport {
         public boolean resume(String tenantId, String workspaceId, String runId, String resumeTokenHash,
                               Map<String, Object> resumeVariables, String actorId) {
             WorkflowState current = states.get(runId);
-            if (current == null) return false;
+            Instant expiresAt = resumeExpiresAt.get(runId);
+            if (current == null || !resumeTokenHash.equals(resumeTokenHashes.get(runId))
+                    || expiresAt == null || !expiresAt.isAfter(Instant.now())) return false;
             Map<String, Object> variables = new LinkedHashMap<>(current.getVariables());
             variables.putAll(resumeVariables);
             states.put(runId, copy(current, current.getCurrentNodeCodes(), variables,
                     current.getCompletedNodeKeys(), current.getExecutionCounts(), null,
                     WorkflowStateStatus.RUNNING, null));
+            resumeTokenHashes.remove(runId);
+            resumeExpiresAt.remove(runId);
             return true;
         }
 
@@ -392,6 +418,8 @@ final class RuntimeIntegrationTestSupport {
             states.put(runId, copy(current, Collections.emptyList(), current.getVariables(),
                     current.getCompletedNodeKeys(), current.getExecutionCounts(), null,
                     WorkflowStateStatus.COMPLETED, null));
+            resumeTokenHashes.remove(runId);
+            resumeExpiresAt.remove(runId);
         }
 
         @Override
@@ -416,6 +444,8 @@ final class RuntimeIntegrationTestSupport {
     static final class RecordingRunRepository implements RunRepository {
         private final Map<String, AgentRunRecord> runs = new ConcurrentHashMap<>();
         private final Map<String, List<RunEvent>> events = new ConcurrentHashMap<>();
+        private final Map<String, String> resumeTokenHashes = new ConcurrentHashMap<>();
+        private final Map<String, Instant> resumeExpiresAt = new ConcurrentHashMap<>();
         private final CountDownLatch terminal = new CountDownLatch(1);
 
         @Override
@@ -472,6 +502,8 @@ final class RuntimeIntegrationTestSupport {
             AgentRunRecord current = find(tenantId, workspaceId, runId).orElse(null);
             if (current == null || current.getStatus().isTerminal()) return false;
             runs.put(runId, copy(current, waitingStatus, current.getOutputJson(), null, null));
+            resumeTokenHashes.put(runId, resumeTokenHash);
+            resumeExpiresAt.put(runId, expiresAt);
             return true;
         }
 
@@ -480,8 +512,12 @@ final class RuntimeIntegrationTestSupport {
                                      String resumeDataJson, String actorId) {
             AgentRunRecord current = find(tenantId, workspaceId, runId).orElse(null);
             if (current == null || (current.getStatus() != RunStatus.WAITING_FOR_USER
-                    && current.getStatus() != RunStatus.WAITING_FOR_APPROVAL)) return false;
+                    && current.getStatus() != RunStatus.WAITING_FOR_APPROVAL)
+                    || !resumeTokenHash.equals(resumeTokenHashes.get(runId))
+                    || !resumeExpiresAt.getOrDefault(runId, Instant.EPOCH).isAfter(Instant.now())) return false;
             runs.put(runId, copy(current, RunStatus.QUEUED, current.getOutputJson(), null, null));
+            resumeTokenHashes.remove(runId);
+            resumeExpiresAt.remove(runId);
             return true;
         }
 
