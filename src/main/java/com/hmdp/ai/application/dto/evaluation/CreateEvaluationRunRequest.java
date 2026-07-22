@@ -3,6 +3,7 @@ package com.hmdp.ai.application.dto.evaluation;
 import javax.validation.Valid;
 import javax.validation.constraints.Min;
 import javax.validation.constraints.NotBlank;
+import javax.validation.constraints.Pattern;
 import javax.validation.constraints.Size;
 
 public class CreateEvaluationRunRequest {
@@ -12,6 +13,7 @@ public class CreateEvaluationRunRequest {
 
     @NotBlank
     @Size(max = 32)
+    @Pattern(regexp = "AGENT|WORKFLOW|PROMPT|RAG|TOOL")
     private String targetType;
 
     @NotBlank
