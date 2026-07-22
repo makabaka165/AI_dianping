@@ -4,7 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 
 import java.math.BigDecimal;
 
-final class EvaluationTargetOutput {
+public final class EvaluationTargetOutput {
     private final JsonNode actual;
     private final long inputTokens;
     private final long outputTokens;
@@ -29,25 +29,25 @@ final class EvaluationTargetOutput {
         this.errorMessage = errorMessage;
     }
 
-    static EvaluationTargetOutput success(JsonNode actual, long inputTokens, long outputTokens,
-                                          int modelCalls, int toolCalls, BigDecimal cost) {
+    public static EvaluationTargetOutput success(JsonNode actual, long inputTokens, long outputTokens,
+                                                 int modelCalls, int toolCalls, BigDecimal cost) {
         return new EvaluationTargetOutput(actual, inputTokens, outputTokens, modelCalls, toolCalls,
                 cost, true, null, null);
     }
 
-    static EvaluationTargetOutput failure(JsonNode actual, int toolCalls,
-                                          String errorCode, String errorMessage) {
+    public static EvaluationTargetOutput failure(JsonNode actual, int toolCalls,
+                                                 String errorCode, String errorMessage) {
         return new EvaluationTargetOutput(actual, 0, 0, 0, toolCalls, BigDecimal.ZERO,
                 false, errorCode, errorMessage);
     }
 
-    JsonNode getActual() { return actual; }
-    long getInputTokens() { return inputTokens; }
-    long getOutputTokens() { return outputTokens; }
-    int getModelCalls() { return modelCalls; }
-    int getToolCalls() { return toolCalls; }
-    BigDecimal getCost() { return cost; }
-    boolean isSuccess() { return success; }
-    String getErrorCode() { return errorCode; }
-    String getErrorMessage() { return errorMessage; }
+    public JsonNode getActual() { return actual; }
+    public long getInputTokens() { return inputTokens; }
+    public long getOutputTokens() { return outputTokens; }
+    public int getModelCalls() { return modelCalls; }
+    public int getToolCalls() { return toolCalls; }
+    public BigDecimal getCost() { return cost; }
+    public boolean isSuccess() { return success; }
+    public String getErrorCode() { return errorCode; }
+    public String getErrorMessage() { return errorMessage; }
 }
