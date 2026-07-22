@@ -22,7 +22,7 @@ import java.util.function.Supplier;
 
 @Component
 public class SseRunEventHub {
-    private static final long HEARTBEAT_SECONDS = 15;
+    private static final long HEARTBEAT_MILLIS = Duration.ofSeconds(15).toMillis();
     private static final int MAX_REPLAY_PASSES = 8;
 
     private final ConcurrentHashMap<String, CopyOnWriteArrayList<SseEmitter>> emitters =
@@ -35,13 +35,19 @@ public class SseRunEventHub {
         return thread;
     });
     private final Supplier<SseEmitter> emitterFactory;
+    private final long heartbeatMillis;
 
     public SseRunEventHub() {
-        this(() -> new SseEmitter(Duration.ofMinutes(30).toMillis()));
+        this(() -> new SseEmitter(Duration.ofMinutes(30).toMillis()), HEARTBEAT_MILLIS);
     }
 
     SseRunEventHub(Supplier<SseEmitter> emitterFactory) {
+        this(emitterFactory, HEARTBEAT_MILLIS);
+    }
+
+    SseRunEventHub(Supplier<SseEmitter> emitterFactory, long heartbeatMillis) {
         this.emitterFactory = emitterFactory;
+        this.heartbeatMillis = Math.max(10, heartbeatMillis);
     }
 
     public SseEmitter open(String tenantId, String workspaceId, String runId, long afterSequence,
@@ -63,17 +69,19 @@ public class SseRunEventHub {
         emitter.onTimeout(() -> remove(key, emitter));
         emitter.onError(error -> remove(key, emitter));
 
-        subscriptions.put(emitter, new SubscriptionState(Math.max(0, afterSequence)));
+        subscriptions.put(emitter, new SubscriptionState(Math.max(0, afterSequence),
+                latestSequence, replayLoader));
         emitters.computeIfAbsent(key, ignored -> new CopyOnWriteArrayList<>()).add(emitter);
-        heartbeat.set(heartbeatExecutor.scheduleAtFixedRate(() -> heartbeat(key, emitter),
-                HEARTBEAT_SECONDS, HEARTBEAT_SECONDS, TimeUnit.SECONDS));
-        heartbeats.put(emitter, heartbeat.get());
 
         try {
             boolean terminalPublishedDuringReplay = replayToStableBoundary(emitter, latestSequence, replayLoader);
             if (terminal || terminalPublishedDuringReplay) {
                 emitter.complete();
                 remove(key, emitter);
+            } else {
+                heartbeat.set(heartbeatExecutor.scheduleAtFixedRate(() -> heartbeat(key, emitter),
+                        heartbeatMillis, heartbeatMillis, TimeUnit.MILLISECONDS));
+                heartbeats.put(emitter, heartbeat.get());
             }
         } catch (IOException | RuntimeException e) {
             emitter.completeWithError(e);
@@ -125,6 +133,7 @@ public class SseRunEventHub {
             if (event.getSequence() <= state.lastSequence) return;
             transmit(emitter, event);
             state.lastSequence = event.getSequence();
+            state.terminalPending = state.terminalPending || terminalEvent(event.getType());
         }
     }
 
@@ -168,6 +177,15 @@ public class SseRunEventHub {
 
     private void heartbeat(String key, SseEmitter emitter) {
         try {
+            SubscriptionState state = state(emitter);
+            synchronized (state) {
+                state.replaying = true;
+            }
+            if (replayToStableBoundary(emitter, state.latestSequence, state.replayLoader)) {
+                emitter.complete();
+                remove(key, emitter);
+                return;
+            }
             synchronized (state(emitter)) {
                 emitter.send(SseEmitter.event().comment("heartbeat"));
             }
@@ -192,6 +210,11 @@ public class SseRunEventHub {
         return tenantId + '\u001f' + workspaceId + '\u001f' + runId;
     }
 
+    private boolean terminalEvent(String type) {
+        return "run.completed".equals(type) || "run.failed".equals(type)
+                || "run.cancelled".equals(type);
+    }
+
     private SubscriptionState state(SseEmitter emitter) {
         SubscriptionState state = subscriptions.get(emitter);
         if (state == null) throw new IllegalStateException("SSE_SUBSCRIPTION_CLOSED");
@@ -200,12 +223,17 @@ public class SseRunEventHub {
 
     private static final class SubscriptionState {
         private final TreeMap<Long, AgentRunEventResponse> pending = new TreeMap<>();
+        private final LongSupplier latestSequence;
+        private final LongFunction<List<AgentRunEventResponse>> replayLoader;
         private long lastSequence;
         private boolean replaying = true;
         private boolean terminalPending;
 
-        private SubscriptionState(long lastSequence) {
+        private SubscriptionState(long lastSequence, LongSupplier latestSequence,
+                                  LongFunction<List<AgentRunEventResponse>> replayLoader) {
             this.lastSequence = lastSequence;
+            this.latestSequence = latestSequence;
+            this.replayLoader = replayLoader;
         }
     }
 }
