@@ -14,7 +14,6 @@ import org.springframework.context.annotation.Primary;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.lang.reflect.Method;
-import java.util.Arrays;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -27,8 +26,19 @@ class RedissonConfigTest {
         Method memory = AiRedisConfiguration.class.getMethod("memoryRedissonClient", AiRedisProperties.class);
         assertThat(business.getAnnotation(Bean.class).name()).containsExactly("businessRedissonClient");
         assertThat(memory.getAnnotation(Bean.class).name()).containsExactly("memoryRedissonClient");
-        assertThat(Arrays.stream(AiRedisConfiguration.class.getDeclaredMethods())
-                .anyMatch(method -> method.isAnnotationPresent(Primary.class))).isFalse();
+        assertThat(business.isAnnotationPresent(Primary.class)).isFalse();
+        assertThat(memory.isAnnotationPresent(Primary.class)).isFalse();
+    }
+
+    @Test
+    void makesBusinessConnectionFactoryPrimaryForUnqualifiedInfrastructureConsumers() throws Exception {
+        Method business = AiRedisConfiguration.class.getMethod(
+                "businessRedisConnectionFactory", AiRedisProperties.class);
+        Method vector = AiRedisConfiguration.class.getMethod(
+                "vectorRedisConnectionFactory", AiRedisProperties.class);
+
+        assertThat(business.isAnnotationPresent(Primary.class)).isTrue();
+        assertThat(vector.isAnnotationPresent(Primary.class)).isFalse();
     }
 
     @Test

@@ -9,6 +9,8 @@ import com.hmdp.ai.domain.knowledge.KnowledgeChunk;
 import com.hmdp.ai.domain.knowledge.KnowledgeDocument;
 import com.hmdp.ai.domain.knowledge.KnowledgeDocumentVersion;
 import com.hmdp.ai.domain.knowledge.KnowledgeRepository;
+import com.hmdp.ai.domain.knowledge.StoredObject;
+import com.hmdp.ai.infrastructure.vector.RedisKnowledgeIndexNaming;
 import com.hmdp.ai.shared.id.AiIdGenerator;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -115,8 +117,8 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                         "status,active,created_by,updated_by) values (?,?,?,?,?,?,?,?,?,?,'BUILDING',0,?,?)",
                 ids.nextId(), value.getTenantId(), value.getWorkspaceId(), value.getKnowledgeBaseId(),
                 value.getVersion(), value.getIndexVersion(), value.getEmbeddingModelProfileId(),
-                value.getEmbeddingDimension(), "ai_kb_" + value.getIndexVersion(),
-                "ai_kb_" + value.getIndexVersion(), actor, actor);
+                value.getEmbeddingDimension(), RedisKnowledgeIndexNaming.indexName(value.getIndexVersion()),
+                RedisKnowledgeIndexNaming.indexName(value.getIndexVersion()), actor, actor);
         return value;
     }
 
@@ -247,6 +249,16 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                         "and workspace_id=? and knowledge_base_id=? and sha256=? and deleted=0 " +
                         "order by created_at desc limit 1",
                 (rs, row) -> documentVersion(rs), tenant, workspace, kb, sha).stream().findFirst();
+    }
+
+    @Override
+    public List<StoredObject> findDocumentObjects(String tenant, String workspace, String documentId) {
+        return jdbc.query("select distinct object_key,bucket,content_type,size_bytes,sha256,original_file_name " +
+                        "from ai_document_version where tenant_id=? and workspace_id=? and document_id=? " +
+                        "and deleted=0 and object_key is not null and bucket is not null order by object_key",
+                (rs, row) -> new StoredObject(rs.getString("object_key"), rs.getString("bucket"),
+                        rs.getString("content_type"), rs.getLong("size_bytes"), rs.getString("sha256"),
+                        rs.getString("original_file_name")), tenant, workspace, documentId);
     }
 
     @Override

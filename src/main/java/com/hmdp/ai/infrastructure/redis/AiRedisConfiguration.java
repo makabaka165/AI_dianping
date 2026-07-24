@@ -8,6 +8,7 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Primary;
 import org.springframework.data.redis.connection.RedisPassword;
 import org.springframework.data.redis.connection.RedisStandaloneConfiguration;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
@@ -34,6 +35,7 @@ public class AiRedisConfiguration {
     }
 
     @Bean(name = "businessRedisConnectionFactory", destroyMethod = "destroy")
+    @Primary
     public LettuceConnectionFactory businessRedisConnectionFactory(AiRedisProperties properties) {
         return createConnectionFactory("business", properties.getBusiness());
     }

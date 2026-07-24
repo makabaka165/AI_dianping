@@ -31,6 +31,7 @@ public interface KnowledgeRepository {
     Optional<KnowledgeDocumentVersion> findDocumentVersion(String documentVersionId);
     Optional<KnowledgeDocumentVersion> findBySha(String tenantId, String workspaceId,
                                                  String knowledgeBaseId, String sha256);
+    List<StoredObject> findDocumentObjects(String tenantId, String workspaceId, String documentId);
     int lockAndNextDocumentVersion(String tenantId, String workspaceId, String documentId);
     UploadRegistration registerUpload(KnowledgeDocument document, KnowledgeDocumentVersion version,
                                       IngestionJob job, String actorId);

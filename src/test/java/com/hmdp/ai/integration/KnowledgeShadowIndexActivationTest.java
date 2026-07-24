@@ -2,16 +2,14 @@ package com.hmdp.ai.integration;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hmdp.ai.infrastructure.persistence.JdbcKnowledgeRepository;
+import com.hmdp.ai.infrastructure.vector.RedisKnowledgeIndexNaming;
+import com.hmdp.ai.integration.support.IntegrationMySqlContainer;
 import com.hmdp.ai.shared.id.AiIdGenerator;
-import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.datasource.DriverManagerDataSource;
-import org.testcontainers.containers.MySQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
-import org.testcontainers.utility.DockerImageName;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -19,15 +17,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 @Testcontainers(disabledWithoutDocker = true)
 class KnowledgeShadowIndexActivationTest {
     @Container
-    static final MySQLContainer<?> MYSQL = new MySQLContainer<>(DockerImageName.parse("mysql:8.0.36"))
-            .withDatabaseName("hmdp").withUsername("hmdp").withPassword("hmdp-test");
+    static final IntegrationMySqlContainer MYSQL = new IntegrationMySqlContainer();
 
     @Test
     void switchesActivePointerOnlyWhenShadowIndexIsReady() {
-        Flyway.configure().dataSource(MYSQL.getJdbcUrl(), MYSQL.getUsername(), MYSQL.getPassword())
-                .locations("classpath:db/migration").load().migrate();
-        JdbcTemplate jdbc = new JdbcTemplate(new DriverManagerDataSource(MYSQL.getJdbcUrl(),
-                MYSQL.getUsername(), MYSQL.getPassword()));
+        MYSQL.migrateSchema();
+        JdbcTemplate jdbc = MYSQL.jdbcTemplate();
         insertKnowledgeVersions(jdbc);
         JdbcKnowledgeRepository repository = new JdbcKnowledgeRepository(jdbc,
                 new AiIdGenerator(), new ObjectMapper());
@@ -44,6 +39,39 @@ class KnowledgeShadowIndexActivationTest {
                 Integer.class)).isEqualTo(1);
         assertThat(jdbc.queryForObject("select status from ai_knowledge_base_version where id='kbv-shadow-1'",
                 String.class)).isEqualTo("ARCHIVED");
+    }
+
+    @Test
+    void schemaRepairAuditsDefinitionsAndKeepsReadyIndexOnItsExistingPhysicalName() {
+        MYSQL.migrateSchema();
+        JdbcTemplate jdbc = MYSQL.jdbcTemplate();
+
+        String vectorName = jdbc.queryForObject(
+                "select vector_index_name from ai_index_version where code='shop-enterprise-v1'",
+                String.class);
+        assertThat(vectorName)
+                .isEqualTo(RedisKnowledgeIndexNaming.legacyIndexName("shop-enterprise-v1"));
+        assertThat(jdbc.queryForObject(
+                "select count(*) from information_schema.columns where table_schema=database() "
+                        + "and table_name='ai_outbox_event' and column_name='deduplication_key' "
+                        + "and data_type='varchar' and character_maximum_length=255 "
+                        + "and is_nullable='YES'", Integer.class)).isEqualTo(1);
+        assertThat(jdbc.queryForObject(
+                "select count(*) from information_schema.statistics where table_schema=database() "
+                        + "and table_name='ai_outbox_dead_letter' "
+                        + "and index_name='uk_ai_outbox_dead_letter_consumer' and non_unique=0",
+                Integer.class)).isEqualTo(2);
+        assertThat(jdbc.queryForObject(
+                "select count(*) from information_schema.statistics where table_schema=database() "
+                        + "and table_name='ai_index_version' and index_name='uk_ai_index_version_code' "
+                        + "and non_unique=0 and seq_in_index=1 and column_name='code'",
+                Integer.class)).isEqualTo(1);
+        assertThat(jdbc.queryForObject(
+                "select count(*) from information_schema.statistics where table_schema=database() "
+                        + "and table_name='ai_knowledge_base_version' "
+                        + "and index_name='uk_ai_knowledge_base_index_version' and non_unique=0 "
+                        + "and seq_in_index=1 and column_name='index_version'",
+                Integer.class)).isEqualTo(1);
     }
 
     private void insertKnowledgeVersions(JdbcTemplate jdbc) {

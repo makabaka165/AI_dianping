@@ -236,13 +236,18 @@ public class KnowledgeIngestionApplicationService {
                 context.getWorkspace().getWorkspaceId(), documentId);
         List<KnowledgeChunk> chunks = repository.findChunksByIds(context.getTenant().getTenantId(),
                 context.getWorkspace().getWorkspaceId(), ids);
+        List<StoredObject> storedObjects = repository.findDocumentObjects(context.getTenant().getTenantId(),
+                context.getWorkspace().getWorkspaceId(), documentId);
         if (!repository.deleteDocument(context.getTenant().getTenantId(),
                 context.getWorkspace().getWorkspaceId(), documentId, context.getUserId())) {
             throw new IllegalArgumentException("document not found");
         }
-        afterCommit(() -> chunks.stream().collect(Collectors.groupingBy(KnowledgeChunk::getIndexVersion))
-                .forEach((version, values) -> index.delete(version,
-                        values.stream().map(KnowledgeChunk::getId).collect(Collectors.toList()))));
+        afterCommit(() -> {
+            chunks.stream().collect(Collectors.groupingBy(KnowledgeChunk::getIndexVersion))
+                    .forEach((version, values) -> index.delete(version,
+                            values.stream().map(KnowledgeChunk::getId).collect(Collectors.toList())));
+            storedObjects.forEach(object -> objects.delete(object.getBucket(), object.getObjectKey()));
+        });
     }
 
     private IngestionCreatedResponse uploadWithContext(AiSecurityContext context, String knowledgeBaseId,

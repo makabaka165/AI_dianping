@@ -1,21 +1,29 @@
 package com.hmdp.ai.integration;
 
+import com.hmdp.ai.domain.knowledge.StoredObject;
+import com.hmdp.ai.infrastructure.objectstorage.MinioObjectStorageAdapter;
+import com.hmdp.ai.integration.support.IntegrationMySqlContainer;
 import io.minio.BucketExistsArgs;
-import io.minio.MakeBucketArgs;
+import io.minio.ListObjectsArgs;
 import io.minio.MinioClient;
-import org.flywaydb.core.Flyway;
+import io.minio.Result;
+import io.minio.messages.Item;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.springframework.data.redis.connection.RedisConnection;
+import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.testcontainers.containers.GenericContainer;
-import org.testcontainers.containers.MySQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
+import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -23,8 +31,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @Testcontainers(disabledWithoutDocker = true)
 class KnowledgeIngestionIntegrationTest {
     @Container
-    static final MySQLContainer<?> MYSQL = new MySQLContainer<>(DockerImageName.parse("mysql:8.0.36"))
-            .withDatabaseName("hmdp").withUsername("hmdp").withPassword("hmdp-test");
+    static final IntegrationMySqlContainer MYSQL = new IntegrationMySqlContainer();
 
     @Container
     static final GenericContainer<?> REDIS_STACK = new GenericContainer<>(
@@ -38,24 +45,45 @@ class KnowledgeIngestionIntegrationTest {
             .withExposedPorts(9000, 9001);
 
     @Test
-    void flywayCreatesKnowledgeSchemaAndInfrastructureIsReachable() throws Exception {
-        Flyway.configure().dataSource(MYSQL.getJdbcUrl(), MYSQL.getUsername(), MYSQL.getPassword())
-                .locations("classpath:db/migration").load().migrate();
-        DriverManagerDataSource dataSource = new DriverManagerDataSource(MYSQL.getJdbcUrl(),
-                MYSQL.getUsername(), MYSQL.getPassword());
-        JdbcTemplate jdbc = new JdbcTemplate(dataSource);
+    void flywayCreatesKnowledgeSchemaAndInfrastructureRoundTrips() throws Exception {
+        MYSQL.migrateSchema();
+        JdbcTemplate jdbc = MYSQL.jdbcTemplate();
         assertThat(jdbc.queryForObject("select count(*) from information_schema.tables " +
                 "where table_schema=database() and table_name in ('ai_document','ai_document_chunk'," +
                 "'ai_ingestion_job','ai_outbox_event')", Integer.class)).isEqualTo(4);
 
-        URL redis = new URL("http", REDIS_STACK.getHost(), REDIS_STACK.getMappedPort(6379), "/");
-        assertThat(redis.getHost()).isNotBlank();
+        LettuceConnectionFactory redis = new LettuceConnectionFactory(
+                REDIS_STACK.getHost(), REDIS_STACK.getMappedPort(6379));
+        redis.afterPropertiesSet();
+        try (RedisConnection connection = redis.getConnection()) {
+            assertThat(connection.ping()).isEqualTo("PONG");
+        } finally {
+            redis.destroy();
+        }
 
         String endpoint = "http://" + MINIO.getHost() + ":" + MINIO.getMappedPort(9000);
         MinioClient minio = MinioClient.builder().endpoint(endpoint)
                 .credentials("minio-test", "minio-test-secret").build();
-        minio.makeBucket(MakeBucketArgs.builder().bucket("hmdp-ai-test").build());
-        assertThat(minio.bucketExists(BucketExistsArgs.builder().bucket("hmdp-ai-test").build())).isTrue();
+        String bucket = "hmdp-ai-test";
+        byte[] payload = "# Service\nStable and friendly.".getBytes(StandardCharsets.UTF_8);
+        MinioObjectStorageAdapter storage = new MinioObjectStorageAdapter(minio, bucket);
+        StoredObject stored = storage.put("tenant", "kb", "service.md", "text/markdown", payload, "sha256-test");
+
+        assertThat(minio.bucketExists(BucketExistsArgs.builder().bucket(bucket).build())).isTrue();
+        assertThat(stored.getBucket()).isEqualTo(bucket);
+        assertThat(stored.getObjectKey()).endsWith("/sha256-test.md");
+        try (InputStream content = storage.get(stored.getBucket(), stored.getObjectKey())) {
+            assertThat(content.readAllBytes()).isEqualTo(payload);
+        }
+        storage.delete(stored.getBucket(), stored.getObjectKey());
+        List<String> remainingObjects = new ArrayList<>();
+        for (Result<Item> item : minio.listObjects(ListObjectsArgs.builder()
+                .bucket(bucket)
+                .recursive(true)
+                .build())) {
+            remainingObjects.add(item.get().objectName());
+        }
+        assertThat(remainingObjects).doesNotContain(stored.getObjectKey());
 
         HttpURLConnection health = (HttpURLConnection) new URL(endpoint + "/minio/health/live").openConnection();
         health.setConnectTimeout(3000);
