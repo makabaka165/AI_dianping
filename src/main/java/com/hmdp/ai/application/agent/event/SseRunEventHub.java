@@ -4,6 +4,7 @@ import com.hmdp.ai.application.dto.agent.AgentRunEventResponse;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import javax.annotation.PreDestroy;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.List;
@@ -106,6 +107,21 @@ public class SseRunEventHub {
                 remove(key, emitter);
             }
         }
+    }
+
+    @PreDestroy
+    void shutdown() {
+        for (Map.Entry<String, CopyOnWriteArrayList<SseEmitter>> entry : emitters.entrySet()) {
+            for (SseEmitter emitter : entry.getValue()) {
+                try {
+                    emitter.complete();
+                } catch (RuntimeException ignored) {
+                    // Shutdown must still release the scheduler and remaining subscriptions.
+                }
+                remove(entry.getKey(), emitter);
+            }
+        }
+        heartbeatExecutor.shutdownNow();
     }
 
     private boolean replayToStableBoundary(SseEmitter emitter, LongSupplier latestSequence,

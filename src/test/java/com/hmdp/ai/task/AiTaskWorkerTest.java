@@ -86,7 +86,7 @@ class AiTaskWorkerTest {
         assertThat(finalTask.getStartedAtEpochMillis()).isPositive();
         assertThat(finalTask.getHeartbeatAtEpochMillis()).isPositive();
         assertThat(finalTask.getFinishedAtEpochMillis()).isPositive();
-        verify(repository).clearInflight("dedup-1");
+        verify(repository).clearInflight("dedup-1", "task-1");
         verify(eventPublisher, times(2)).publish(any(AiTaskEvent.class));
         verify(aiMetricsService).recordDuration(eq("ai_task"), anyLong(), eq(false));
         verify(aiMetricsService).increment("ai.task.count", "ai_task", false);
@@ -107,7 +107,7 @@ class AiTaskWorkerTest {
 
         assertThat(task.getStatus()).isEqualTo(AiTaskStatus.SUCCESS);
         assertThat(task.getResult()).isEqualTo("ok");
-        verify(repository).clearInflight("dedup-1");
+        verify(repository).clearInflight("dedup-1", "task-1");
         verify(aiMetricsService).increment("ai.task.count", "ai_task", false);
     }
 
@@ -129,10 +129,29 @@ class AiTaskWorkerTest {
         assertThat(finalTask.getStartedAtEpochMillis()).isPositive();
         assertThat(finalTask.getHeartbeatAtEpochMillis()).isPositive();
         assertThat(finalTask.getFinishedAtEpochMillis()).isPositive();
-        verify(repository).clearInflight("dedup-1");
+        verify(repository).clearInflight("dedup-1", "task-1");
         verify(eventPublisher, times(2)).publish(any(AiTaskEvent.class));
         verify(aiMetricsService).recordDuration(eq("ai_task"), anyLong(), eq(true));
         verify(aiMetricsService).increment("ai.task.count", "ai_task", true);
+    }
+
+    @Test
+    void processShouldKeepInflightMarkerWhenNonExceptionFailureLeavesTaskRunning() throws Exception {
+        AiTask task = task(AiTaskType.RAG_REBUILD_ALL, params("shopLimit", 10));
+        AiTaskHandler handler = handler(AiTaskType.RAG_REBUILD_ALL);
+        AiTaskWorker worker = workerWith(handler);
+        when(repository.find("task-1")).thenReturn(Optional.of(task));
+        when(handler.handle(eq(task), any(AiTaskProgressReporter.class)))
+                .thenThrow(new AssertionError("worker aborted"));
+
+        assertThatThrownBy(() -> worker.process("task-1"))
+                .isInstanceOf(AssertionError.class)
+                .hasMessage("worker aborted");
+
+        assertThat(task.getStatus()).isEqualTo(AiTaskStatus.RUNNING);
+        verify(repository, times(2)).update(task);
+        verify(repository, never()).clearInflight("dedup-1", "task-1");
+        verify(taskLock).unlock();
     }
 
     @Test
@@ -184,7 +203,7 @@ class AiTaskWorkerTest {
         assertThat(task.getStatus()).isEqualTo(AiTaskStatus.FAILED);
         assertThat(task.getErrorMessage()).contains("Unsupported AI task type");
         verify(repository, times(2)).update(any(AiTask.class));
-        verify(repository).clearInflight("dedup-1");
+        verify(repository).clearInflight("dedup-1", "task-1");
     }
 
     @Test

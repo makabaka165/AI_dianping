@@ -149,8 +149,8 @@ public class DefaultAgentRuntime implements AgentRuntime {
                 events.publish(tenantId, workspaceId, runId, "node.completed",
                         new RunLifecycleEventPayload(runId, RunStatus.RUNNING, RUNTIME_NODE,
                                 null, "idempotent node output restored"), false);
-                runs.complete(tenantId, workspaceId, runId, nodeClaim.getOutputJson());
                 notifyCompletion(current, nodeClaim.getOutputJson());
+                runs.complete(tenantId, workspaceId, runId, nodeClaim.getOutputJson());
                 metrics.recordAgentRunCompleted(run.getAgentId(),duration(run));
                 events.publish(tenantId, workspaceId, runId, "run.completed",
                         new RunLifecycleEventPayload(runId, RunStatus.COMPLETED, null, null,
@@ -172,8 +172,8 @@ public class DefaultAgentRuntime implements AgentRuntime {
             events.publish(tenantId, workspaceId, runId, "node.completed",
                     new RunLifecycleEventPayload(runId, RunStatus.RUNNING, RUNTIME_NODE,
                             null, "agent workflow runtime completed"), false);
-            runs.complete(tenantId, workspaceId, runId, outputJson);
             notifyCompletion(run, outputJson);
+            runs.complete(tenantId, workspaceId, runId, outputJson);
             metrics.recordAgentRunCompleted(run.getAgentId(),duration(run));
             events.publish(tenantId, workspaceId, runId, "run.completed",
                     new RunLifecycleEventPayload(runId, RunStatus.COMPLETED, null, null,
@@ -273,7 +273,15 @@ public class DefaultAgentRuntime implements AgentRuntime {
         }
     }
 
-    private void notifyCompletion(AgentRunRecord run,String outputJson){for(RunCompletionObserver observer:completionObservers){
-        try{observer.onCompleted(run,outputJson);}catch(Exception e){log.error("run completion observer failed, runId={}",run.getId(),e);}}}
+    private void notifyCompletion(AgentRunRecord run, String outputJson) {
+        if (completionObservers == null) {
+            return;
+        }
+        for (RunCompletionObserver observer : completionObservers) {
+            if (observer != null) {
+                observer.onCompleted(run, outputJson);
+            }
+        }
+    }
     private long duration(AgentRunRecord run){Instant start=run.getStartedAt()==null?run.getQueuedAt():run.getStartedAt();return start==null?0:Math.max(0,java.time.Duration.between(start,Instant.now()).toMillis());}
 }

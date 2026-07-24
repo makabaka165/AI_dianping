@@ -59,6 +59,18 @@ class SseRunEventHubTest {
         assertEquals(Arrays.asList(1L), emitter.sequences);
     }
 
+    @Test
+    void shutdownShouldCompleteOpenEmittersAndStopHeartbeatResources() {
+        CapturingEmitter emitter = new CapturingEmitter();
+        SseRunEventHub hub = new SseRunEventHub(() -> emitter, 10_000);
+        hub.open("tenant", "workspace", "run", 0, () -> 0,
+                ignored -> List.of(), false);
+
+        hub.shutdown();
+
+        assertTrue(emitter.completed);
+    }
+
     private AgentRunEventResponse event(long sequence) {
         return new AgentRunEventResponse(new RunEvent(sequence, "run", "node.completed", "{}",
                 Instant.now()), null);

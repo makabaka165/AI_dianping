@@ -26,6 +26,7 @@ import com.hmdp.ai.domain.tool.ToolProtocol;
 import com.hmdp.ai.domain.tool.ToolResult;
 import com.hmdp.ai.domain.tool.ToolRiskLevel;
 import com.hmdp.ai.infrastructure.observability.AiAuditService;
+import com.hmdp.ai.integration.support.IntegrationMySqlContainer;
 import com.hmdp.ai.runtime.cancellation.RunCancellationRegistry;
 import com.hmdp.ai.runtime.tool.AgentSkill;
 import com.hmdp.ai.runtime.tool.ApprovalService;
@@ -46,17 +47,13 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
-import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
-import org.testcontainers.containers.MySQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
-import org.testcontainers.utility.DockerImageName;
 
 @Tag("integration")
 @Testcontainers(disabledWithoutDocker = true)
@@ -68,11 +65,7 @@ class HighRiskToolApprovalIntegrationTest {
   private static final String APPROVER = "approval-reviewer";
 
   @Container
-  static final MySQLContainer<?> MYSQL =
-      new MySQLContainer<>(DockerImageName.parse("mysql:8.0.36"))
-          .withDatabaseName("hmdp")
-          .withUsername("hmdp")
-          .withPassword("hmdp-test");
+  static final IntegrationMySqlContainer MYSQL = new IntegrationMySqlContainer();
 
   private ThreadPoolTaskExecutor executor;
 
@@ -86,11 +79,7 @@ class HighRiskToolApprovalIntegrationTest {
 
   @Test
   void requiresIndependentAuthorizedDecisionBoundToTheExactToolInput() {
-    Flyway.configure()
-        .dataSource(MYSQL.getJdbcUrl(), MYSQL.getUsername(), MYSQL.getPassword())
-        .locations("classpath:db/migration")
-        .load()
-        .migrate();
+    MYSQL.migrateSchema();
     JdbcTemplate jdbc = jdbcTemplate();
     insertMember(jdbc, REQUESTER);
     insertMember(jdbc, UNAUTHORIZED);
@@ -240,8 +229,7 @@ class HighRiskToolApprovalIntegrationTest {
   }
 
   private JdbcTemplate jdbcTemplate() {
-    return new JdbcTemplate(
-        new DriverManagerDataSource(MYSQL.getJdbcUrl(), MYSQL.getUsername(), MYSQL.getPassword()));
+    return MYSQL.jdbcTemplate();
   }
 
   private void insertMember(JdbcTemplate jdbc, String userId) {

@@ -153,7 +153,11 @@ public class AiTaskWorker {
             log.warn("AI task failed, taskId={}", taskId, e);
         } finally {
             repository.update(task);
-            repository.clearInflight(task.getDedupKey());
+            // Keep the inflight marker while a non-Exception failure leaves the task RUNNING.
+            // The recovery scanner must be the only path that decides whether to retry or fail it.
+            if (terminal(task.getStatus())) {
+                repository.clearInflight(task.getDedupKey(), task.getTaskId());
+            }
             publishEvent(task);
             recordMetrics(System.currentTimeMillis() - start, failed);
         }
@@ -242,6 +246,12 @@ public class AiTaskWorker {
         } catch (RuntimeException e) {
             log.warn("Publish AI task event failed, taskId={}", task.getTaskId(), e);
         }
+    }
+
+    private boolean terminal(AiTaskStatus status) {
+        return status == AiTaskStatus.SUCCESS
+                || status == AiTaskStatus.FAILED
+                || status == AiTaskStatus.CANCELLED;
     }
 
     private ThreadFactory daemonThreadFactory() {

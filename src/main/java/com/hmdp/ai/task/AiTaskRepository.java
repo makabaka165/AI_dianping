@@ -7,6 +7,8 @@ import com.hmdp.ai.infra.AiLogSanitizer;
 import com.hmdp.dto.ai.AiTask;
 import com.hmdp.dto.ai.AiTaskStatus;
 import lombok.extern.slf4j.Slf4j;
+import org.redisson.api.BatchOptions;
+import org.redisson.api.RBatch;
 import org.redisson.api.RBucket;
 import org.redisson.api.RLock;
 import org.redisson.api.RSet;
@@ -23,6 +25,8 @@ import java.util.concurrent.TimeUnit;
 @Repository
 @Slf4j
 public class AiTaskRepository {
+
+    private static final int MAX_INFLIGHT_REGISTRATION_ATTEMPTS = 3;
 
     @Resource(name = "memoryRedissonClient")
     private RedissonClient redissonClient;
@@ -42,9 +46,11 @@ public class AiTaskRepository {
         }
         try {
             Optional<AiTask> oldTask = find(task.getTaskId());
-            redissonClient.getBucket(taskKey(task.getTaskId()))
-                    .set(objectMapper.writeValueAsString(task), resultTtlHours, TimeUnit.HOURS);
-            updateStatusIndex(oldTask.map(AiTask::getStatus).orElse(null), task.getStatus(), task.getTaskId());
+            persistTaskAndStatusIndex(
+                    objectMapper.writeValueAsString(task),
+                    oldTask.map(AiTask::getStatus).orElse(null),
+                    task.getStatus(),
+                    task.getTaskId());
         } catch (Exception e) {
             throw new IllegalStateException("Save AI task failed", e);
         }
@@ -93,15 +99,25 @@ public class AiTaskRepository {
             return Optional.empty();
         }
         RBucket<String> bucket = redissonClient.getBucket(inflightKey(dedupKey));
-        boolean registered = bucket.trySet(taskId, resultTtlHours, TimeUnit.HOURS);
-        return registered ? Optional.empty() : Optional.ofNullable(bucket.get());
+        for (int attempt = 0; attempt < MAX_INFLIGHT_REGISTRATION_ATTEMPTS; attempt++) {
+            if (bucket.trySet(taskId, effectiveResultTtlHours(), TimeUnit.HOURS)) {
+                return Optional.empty();
+            }
+            String existingTaskId = bucket.get();
+            if (existingTaskId != null && !existingTaskId.trim().isEmpty()) {
+                return Optional.of(existingTaskId);
+            }
+        }
+        throw new IllegalStateException("Register AI task inflight marker failed due to concurrent updates");
     }
 
-    public void clearInflight(String dedupKey) {
-        if (dedupKey == null || dedupKey.trim().isEmpty()) {
-            return;
+    public boolean clearInflight(String dedupKey, String taskId) {
+        if (dedupKey == null || dedupKey.trim().isEmpty()
+                || taskId == null || taskId.trim().isEmpty()) {
+            return false;
         }
-        redissonClient.getBucket(inflightKey(dedupKey)).delete();
+        RBucket<String> bucket = redissonClient.getBucket(inflightKey(dedupKey));
+        return bucket.compareAndSet(taskId, null);
     }
 
     public List<AiTask> findByStatus(AiTaskStatus status, int limit) {
@@ -138,15 +154,23 @@ public class AiTaskRepository {
         return bucketPrefix + "index:status:" + status.name();
     }
 
-    private void updateStatusIndex(AiTaskStatus oldStatus, AiTaskStatus newStatus, String taskId) {
-        if (taskId == null || taskId.trim().isEmpty()) {
-            return;
-        }
+    private void persistTaskAndStatusIndex(
+            String taskJson, AiTaskStatus oldStatus, AiTaskStatus newStatus, String taskId) {
+        BatchOptions options = BatchOptions.defaults()
+                .executionMode(BatchOptions.ExecutionMode.REDIS_WRITE_ATOMIC);
+        RBatch batch = redissonClient.createBatch(options);
+        batch.<String>getBucket(taskKey(taskId))
+                .setAsync(taskJson, effectiveResultTtlHours(), TimeUnit.HOURS);
         if (oldStatus != null && oldStatus != newStatus) {
-            redissonClient.getSet(statusIndexKey(oldStatus)).remove(taskId);
+            batch.<String>getSet(statusIndexKey(oldStatus)).removeAsync(taskId);
         }
         if (newStatus == AiTaskStatus.PENDING || newStatus == AiTaskStatus.RUNNING) {
-            redissonClient.getSet(statusIndexKey(newStatus)).add(taskId);
+            batch.<String>getSet(statusIndexKey(newStatus)).addAsync(taskId);
         }
+        batch.execute();
+    }
+
+    private long effectiveResultTtlHours() {
+        return Math.max(1L, resultTtlHours);
     }
 }

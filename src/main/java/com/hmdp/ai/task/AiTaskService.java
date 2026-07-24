@@ -84,11 +84,11 @@ public class AiTaskService {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             markSubmissionFailed(task, saved, "AI task enqueue interrupted");
-            clearInflightQuietly(dedupKey);
+            clearInflightQuietly(dedupKey, taskId);
             throw new IllegalStateException("Submit AI task interrupted", e);
         } catch (RuntimeException e) {
             markSubmissionFailed(task, saved, "AI task enqueue failed");
-            clearInflightQuietly(dedupKey);
+            clearInflightQuietly(dedupKey, taskId);
             throw e;
         }
     }
@@ -223,7 +223,7 @@ public class AiTaskService {
         task.setFinishedAtEpochMillis(nowMillis);
         task.setErrorMessage("task heartbeat timeout, max retry exceeded");
         repository.update(task);
-        clearInflightQuietly(task.getDedupKey());
+        clearInflightQuietly(task.getDedupKey(), task.getTaskId());
         publishEvent(task);
         recordIncrement("ai.task.timeout.failed", true);
     }
@@ -233,7 +233,7 @@ public class AiTaskService {
         task.setFinishedAtEpochMillis(nowMillis);
         task.setErrorMessage(message);
         repository.update(task);
-        clearInflightQuietly(task.getDedupKey());
+        clearInflightQuietly(task.getDedupKey(), task.getTaskId());
         publishEvent(task);
         recordIncrement("ai.task.requeue.failed", true);
     }
@@ -254,9 +254,9 @@ public class AiTaskService {
         }
     }
 
-    private void clearInflightQuietly(String dedupKey) {
+    private void clearInflightQuietly(String dedupKey, String taskId) {
         try {
-            repository.clearInflight(dedupKey);
+            repository.clearInflight(dedupKey, taskId);
         } catch (RuntimeException e) {
             log.warn("Clear failed AI task inflight key failed", e);
         }

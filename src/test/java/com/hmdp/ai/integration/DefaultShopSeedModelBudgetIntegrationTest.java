@@ -2,37 +2,23 @@ package com.hmdp.ai.integration;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import org.flywaydb.core.Flyway;
+import com.hmdp.ai.integration.support.IntegrationMySqlContainer;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.datasource.DriverManagerDataSource;
-import org.testcontainers.containers.MySQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
-import org.testcontainers.utility.DockerImageName;
 
 @Tag("integration")
 @Testcontainers(disabledWithoutDocker = true)
 class DefaultShopSeedModelBudgetIntegrationTest {
   @Container
-  static final MySQLContainer<?> MYSQL =
-      new MySQLContainer<>(DockerImageName.parse("mysql:8.0.36"))
-          .withDatabaseName("hmdp")
-          .withUsername("hmdp")
-          .withPassword("hmdp-test");
+  static final IntegrationMySqlContainer MYSQL = new IntegrationMySqlContainer();
 
   @Test
   void everyDefaultLlmNodeFitsTheAgentBoundModelVersion() {
-    Flyway.configure()
-        .dataSource(MYSQL.getJdbcUrl(), MYSQL.getUsername(), MYSQL.getPassword())
-        .locations("classpath:db/migration")
-        .load()
-        .migrate();
-    JdbcTemplate jdbc =
-        new JdbcTemplate(
-            new DriverManagerDataSource(
-                MYSQL.getJdbcUrl(), MYSQL.getUsername(), MYSQL.getPassword()));
+    MYSQL.migrateSchema();
+    JdbcTemplate jdbc = MYSQL.jdbcTemplate();
 
     Integer incompatibleNodes =
         jdbc.queryForObject(

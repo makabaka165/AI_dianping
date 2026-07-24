@@ -95,7 +95,7 @@ class AiTaskServiceTest {
         assertThat(taskId).isNotBlank();
         verify(queue).enqueue(taskId);
         verify(repository, never()).update(org.mockito.ArgumentMatchers.any());
-        verify(repository, never()).clearInflight(anyString());
+        verify(repository, never()).clearInflight(anyString(), anyString());
     }
 
     @Test
@@ -124,7 +124,7 @@ class AiTaskServiceTest {
                 task.getStatus() == AiTaskStatus.FAILED
                         && "AI task enqueue failed".equals(task.getErrorMessage())
                         && task.getFinishedAtEpochMillis() != null));
-        verify(repository).clearInflight(anyString());
+        verify(repository).clearInflight(anyString(), anyString());
         verify(aiMetricsService).increment("ai.task.submit.failed", "ai_task", true);
     }
 
@@ -147,7 +147,7 @@ class AiTaskServiceTest {
 
         assertThat(recovered).isZero();
         verify(queue, never()).enqueue(anyString());
-        verify(repository, never()).clearInflight(anyString());
+        verify(repository, never()).clearInflight(anyString(), anyString());
     }
 
     @Test
@@ -175,7 +175,7 @@ class AiTaskServiceTest {
         assertThat(stuck.getErrorMessage()).isEqualTo("task pending timeout, requeued");
         verify(repository).update(stuck);
         verify(queue).enqueue("stuck-pending");
-        verify(repository, never()).clearInflight("dedup-stuck-pending");
+        verify(repository, never()).clearInflight("dedup-stuck-pending", "stuck-pending");
         verify(aiMetricsService).increment("ai.task.pending.requeued", "ai_task", false);
     }
 
@@ -193,7 +193,7 @@ class AiTaskServiceTest {
         assertThat(stuck.getStatus()).isEqualTo(AiTaskStatus.FAILED);
         assertThat(stuck.getErrorMessage()).isEqualTo("task pending timeout, requeue failed");
         verify(repository, org.mockito.Mockito.times(2)).update(stuck);
-        verify(repository).clearInflight("dedup-stuck-pending");
+        verify(repository).clearInflight("dedup-stuck-pending", "stuck-pending");
         verify(aiMetricsService).increment("ai.task.requeue.failed", "ai_task", true);
     }
 
@@ -210,7 +210,7 @@ class AiTaskServiceTest {
         assertThat(stuck.getStatus()).isEqualTo(AiTaskStatus.PENDING);
         assertThat(stuck.getRetryCount()).isEqualTo(2);
         assertThat(stuck.getErrorMessage()).isEqualTo("task heartbeat timeout, requeued");
-        verify(repository, never()).clearInflight("dedup-stuck");
+        verify(repository, never()).clearInflight("dedup-stuck", "stuck");
         verify(repository).update(stuck);
         verify(queue).enqueue("stuck");
         verify(eventPublisher).publish(org.mockito.ArgumentMatchers.any());
@@ -232,7 +232,7 @@ class AiTaskServiceTest {
         assertThat(stuck.getFinishedAtEpochMillis()).isEqualTo(now);
         assertThat(stuck.getErrorMessage()).isEqualTo("task heartbeat timeout, requeue failed");
         verify(repository, org.mockito.Mockito.times(2)).update(stuck);
-        verify(repository).clearInflight("dedup-stuck");
+        verify(repository).clearInflight("dedup-stuck", "stuck");
         verify(aiMetricsService).increment("ai.task.requeue.failed", "ai_task", true);
     }
 
@@ -249,7 +249,7 @@ class AiTaskServiceTest {
         assertThat(stuck.getStatus()).isEqualTo(AiTaskStatus.FAILED);
         assertThat(stuck.getFinishedAtEpochMillis()).isEqualTo(now);
         assertThat(stuck.getErrorMessage()).isEqualTo("task heartbeat timeout, max retry exceeded");
-        verify(repository).clearInflight("dedup-stuck");
+        verify(repository).clearInflight("dedup-stuck", "stuck");
         verify(queue, never()).enqueue(anyString());
         verify(aiMetricsService).increment("ai.task.timeout.failed", "ai_task", true);
     }
