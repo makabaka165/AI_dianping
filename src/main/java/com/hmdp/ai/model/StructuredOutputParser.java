@@ -1,5 +1,6 @@
 package com.hmdp.ai.model;
 
+import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hmdp.dto.ai.IntentRouteCandidate;
@@ -15,8 +16,10 @@ import com.hmdp.dto.ai.ShopView;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
+import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Deque;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
@@ -25,10 +28,18 @@ import java.util.stream.Collectors;
 @Component
 public class StructuredOutputParser {
 
+    private static final int MAX_MODEL_OUTPUT_CHARS = 100_000;
+    private static final int MAX_JSON_NESTING = 256;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
+    public enum JsonStatus {
+        COMPLETE,
+        INCOMPLETE,
+        INVALID
+    }
+
     public ShopAIAnalysisResult parseStructuredAnalysis(String json) throws Exception {
-        JsonNode root = objectMapper.readTree(extractJson(json));
+        JsonNode root = readRoot(json);
         String sentiment = root.path("sentiment").asText("neutral");
         if (!Arrays.asList("positive", "negative", "neutral").contains(sentiment)) {
             sentiment = "neutral";
@@ -53,7 +64,7 @@ public class StructuredOutputParser {
         JsonNode root = readRoot(json);
         return ShopQAResult.builder()
                 .shopId(readLong(root.path("shopId"), shopId))
-                .question(readText(root.path("question"), question))
+                .question(question)
                 .answer(readText(root.path("answer"), ""))
                 .evidenceIds(readEvidenceIds(root.path("evidenceIds"), 10))
                 .insufficientEvidence(root.path("insufficientEvidence").asBoolean(false))
@@ -65,7 +76,7 @@ public class StructuredOutputParser {
         return ShopCompareResult.builder()
                 .shopId1(readLong(root.path("shopId1"), shopId1))
                 .shopId2(readLong(root.path("shopId2"), shopId2))
-                .aspect(readText(root.path("aspect"), aspect))
+                .aspect(aspect)
                 .conclusion(readText(root.path("conclusion"), ""))
                 .winnerByAspect(readText(root.path("winnerByAspect"), ShopCompareResult.INSUFFICIENT))
                 .shop1Score(readInteger(root.path("shop1Score"), 0))
@@ -94,7 +105,7 @@ public class StructuredOutputParser {
                 items.add(ShopRecommendationItem.builder()
                         .rank(readInteger(item.path("rank"), items.size() + 1))
                         .shopId(shopId)
-                        .shopName(readText(item.path("shopName"), shop == null ? null : shop.getName()))
+                        .shopName(shop == null ? null : shop.getName())
                         .address(shop == null ? null : shop.getAddress())
                         .reason(readText(item.path("reason"), ""))
                         .suitableFor(readText(item.path("suitableFor"), ""))
@@ -105,15 +116,15 @@ public class StructuredOutputParser {
             }
         }
         return ShopRecommendResult.builder()
-                .userPreference(readText(root.path("userPreference"), userPreference))
-                .category(readText(root.path("category"), category))
+                .userPreference(userPreference)
+                .category(category)
                 .message(readText(root.path("message"), ""))
                 .items(items)
                 .build();
     }
 
     public IntentRouteCandidate parseIntent(String json) throws Exception {
-        JsonNode root = objectMapper.readTree(extractJson(json));
+        JsonNode root = readRoot(json);
         return IntentRouteCandidate.builder()
                 .intent(parseIntentValue(root.path("intent").asText("UNSUPPORTED")))
                 .shopId(readLong(root.path("shopId")))
@@ -130,21 +141,57 @@ public class StructuredOutputParser {
     }
 
     public String extractJson(String content) {
-        if (content == null) {
-            return "{}";
+        if (content == null || content.trim().isEmpty()) {
+            return "";
         }
-        int objectStart = content.indexOf('{');
-        int objectEnd = content.lastIndexOf('}');
-        int arrayStart = content.indexOf('[');
-        int arrayEnd = content.lastIndexOf(']');
-        if (objectStart >= 0 && objectEnd > objectStart
-                && (arrayStart < 0 || objectStart < arrayStart)) {
-            return content.substring(objectStart, objectEnd + 1);
+        if (content.length() > MAX_MODEL_OUTPUT_CHARS) {
+            throw new IllegalArgumentException("MODEL_OUTPUT_TOO_LARGE");
         }
-        if (arrayStart >= 0 && arrayEnd > arrayStart) {
-            return content.substring(arrayStart, arrayEnd + 1);
+        Candidate incomplete = null;
+        for (int start = 0; start < content.length(); start++) {
+            char opening = content.charAt(start);
+            if (opening != '{' && opening != '[') {
+                continue;
+            }
+            ScanResult scan = scan(content, start);
+            if (!scan.complete) {
+                if (incomplete == null) {
+                    incomplete = new Candidate(start, content.length());
+                }
+                continue;
+            }
+            String candidate = content.substring(start, scan.end + 1);
+            try {
+                JsonNode node = readStrict(candidate);
+                if (node != null && (node.isObject() || node.isArray())) {
+                    return candidate;
+                }
+            } catch (Exception ignored) {
+                // Keep looking: prose may contain a balanced brace before the actual JSON.
+            }
         }
-        return content;
+        if (incomplete != null) {
+            return content.substring(incomplete.start, incomplete.end);
+        }
+        return content.trim();
+    }
+
+    /** Classifies a model response without silently treating a truncated JSON object as valid. */
+    public JsonStatus classifyJson(String content) {
+        if (content == null || content.trim().isEmpty() || content.length() > MAX_MODEL_OUTPUT_CHARS) {
+            return JsonStatus.INVALID;
+        }
+        try {
+            String extracted = extractJson(content);
+            JsonNode node = readStrict(extracted);
+            return node != null && (node.isObject() || node.isArray())
+                    ? JsonStatus.COMPLETE : JsonStatus.INVALID;
+        } catch (IllegalArgumentException e) {
+            return e.getMessage() != null && e.getMessage().contains("INCOMPLETE")
+                    ? JsonStatus.INCOMPLETE : classifyByBalance(content);
+        } catch (Exception e) {
+            return classifyByBalance(content);
+        }
     }
 
     public List<String> readEvidenceIds(JsonNode node, int limit) {
@@ -162,9 +209,111 @@ public class StructuredOutputParser {
 
     private JsonNode readRoot(String json) {
         try {
-            return objectMapper.readTree(extractJson(json));
+            JsonNode root = readStrict(extractJson(json));
+            if (root == null || !root.isObject()) {
+                throw new IllegalArgumentException("MODEL_OUTPUT_JSON_OBJECT_REQUIRED");
+            }
+            return root;
         } catch (Exception e) {
-            throw new IllegalArgumentException("Invalid JSON response", e);
+            if (e instanceof IllegalArgumentException
+                    && e.getMessage() != null
+                    && e.getMessage().startsWith("MODEL_OUTPUT_")) {
+                throw (IllegalArgumentException) e;
+            }
+            JsonStatus status = classifyByBalance(json);
+            throw new IllegalArgumentException(
+                    status == JsonStatus.INCOMPLETE
+                            ? "MODEL_OUTPUT_INCOMPLETE_JSON"
+                            : "MODEL_OUTPUT_INVALID_JSON",
+                    e);
+        }
+    }
+
+    private JsonNode readStrict(String json) throws Exception {
+        if (json == null || json.trim().isEmpty()) {
+            throw new IllegalArgumentException("MODEL_OUTPUT_INVALID_JSON");
+        }
+        try (JsonParser parser = objectMapper.getFactory().createParser(json)) {
+            JsonNode root = objectMapper.readTree(parser);
+            if (parser.nextToken() != null) {
+                throw new IllegalArgumentException("MODEL_OUTPUT_TRAILING_JSON");
+            }
+            return root;
+        }
+    }
+
+    private JsonStatus classifyByBalance(String content) {
+        if (content == null || content.trim().isEmpty()) return JsonStatus.INVALID;
+        for (int start = 0; start < content.length(); start++) {
+            char opening = content.charAt(start);
+            if (opening != '{' && opening != '[') continue;
+            ScanResult scan = scan(content, start);
+            if (!scan.complete) return JsonStatus.INCOMPLETE;
+            try {
+                JsonNode node = readStrict(content.substring(start, scan.end + 1));
+                if (node != null && (node.isObject() || node.isArray())) return JsonStatus.COMPLETE;
+            } catch (Exception ignored) {
+                return JsonStatus.INVALID;
+            }
+        }
+        return JsonStatus.INVALID;
+    }
+
+    private ScanResult scan(String content, int start) {
+        Deque<Character> stack = new ArrayDeque<>();
+        boolean inString = false;
+        boolean escaped = false;
+        for (int i = start; i < content.length(); i++) {
+            char ch = content.charAt(i);
+            if (inString) {
+                if (escaped) {
+                    escaped = false;
+                } else if (ch == '\\') {
+                    escaped = true;
+                } else if (ch == '"') {
+                    inString = false;
+                }
+                continue;
+            }
+            if (ch == '"') {
+                inString = true;
+                continue;
+            }
+            if (ch == '{' || ch == '[') {
+                stack.push(ch);
+                if (stack.size() > MAX_JSON_NESTING) return new ScanResult(false, -1);
+            } else if (ch == '}' || ch == ']') {
+                if (stack.isEmpty() || !matching(stack.peek(), ch)) {
+                    return new ScanResult(true, i);
+                }
+                stack.pop();
+                if (stack.isEmpty()) return new ScanResult(true, i);
+            }
+        }
+        return new ScanResult(false, -1);
+    }
+
+    private boolean matching(char opening, char closing) {
+        return (opening == '{' && closing == '}') || (opening == '[' && closing == ']');
+    }
+
+    private static final class Candidate {
+        private final int start;
+        private final int end;
+
+        private Candidate(int start, int end) {
+            this.start = start;
+            this.end = end;
+        }
+    }
+
+    private static final class ScanResult {
+        private final boolean complete;
+        private final int end;
+
+        private ScanResult(boolean complete, int end) {
+            this.complete = complete;
+            this.end = end;
         }
     }
 

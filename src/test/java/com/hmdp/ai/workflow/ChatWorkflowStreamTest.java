@@ -5,6 +5,7 @@ import com.hmdp.dto.ai.IntentRouteSource;
 import com.hmdp.dto.ai.IntentRoutingResult;
 import com.hmdp.dto.ai.ShopAIIntent;
 import com.hmdp.ai.fallback.FallbackPolicy;
+import com.hmdp.ai.fallback.FallbackReason;
 import com.hmdp.ai.guard.QualityCheck;
 import com.hmdp.ai.guard.QualityDecision;
 import com.hmdp.ai.guard.QualityGuard;
@@ -17,6 +18,7 @@ import com.hmdp.ai.workflow.request.QAWorkflowRequest;
 import com.hmdp.dto.ai.ShopAIResponse;
 import com.hmdp.dto.ai.ShopAIStreamEvent;
 import com.hmdp.dto.ai.ShopSummaryResult;
+import com.hmdp.dto.ai.ShopQAResult;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -29,10 +31,12 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
 
 @ExtendWith(MockitoExtension.class)
 class ChatWorkflowStreamTest {
@@ -401,5 +405,118 @@ class ChatWorkflowStreamTest {
         assertThat(done.getDegraded()).isTrue();
         assertThat(done.getAuditStatus()).isNull();
         assertThat(done.getFallbackReason()).isEqualTo("MODEL_UNAVAILABLE");
+    }
+
+    @Test
+    void freeChatStreamShouldFallbackWhenBoundedBufferTruncatesOutput() {
+        ShopAIRequestContext context = ShopAIRequestContext.builder()
+                .userId("u1").sessionId("s1").traceId("t1").build();
+        when(memoryService.aiChatKey("u1", "s1")).thenReturn("m1");
+        when(intentRouteCoordinator.route(context, "hello", null)).thenReturn(IntentRoutingResult.builder()
+                .intent(ShopAIIntent.FREE_CHAT).source(IntentRouteSource.RULE).confidence(0.3).build());
+        when(modelGateway.streamChat(eq("m1"), any())).thenReturn(reactor.core.publisher.Flux.just("12345", "67890"));
+        ReflectionTestUtils.setField(workflow, "maxStreamResponseChars", 8);
+
+        List<ServerSentEvent<ShopAIStreamEvent>> events = workflow.stream(context,
+                        ChatWorkflowRequest.builder().message("hello").build())
+                .collectList().block();
+
+        assertThat(events).extracting(ServerSentEvent::event)
+                .containsExactly("metadata", "delta", "audit", "done");
+        assertThat(events.get(1).data().getFallbackReason()).isEqualTo("OUTPUT_TRUNCATED");
+        assertThat(events.get(2).data().getAuditReason()).isEqualTo("STREAM_OUTPUT_TRUNCATED");
+        assertThat(events.get(3).data().getFallbackReason()).isEqualTo("OUTPUT_TRUNCATED");
+        verify(qualityGuard, never()).validateText(any(), eq("chat"));
+    }
+
+    @Test
+    void structuredQaStreamShouldNormalizeOnlyValidatedJson() {
+        ShopAIRequestContext context = ShopAIRequestContext.builder()
+                .userId("u1").sessionId("s1").traceId("t1").build();
+        when(memoryService.aiChatKey("u1", "s1")).thenReturn("chat-memory");
+        when(intentRouteCoordinator.route(context, "店铺1服务怎么样", null)).thenReturn(IntentRoutingResult.builder()
+                .intent(ShopAIIntent.QA).source(IntentRouteSource.RULE).confidence(0.9).shopId(1L).build());
+        when(qaWorkflow.prepareStreamPlan(eq(context), any(QAWorkflowRequest.class)))
+                .thenReturn(StreamWorkflowPlan.builder()
+                        .analysisType("ask").memoryId("qa-memory").prompt("prompt")
+                        .promptVersion("shop-qa-v3").confidence(0.8).cacheHit(false)
+                        .structuredOutput(true).expectedShopId(1L).expectedQuestion("服务怎么样")
+                        .build());
+        when(modelGateway.streamAnswer("qa-memory", "prompt"))
+                .thenReturn(reactor.core.publisher.Flux.just("{\"shopId\":1,\"answer\":\"稳定\",",
+                        "\"evidenceIds\":[],\"insufficientEvidence\":false}"));
+        when(qualityGuard.validateQA(any(ShopQAResult.class), eq(1L), anyList(), eq("ask")))
+                .thenReturn(QualityCheck.builder().decision(QualityDecision.PASS).build());
+
+        List<ServerSentEvent<ShopAIStreamEvent>> events = workflow.stream(context,
+                        ChatWorkflowRequest.builder().message("店铺1服务怎么样").build())
+                .collectList().block();
+
+        assertThat(events).extracting(ServerSentEvent::event)
+                .containsExactly("metadata", "delta", "audit", "done");
+        assertThat(events.get(1).data().getText()).contains("\"shopId\":1").contains("\"answer\":\"稳定\"");
+        assertThat(events.get(2).data().getAuditStatus()).isEqualTo("PASS");
+        assertThat(events.get(3).data().getDegraded()).isFalse();
+    }
+
+    @Test
+    void structuredQaStreamShouldMarkTruncatedJsonInsteadOfEmittingIt() {
+        ShopAIRequestContext context = ShopAIRequestContext.builder()
+                .userId("u1").sessionId("s1").traceId("t1").build();
+        when(memoryService.aiChatKey("u1", "s1")).thenReturn("chat-memory");
+        when(intentRouteCoordinator.route(context, "店铺1服务怎么样", null)).thenReturn(IntentRoutingResult.builder()
+                .intent(ShopAIIntent.QA).source(IntentRouteSource.RULE).confidence(0.9).shopId(1L).build());
+        when(qaWorkflow.prepareStreamPlan(eq(context), any(QAWorkflowRequest.class)))
+                .thenReturn(StreamWorkflowPlan.builder()
+                        .analysisType("ask").memoryId("qa-memory").prompt("prompt")
+                        .structuredOutput(true).expectedShopId(1L).expectedQuestion("服务怎么样")
+                        .build());
+        when(modelGateway.streamAnswer("qa-memory", "prompt"))
+                .thenReturn(reactor.core.publisher.Flux.just("{\"shopId\":1,\"answer\":\"未完成"));
+        when(fallbackPolicy.fallbackQA(eq(1L), eq("服务怎么样"), eq("ask"),
+                eq(FallbackReason.QUALITY_REJECTED)))
+                .thenReturn(ShopQAResult.builder().shopId(1L).question("服务怎么样")
+                        .answer("无法可靠回答").evidenceIds(List.of()).insufficientEvidence(true).build());
+
+        List<ServerSentEvent<ShopAIStreamEvent>> events = workflow.stream(context,
+                        ChatWorkflowRequest.builder().message("店铺1服务怎么样").build())
+                .collectList().block();
+
+        assertThat(events.get(1).data().getText()).contains("无法可靠回答").doesNotContain("未完成");
+        assertThat(events.get(2).data().getAuditReason()).isEqualTo("STRUCTURED_OUTPUT_INCOMPLETE");
+        assertThat(events.get(3).data().getFallbackReason()).isEqualTo("STRUCTURED_OUTPUT_INCOMPLETE");
+        verify(qualityGuard, never()).validateQA(any(ShopQAResult.class), anyList(), eq("ask"));
+    }
+
+    @Test
+    void structuredQaStreamShouldKeepTypedContractWhenModelIsUnavailable() {
+        ShopAIRequestContext context = ShopAIRequestContext.builder()
+                .userId("u1").sessionId("s1").traceId("t1").build();
+        when(memoryService.aiChatKey("u1", "s1")).thenReturn("chat-memory");
+        when(intentRouteCoordinator.route(context, "shop 1 service?", null)).thenReturn(IntentRoutingResult.builder()
+                .intent(ShopAIIntent.QA).source(IntentRouteSource.RULE).confidence(0.9).shopId(1L).build());
+        when(qaWorkflow.prepareStreamPlan(eq(context), any(QAWorkflowRequest.class)))
+                .thenReturn(StreamWorkflowPlan.builder()
+                        .analysisType("ask").memoryId("qa-memory").prompt("prompt")
+                        .structuredOutput(true).expectedShopId(1L).expectedQuestion("service?")
+                        .build());
+        when(modelGateway.streamAnswer("qa-memory", "prompt"))
+                .thenReturn(reactor.core.publisher.Flux.error(new RuntimeException("model unavailable")));
+        when(fallbackPolicy.fallbackQA(1L, "service?", "ask", FallbackReason.MODEL_UNAVAILABLE))
+                .thenReturn(ShopQAResult.builder().shopId(1L).question("service?")
+                        .answer("service unavailable").evidenceIds(List.of()).insufficientEvidence(true).build());
+
+        List<ServerSentEvent<ShopAIStreamEvent>> events = workflow.stream(context,
+                        ChatWorkflowRequest.builder().message("shop 1 service?").build())
+                .collectList().block();
+
+        assertThat(events).extracting(ServerSentEvent::event)
+                .containsExactly("metadata", "delta", "done");
+        assertThat(events.get(1).data().getText())
+                .contains("\"shopId\":1", "\"answer\":\"service unavailable\"");
+        assertThat(events.get(1).data().getFallbackReason()).isEqualTo("MODEL_UNAVAILABLE");
+        assertThat(events.get(2).data().getFallbackReason()).isEqualTo("MODEL_UNAVAILABLE");
+        assertThat(events.get(2).data().getDegraded()).isTrue();
+        verify(fallbackPolicy, never()).fallbackText(any(), any(), any());
     }
 }

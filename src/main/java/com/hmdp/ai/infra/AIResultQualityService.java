@@ -19,6 +19,14 @@ public class AIResultQualityService {
             "(?m)^\\s*(希望以上信息对您有帮助|如有需要请继续提问|请告诉我更多细节)[。！!\\s]*$");
 
     public QualityCheckResult validateContent(String content) {
+        return validateContent(content, true);
+    }
+
+    public QualityCheckResult validateContentFragment(String content) {
+        return validateContent(content, false);
+    }
+
+    private QualityCheckResult validateContent(String content, boolean requireSubstantiveLength) {
         QualityCheckResult result = new QualityCheckResult();
 
         if (content == null || content.trim().isEmpty()) {
@@ -27,7 +35,7 @@ public class AIResultQualityService {
             return result;
         }
 
-        if (content.trim().length() < 10) {
+        if (requireSubstantiveLength && content.trim().length() < 10) {
             result.setValid(false);
             result.setReason("内容过短，可能是无效回答");
             return result;

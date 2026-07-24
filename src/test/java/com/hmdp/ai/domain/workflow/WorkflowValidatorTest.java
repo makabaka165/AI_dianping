@@ -4,15 +4,49 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hmdp.ai.shared.validation.JsonSchemaValidationService;
 import com.hmdp.ai.shared.validation.ValidationResult;
 import org.junit.jupiter.api.Test;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.EnumSet;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class WorkflowValidatorTest {
+    @Test
+    void canBeCreatedBySpringWithConstructorInjection() {
+        try (AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext()) {
+            context.registerBean(ObjectMapper.class);
+            context.registerBean(JsonSchemaValidationService.class);
+            context.registerBean(ConditionDslEvaluator.class);
+            context.registerBean(WorkflowValidator.class);
+            context.refresh();
+
+            assertNotNull(context.getBean(WorkflowValidator.class));
+        }
+    }
+
+    @Test
+    void keepsTheRestrictedExecutorConstructorAvailableForCapabilityChecks() {
+        ObjectMapper mapper = new ObjectMapper();
+        WorkflowValidator validator = new WorkflowValidator(
+                new JsonSchemaValidationService(mapper), new ConditionDslEvaluator(mapper), mapper,
+                EnumSet.of(WorkflowNodeType.START, WorkflowNodeType.END, WorkflowNodeType.LLM));
+        WorkflowDefinition workflow = workflow(Arrays.asList(
+                node("start", WorkflowNodeType.START, "{}"),
+                node("transform", WorkflowNodeType.TEXT_TRANSFORM, "{}"),
+                node("answer", WorkflowNodeType.LLM, "{\"outputVariable\":\"agentOutput\"}"),
+                node("end", WorkflowNodeType.END, "{}")), Arrays.asList(
+                edge("start", "transform", null, null),
+                edge("transform", "answer", null, null),
+                edge("answer", "end", null, null)));
+
+        assertIssue(validator.validate(workflow), "WORKFLOW_NODE_TYPE_UNSUPPORTED");
+    }
+
     @Test
     void acceptsReachableAcyclicWorkflowThatProducesOutput() {
         WorkflowDefinition workflow = workflow(Arrays.asList(

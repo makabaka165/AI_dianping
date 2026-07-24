@@ -1,5 +1,6 @@
 package com.hmdp.ai.workflow;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hmdp.ai.fallback.FallbackPolicy;
 import com.hmdp.ai.fallback.FallbackReason;
 import com.hmdp.ai.guard.GovernedGeneration;
@@ -10,6 +11,7 @@ import com.hmdp.dto.ai.IntentRoutingResult;
 import com.hmdp.dto.ai.ShopAIIntent;
 import com.hmdp.ai.memory.MemoryService;
 import com.hmdp.ai.model.ModelGateway;
+import com.hmdp.ai.model.StructuredOutputParser;
 import com.hmdp.dto.ai.ShopAIRequestContext;
 import com.hmdp.ai.prompt.PromptTemplateRender;
 import com.hmdp.ai.prompt.PromptTemplateRegistry;
@@ -22,12 +24,18 @@ import com.hmdp.dto.ai.EvidenceItem;
 import com.hmdp.dto.ai.ShopAIResponse;
 import com.hmdp.dto.ai.ShopAIStreamEvent;
 import com.hmdp.dto.ai.ShopChatResult;
+import com.hmdp.dto.ai.ShopCompareResult;
+import com.hmdp.dto.ai.ShopQAResult;
+import com.hmdp.dto.ai.ShopRecommendResult;
+import com.hmdp.dto.ai.ShopRecommendationItem;
 import com.hmdp.dto.ai.ShopSummaryResult;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Flux;
 
 import javax.annotation.Resource;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -36,6 +44,7 @@ import java.util.stream.Collectors;
 public class ChatWorkflow {
 
     private static final String CHAT_ANALYSIS_TYPE = "chat";
+    private static final int MAX_STREAM_PARTS = 4096;
 
     @Resource
     private IntentRouteCoordinator intentRouteCoordinator;
@@ -69,6 +78,15 @@ public class ChatWorkflow {
 
     @Resource
     private GovernedGeneration governedGeneration;
+
+    @Resource
+    private StructuredOutputParser structuredOutputParser;
+
+    @Resource
+    private ObjectMapper objectMapper;
+
+    @Value("${hmdp.ai.stream.max-response-chars:100000}")
+    private int maxStreamResponseChars = 100_000;
 
     public ShopAIResponse execute(ShopAIRequestContext context, ChatWorkflowRequest request) {
         if (request == null || isBlank(request.getMessage())) {
@@ -223,8 +241,8 @@ public class ChatWorkflow {
         return Flux.concat(
                 Flux.just(metadataEvent(context, routing, context.getMemoryId(), prompt.getVersion())),
                 modelGateway.streamChat(context.getMemoryId(), prompt.getContent())
-                        .collectList()
-                        .flatMapMany(parts -> streamAuditedFreeChatText(context, routing, message, parts))
+                        .collect(this::newStreamBuffer, StreamBuffer::append)
+                        .flatMapMany(buffer -> streamAuditedFreeChatText(context, routing, message, buffer))
         ).onErrorResume(e -> {
             String fallback = fallbackPolicy.fallbackChat(message, CHAT_ANALYSIS_TYPE,
                     FallbackReason.MODEL_UNAVAILABLE).getMessage();
@@ -251,15 +269,14 @@ public class ChatWorkflow {
     private Flux<ServerSentEvent<ShopAIStreamEvent>> streamAuditedFreeChatText(ShopAIRequestContext context,
                                                                                IntentRoutingResult routing,
                                                                                String message,
-                                                                               List<String> parts) {
-        List<String> safeParts = parts == null ? Collections.emptyList() : parts;
-        String text = safeParts.stream()
-                .map(part -> part == null ? "" : part)
-                .collect(Collectors.joining());
-        AuditResult audit = audit(CHAT_ANALYSIS_TYPE, text);
+                                                                               StreamBuffer buffer) {
+        List<String> safeParts = buffer == null ? Collections.emptyList() : buffer.parts();
+        AuditResult audit = audit(CHAT_ANALYSIS_TYPE, buffer);
         if (!audit.pass) {
             String fallback = fallbackPolicy.fallbackChat(message, CHAT_ANALYSIS_TYPE,
                     FallbackReason.QUALITY_REJECTED).getMessage();
+            String fallbackReason = buffer != null && buffer.isTruncated()
+                    ? "OUTPUT_TRUNCATED" : FallbackReason.QUALITY_REJECTED.name();
             return Flux.just(
                     event("delta", ShopAIStreamEvent.builder()
                             .type("delta")
@@ -272,11 +289,11 @@ public class ChatWorkflow {
                             .routingConfidence(routing == null ? null : routing.getConfidence())
                             .degraded(true)
                             .confidence(0.35)
-                            .fallbackReason(FallbackReason.QUALITY_REJECTED.name())
+                            .fallbackReason(fallbackReason)
                             .build()),
                     auditEvent(context, routing, audit),
                     doneEvent(context, routing, true, false, 0.35, audit,
-                            FallbackReason.QUALITY_REJECTED.name())
+                            fallbackReason)
             );
         }
         Flux<ServerSentEvent<ShopAIStreamEvent>> deltas = Flux.fromIterable(safeParts)
@@ -309,7 +326,7 @@ public class ChatWorkflow {
                     Flux.just(metadataEvent(context, routing, memoryId, plan.getPromptVersion()),
                             evidenceEvent(context, routing, memoryId, plan.safeEvidence())),
                     streamAuditedPlanText(context, routing, plan, memoryId,
-                            Collections.singletonList(plan.getDirectText()))
+                            bufferOf(plan.getDirectText()))
             ).filter(item -> item.data() != null);
         }
 
@@ -317,12 +334,15 @@ public class ChatWorkflow {
                         Flux.just(metadataEvent(context, routing, memoryId, plan.getPromptVersion()),
                                 evidenceEvent(context, routing, memoryId, plan.safeEvidence())),
                         streamForPlan(plan)
-                                .collectList()
-                                .flatMapMany(parts -> streamAuditedPlanText(context, routing, plan, memoryId, parts))
+                                .collect(this::newStreamBuffer, StreamBuffer::append)
+                                .flatMapMany(buffer -> streamAuditedPlanText(
+                                        context, routing, plan, memoryId, buffer))
                 )
                 .filter(item -> item.data() != null)
                 .onErrorResume(e -> {
-                    String fallback = fallbackPolicy.fallbackText(memoryId, plan.getPrompt(), plan.getAnalysisType());
+                    String fallback = plan.isStructuredOutput()
+                            ? structuredFallback(plan, memoryId, FallbackReason.MODEL_UNAVAILABLE)
+                            : fallbackPolicy.fallbackText(memoryId, plan.getPrompt(), plan.getAnalysisType());
                     return Flux.just(
                             event("delta", ShopAIStreamEvent.builder()
                                     .type("delta")
@@ -350,11 +370,12 @@ public class ChatWorkflow {
                                                                            IntentRoutingResult routing,
                                                                            StreamWorkflowPlan plan,
                                                                            String memoryId,
-                                                                           List<String> parts) {
-        String text = parts == null ? "" : parts.stream()
-                .map(part -> part == null ? "" : part)
-                .collect(Collectors.joining());
-        AuditResult audit = audit(plan.getAnalysisType(), text);
+                                                                           StreamBuffer buffer) {
+        if (plan.isStructuredOutput()) {
+            return streamStructuredPlan(context, routing, plan, memoryId, buffer);
+        }
+        String text = buffer == null ? "" : buffer.text();
+        AuditResult audit = audit(plan.getAnalysisType(), buffer);
         String finalText = text;
         boolean degraded = Boolean.TRUE.equals(plan.getDegraded());
         String fallbackReason = null;
@@ -362,7 +383,8 @@ public class ChatWorkflow {
         if (!audit.pass) {
             finalText = fallbackPolicy.fallbackText(memoryId, plan.getPrompt(), plan.getAnalysisType());
             degraded = true;
-            fallbackReason = FallbackReason.QUALITY_REJECTED.name();
+            fallbackReason = buffer != null && buffer.isTruncated()
+                    ? "OUTPUT_TRUNCATED" : FallbackReason.QUALITY_REJECTED.name();
             confidence = minConfidence(confidence, 0.35);
         }
         return Flux.just(
@@ -387,6 +409,138 @@ public class ChatWorkflow {
                         audit,
                         fallbackReason)
         );
+    }
+
+    private Flux<ServerSentEvent<ShopAIStreamEvent>> streamStructuredPlan(
+            ShopAIRequestContext context,
+            IntentRoutingResult routing,
+            StreamWorkflowPlan plan,
+            String memoryId,
+            StreamBuffer buffer) {
+        boolean truncated = buffer == null || buffer.isTruncated();
+        boolean degraded = Boolean.TRUE.equals(plan.getDegraded());
+        String finalText;
+        String fallbackReason = null;
+        AuditResult audit;
+        Double confidence = plan.getConfidence();
+        if (truncated) {
+            audit = new AuditResult(false, "REJECTED", "STREAM_OUTPUT_TRUNCATED");
+            finalText = structuredFallback(plan, memoryId, FallbackReason.QUALITY_REJECTED);
+            fallbackReason = "OUTPUT_TRUNCATED";
+            degraded = true;
+            confidence = minConfidence(confidence, 0.35);
+        } else {
+            try {
+                finalText = normalizeStructured(plan, buffer.text());
+                audit = new AuditResult(true, "PASS", null);
+            } catch (StructuredOutputRejected rejected) {
+                audit = new AuditResult(false, "REJECTED", rejected.reason);
+                finalText = structuredFallback(plan, memoryId, FallbackReason.QUALITY_REJECTED);
+                fallbackReason = rejected.reasonCode;
+                degraded = true;
+                confidence = minConfidence(confidence, 0.35);
+            } catch (Exception invalid) {
+                boolean incomplete = structuredParser().classifyJson(buffer.text())
+                        == StructuredOutputParser.JsonStatus.INCOMPLETE;
+                String reason = incomplete
+                        ? "STRUCTURED_OUTPUT_INCOMPLETE" : "STRUCTURED_OUTPUT_INVALID";
+                audit = new AuditResult(false, "REJECTED", reason);
+                finalText = structuredFallback(plan, memoryId, FallbackReason.QUALITY_REJECTED);
+                fallbackReason = reason;
+                degraded = true;
+                confidence = minConfidence(confidence, 0.35);
+            }
+        }
+        return Flux.just(
+                event("delta", ShopAIStreamEvent.builder()
+                        .type("delta")
+                        .text(finalText)
+                        .traceId(context.getTraceId())
+                        .sessionId(context.getSessionId())
+                        .memoryId(memoryId)
+                        .intent(routing == null ? context.getIntent() : routing.getIntent())
+                        .routingSource(routing == null ? null : routing.getSource())
+                        .routingConfidence(routing == null ? null : routing.getConfidence())
+                        .degraded(degraded)
+                        .confidence(confidence)
+                        .fallbackReason(fallbackReason)
+                        .build()),
+                auditEvent(context, routing, audit),
+                doneEvent(context, routing, degraded,
+                        Boolean.TRUE.equals(plan.getCacheHit()), confidence, audit, fallbackReason));
+    }
+
+    private String normalizeStructured(StreamWorkflowPlan plan, String raw) throws Exception {
+        String type = plan.getAnalysisType();
+        if (isQaAnalysisType(type)) {
+            ShopQAResult result = structuredParser().parseQA(raw, plan.getExpectedShopId(), plan.getExpectedQuestion());
+            QualityCheck check = qualityGuard.validateQA(result, plan.getExpectedShopId(), plan.safeEvidence(), type);
+            ensureStructuredQuality(check);
+            return mapper().writeValueAsString(result);
+        }
+        if ("compare".equals(type)) {
+            ShopCompareResult result = structuredParser().parseCompare(raw, plan.getExpectedShopId1(),
+                    plan.getExpectedShopId2(), plan.getExpectedAspect());
+            QualityCheck check = qualityGuard.validateCompare(result, plan.getExpectedShopId1(),
+                    plan.getExpectedShopId2(), plan.safeEvidence(), type);
+            ensureStructuredQuality(check);
+            return mapper().writeValueAsString(result);
+        }
+        if ("recommend".equals(type)) {
+            ShopRecommendResult result = structuredParser().parseRecommend(raw,
+                    plan.getExpectedUserPreference(), plan.getExpectedCategory(), plan.getCandidateShops());
+            QualityCheck check = qualityGuard.validateRecommend(result,
+                    plan.getCandidateShopIds() == null ? Collections.emptySet() : plan.getCandidateShopIds(),
+                    plan.safeEvidence(), type);
+            ensureStructuredQuality(check);
+            limitRecommendation(result, plan.getRequestedLimit());
+            return mapper().writeValueAsString(result);
+        }
+        throw new StructuredOutputRejected("STRUCTURED_OUTPUT_TYPE_UNSUPPORTED", "STRUCTURED_OUTPUT_INVALID");
+    }
+
+    private void ensureStructuredQuality(QualityCheck check) throws StructuredOutputRejected {
+        if (check == null || !check.pass()) {
+            String reason = check == null || isBlank(check.getReason())
+                    ? "STRUCTURED_OUTPUT_REJECTED" : check.getReason();
+            throw new StructuredOutputRejected(reason, "STRUCTURED_OUTPUT_REJECTED");
+        }
+    }
+
+    private String structuredFallback(StreamWorkflowPlan plan, String memoryId, FallbackReason reason) {
+        try {
+            if (isQaAnalysisType(plan.getAnalysisType())) {
+                return mapper().writeValueAsString(fallbackPolicy.fallbackQA(plan.getExpectedShopId(),
+                        plan.getExpectedQuestion(), plan.getAnalysisType(), reason));
+            }
+            if ("compare".equals(plan.getAnalysisType())) {
+                return mapper().writeValueAsString(fallbackPolicy.fallbackCompare(plan.getExpectedShopId1(),
+                        plan.getExpectedShopId2(), plan.getExpectedAspect(), plan.getAnalysisType(),
+                        reason));
+            }
+            if ("recommend".equals(plan.getAnalysisType())) {
+                int limit = plan.getRequestedLimit() == null ? 5 : plan.getRequestedLimit();
+                return mapper().writeValueAsString(fallbackPolicy.fallbackRecommend(
+                        plan.getExpectedUserPreference(), plan.getExpectedCategory(), plan.getCandidateShops(),
+                        limit, plan.getAnalysisType(), reason));
+            }
+        } catch (Exception ignored) {
+            // Fall through to the existing text fallback if a typed fallback cannot be serialized.
+        }
+        return fallbackPolicy.fallbackText(memoryId, plan.getPrompt(), plan.getAnalysisType());
+    }
+
+    private boolean isQaAnalysisType(String analysisType) {
+        return "ask".equals(analysisType) || "qa".equals(analysisType);
+    }
+
+    private void limitRecommendation(ShopRecommendResult result, Integer requestedLimit) {
+        if (result == null || requestedLimit == null || result.getItems() == null
+                || result.getItems().size() <= requestedLimit) return;
+        List<ShopRecommendationItem> limited = new ArrayList<>(
+                result.getItems().subList(0, Math.max(1, requestedLimit)));
+        for (int i = 0; i < limited.size(); i++) limited.get(i).setRank(i + 1);
+        result.setItems(limited);
     }
 
     private Flux<String> streamForPlan(StreamWorkflowPlan plan) {
@@ -544,7 +698,8 @@ public class ChatWorkflow {
                                                         String fallbackReason) {
         boolean auditRejected = audit != null && !audit.pass;
         Double finalConfidence = auditRejected ? minConfidence(confidence, 0.35) : confidence;
-        String finalFallbackReason = auditRejected ? FallbackReason.QUALITY_REJECTED.name() : fallbackReason;
+        String finalFallbackReason = auditRejected && isBlank(fallbackReason)
+                ? FallbackReason.QUALITY_REJECTED.name() : fallbackReason;
         return event("done", ShopAIStreamEvent.builder()
                 .type("done")
                 .traceId(context.getTraceId())
@@ -582,6 +737,33 @@ public class ChatWorkflow {
         QualityCheck quality = qualityGuard.validateText(text, analysisType);
         boolean pass = quality.pass();
         return new AuditResult(pass, pass ? "PASS" : "REJECTED", pass ? null : quality.getReason());
+    }
+
+    private AuditResult audit(String analysisType, StreamBuffer buffer) {
+        if (buffer == null || buffer.isTruncated()) {
+            return new AuditResult(false, "REJECTED", "STREAM_OUTPUT_TRUNCATED");
+        }
+        return audit(analysisType, buffer.text());
+    }
+
+    private StreamBuffer newStreamBuffer() {
+        return new StreamBuffer(Math.max(1, maxStreamResponseChars), MAX_STREAM_PARTS);
+    }
+
+    private StreamBuffer bufferOf(String value) {
+        StreamBuffer buffer = newStreamBuffer();
+        buffer.append(value);
+        return buffer;
+    }
+
+    private StructuredOutputParser structuredParser() {
+        if (structuredOutputParser == null) structuredOutputParser = new StructuredOutputParser();
+        return structuredOutputParser;
+    }
+
+    private ObjectMapper mapper() {
+        if (objectMapper == null) objectMapper = new ObjectMapper();
+        return objectMapper;
     }
 
     private Double minConfidence(Double confidence, double max) {
@@ -664,6 +846,53 @@ public class ChatWorkflow {
 
     private boolean isBlank(String value) {
         return value == null || value.trim().isEmpty();
+    }
+
+    private static final class StreamBuffer {
+        private final int maxChars;
+        private final int maxParts;
+        private final StringBuilder text = new StringBuilder();
+        private final List<String> parts = new ArrayList<>();
+        private boolean truncated;
+
+        private StreamBuffer(int maxChars, int maxParts) {
+            this.maxChars = maxChars;
+            this.maxParts = maxParts;
+        }
+
+        private void append(String value) {
+            if (truncated) return;
+            String part = value == null ? "" : value;
+            if (parts.size() >= maxParts || part.length() > maxChars - text.length()) {
+                truncated = true;
+                return;
+            }
+            parts.add(part);
+            text.append(part);
+        }
+
+        private String text() {
+            return text.toString();
+        }
+
+        private List<String> parts() {
+            return Collections.unmodifiableList(parts);
+        }
+
+        private boolean isTruncated() {
+            return truncated;
+        }
+    }
+
+    private static final class StructuredOutputRejected extends Exception {
+        private final String reason;
+        private final String reasonCode;
+
+        private StructuredOutputRejected(String reason, String reasonCode) {
+            super(reason);
+            this.reason = reason;
+            this.reasonCode = reasonCode;
+        }
     }
 
     private static class AuditResult {

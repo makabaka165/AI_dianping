@@ -85,7 +85,7 @@ public class QAWorkflow {
                         request.getQuestion(), shopContext.safeEvidence()),
                 reason -> modelGateway.repairStructuredAnswer(memoryId, prompt.getContent(), request.getShopId(),
                         request.getQuestion(), reason),
-                qa -> qualityGuard.validateQA(qa, shopContext.safeEvidence(), ANALYSIS_TYPE),
+                qa -> qualityGuard.validateQA(qa, request.getShopId(), shopContext.safeEvidence(), ANALYSIS_TYPE),
                 reason -> fallbackPolicy.fallbackQA(request.getShopId(), request.getQuestion(), ANALYSIS_TYPE, reason),
                 qa -> {
                     qa.setAnswer(qualityGuard.postProcess(qa.getAnswer()));
@@ -146,6 +146,9 @@ public class QAWorkflow {
                 .confidence(0.7)
                 .degraded(false)
                 .cacheHit(false)
+                .structuredOutput(true)
+                .expectedShopId(request.getShopId())
+                .expectedQuestion(request.getQuestion())
                 .build();
     }
 

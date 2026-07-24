@@ -151,6 +151,10 @@ public class CompareWorkflow {
                 .confidence(0.7)
                 .degraded(false)
                 .cacheHit(false)
+                .structuredOutput(true)
+                .expectedShopId1(request.getShopId1())
+                .expectedShopId2(request.getShopId2())
+                .expectedAspect(request.getAspect())
                 .build();
     }
 

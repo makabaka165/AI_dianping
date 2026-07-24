@@ -23,6 +23,7 @@ import org.springframework.stereotype.Component;
 import javax.annotation.Resource;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.function.UnaryOperator;
@@ -150,7 +151,23 @@ public class RecommendWorkflow {
                 .confidence(0.7)
                 .degraded(false)
                 .cacheHit(false)
+                .structuredOutput(true)
+                .expectedUserPreference(request.getUserPreference())
+                .expectedCategory(request.getCategory())
+                .requestedLimit(requestedLimit)
+                .candidateShopIds(candidateIds(candidates))
+                .candidateShops(candidates)
                 .build();
+    }
+
+    private Set<Long> candidateIds(List<ShopView> candidates) {
+        Set<Long> ids = new LinkedHashSet<>();
+        if (candidates != null) {
+            for (ShopView candidate : candidates) {
+                if (candidate != null && candidate.getId() != null) ids.add(candidate.getId());
+            }
+        }
+        return ids;
     }
 
     private List<EvidenceItem> recommendationEvidence(List<ShopView> candidates, String preference, String category) {

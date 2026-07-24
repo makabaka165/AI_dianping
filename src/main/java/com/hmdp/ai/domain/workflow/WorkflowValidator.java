@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hmdp.ai.shared.validation.JsonSchemaValidationService;
 import com.hmdp.ai.shared.validation.ValidationIssue;
 import com.hmdp.ai.shared.validation.ValidationResult;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayDeque;
@@ -33,6 +34,7 @@ public class WorkflowValidator {
     private final ObjectMapper mapper;
     private final Set<WorkflowNodeType> executableTypes;
 
+    @Autowired
     public WorkflowValidator(JsonSchemaValidationService schemas, ConditionDslEvaluator conditions,
                              ObjectMapper mapper) {
         this(schemas, conditions, mapper, EnumSet.allOf(WorkflowNodeType.class));
@@ -43,6 +45,9 @@ public class WorkflowValidator {
         this.schemas = schemas;
         this.conditions = conditions;
         this.mapper = mapper;
+        if (executableTypes == null || executableTypes.isEmpty()) {
+            throw new IllegalArgumentException("executableTypes must not be empty");
+        }
         this.executableTypes = Collections.unmodifiableSet(EnumSet.copyOf(executableTypes));
     }
 

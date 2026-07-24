@@ -80,7 +80,7 @@ class QAWorkflowTest {
     }
 
     @Test
-    void qualityFailureShouldRepairOnceBeforeFallback() {
+    void mismatchedShopIdShouldRepairOnceBeforeFallback() {
         ShopAIRequestContext context = ShopAIRequestContext.builder()
                 .userId("u1")
                 .sessionId("s1")
@@ -97,7 +97,7 @@ class QAWorkflowTest {
                 .shopId(1L)
                 .evidence(List.of(evidence))
                 .build();
-        ShopQAResult bad = ShopQAResult.builder().shopId(1L).question("服务怎么样").answer("泛泛而谈").build();
+        ShopQAResult bad = ShopQAResult.builder().shopId(2L).question("服务怎么样").answer("泛泛而谈").build();
         ShopQAResult repaired = ShopQAResult.builder()
                 .shopId(1L)
                 .question("服务怎么样")
@@ -119,13 +119,13 @@ class QAWorkflowTest {
         when(promptTemplateRegistry.qaPrompt("服务怎么样", "summary snapshot", "evidence block")).thenReturn("qa prompt");
         when(modelGateway.generateStructuredAnswer("qa-memory", "qa prompt", 1L, "服务怎么样", analysisContext.safeEvidence()))
                 .thenReturn(bad);
-        when(qualityGuard.validateQA(bad, analysisContext.safeEvidence(), "ask")).thenReturn(QualityCheck.builder()
+        when(qualityGuard.validateQA(bad, 1L, analysisContext.safeEvidence(), "ask")).thenReturn(QualityCheck.builder()
                 .decision(QualityDecision.FALLBACK)
-                .reason("too generic")
+                .reason("shopId mismatch")
                 .build());
-        when(modelGateway.repairStructuredAnswer("qa-memory", "qa prompt", 1L, "服务怎么样", "too generic"))
+        when(modelGateway.repairStructuredAnswer("qa-memory", "qa prompt", 1L, "服务怎么样", "shopId mismatch"))
                 .thenReturn(repaired);
-        when(qualityGuard.validateQA(repaired, analysisContext.safeEvidence(), "ask")).thenReturn(QualityCheck.builder()
+        when(qualityGuard.validateQA(repaired, 1L, analysisContext.safeEvidence(), "ask")).thenReturn(QualityCheck.builder()
                 .decision(QualityDecision.PASS)
                 .build());
         when(qualityGuard.postProcess("repaired answer")).thenReturn("repaired answer");
@@ -139,7 +139,9 @@ class QAWorkflowTest {
         assertThat(response.getQa().getEvidenceIds()).containsExactly("review:10");
         assertThat(response.getDegraded()).isFalse();
         assertThat(response.getMemoryId()).isEqualTo("qa-memory");
-        verify(modelGateway).repairStructuredAnswer("qa-memory", "qa prompt", 1L, "服务怎么样", "too generic");
+        verify(qualityGuard).validateQA(bad, 1L, analysisContext.safeEvidence(), "ask");
+        verify(qualityGuard).validateQA(repaired, 1L, analysisContext.safeEvidence(), "ask");
+        verify(modelGateway).repairStructuredAnswer("qa-memory", "qa prompt", 1L, "服务怎么样", "shopId mismatch");
         verify(fallbackPolicy, never()).fallbackText(anyString(), anyString(), anyString());
     }
 
@@ -208,5 +210,46 @@ class QAWorkflowTest {
         assertThat(response.getConfidence()).isEqualTo(0.2);
         verify(modelGateway, never()).generateStructuredAnswer(anyString(), anyString(), anyLong(), anyString(), any());
         verify(memoryService, never()).readSummaryMemory(anyString());
+    }
+
+    @Test
+    void streamPlanShouldUseAskAnalysisTypeForStructuredQa() {
+        ShopAIRequestContext context = ShopAIRequestContext.builder()
+                .userId("u1")
+                .sessionId("s1")
+                .traceId("t1")
+                .build();
+        EvidenceItem evidence = EvidenceItem.builder()
+                .id("review:10")
+                .type(EvidenceType.REVIEW)
+                .sourceId(10L)
+                .shopId(1L)
+                .snippet("service is stable")
+                .build();
+        ShopAnalysisContext analysisContext = ShopAnalysisContext.builder()
+                .shopId(1L)
+                .evidence(List.of(evidence))
+                .build();
+        when(memoryService.shopQAKey(1L, "u1")).thenReturn("qa-memory");
+        when(memoryService.shopSummaryKey(1L, "u1")).thenReturn("summary-memory");
+        when(memoryService.readSummaryMemory("summary-memory")).thenReturn("summary snapshot");
+        when(shopContextAssembler.buildForShop(1L, "service?")).thenReturn(analysisContext);
+        when(shopContextAssembler.toPromptBlock(analysisContext)).thenReturn("evidence block");
+        when(promptTemplateRegistry.renderQA(context, 1L, "service?", "summary snapshot", "evidence block"))
+                .thenReturn(PromptTemplateRender.builder()
+                        .content("qa prompt")
+                        .version(PromptTemplateRegistry.QA_VERSION)
+                        .variant("stable")
+                        .build());
+
+        StreamWorkflowPlan plan = workflow.prepareStreamPlan(context, QAWorkflowRequest.builder()
+                .shopId(1L)
+                .question("service?")
+                .build());
+
+        assertThat(plan.getAnalysisType()).isEqualTo("ask");
+        assertThat(plan.isStructuredOutput()).isTrue();
+        assertThat(plan.getExpectedShopId()).isEqualTo(1L);
+        assertThat(plan.getExpectedQuestion()).isEqualTo("service?");
     }
 }

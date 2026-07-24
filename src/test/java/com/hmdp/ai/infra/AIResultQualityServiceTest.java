@@ -57,6 +57,23 @@ class AIResultQualityServiceTest {
     }
 
     @Test
+    void shouldAllowShortSafeContentFragment() {
+        AIResultQualityService.QualityCheckResult result =
+                service.validateContentFragment("适合约会");
+
+        assertThat(result.isValid()).isTrue();
+    }
+
+    @Test
+    void shouldRejectUnsafeShortContentFragment() {
+        AIResultQualityService.QualityCheckResult result =
+                service.validateContentFragment("绝对最好");
+
+        assertThat(result.isValid()).isFalse();
+        assertThat(result.getReason()).contains("过度确定");
+    }
+
+    @Test
     void postProcessShouldNotRemoveEvidenceBoundBusinessSentence() {
         String processed = service.postProcessContent("根据证据提供的信息，这家店服务稳定，适合聚餐。");
 

@@ -58,6 +58,18 @@ public class QualityGuard {
         if (!textCheck.pass()) {
             return textCheck;
         }
+        QualityCheck detailCheck = validateFragments(result.getKeywords(), analysisType);
+        if (!detailCheck.pass()) {
+            return detailCheck;
+        }
+        detailCheck = validateFragments(result.getPros(), analysisType);
+        if (!detailCheck.pass()) {
+            return detailCheck;
+        }
+        detailCheck = validateFragments(result.getCons(), analysisType);
+        if (!detailCheck.pass()) {
+            return detailCheck;
+        }
         return QualityCheck.builder().decision(QualityDecision.PASS).build();
     }
 
@@ -84,6 +96,16 @@ public class QualityGuard {
         return QualityCheck.builder().decision(QualityDecision.PASS).build();
     }
 
+    public QualityCheck validateQA(ShopQAResult result,
+                                   Long expectedShopId,
+                                   List<EvidenceItem> evidence,
+                                   String analysisType) {
+        if (result == null || expectedShopId == null || !expectedShopId.equals(result.getShopId())) {
+            return reject(analysisType, "问答结果 shopId 与请求不一致");
+        }
+        return validateQA(result, evidence, analysisType);
+    }
+
     public QualityCheck validateCompare(ShopCompareResult result,
                                         Long shopId1,
                                         Long shopId2,
@@ -91,6 +113,9 @@ public class QualityGuard {
                                         String analysisType) {
         if (result == null) {
             return reject(analysisType, "对比结果为空");
+        }
+        if (shopId1 == null || shopId2 == null) {
+            return reject(analysisType, "对比请求 shopId 不能为空");
         }
         if (!shopId1.equals(result.getShopId1()) || !shopId2.equals(result.getShopId2())) {
             return reject(analysisType, "对比结果 shopId 与请求不一致");
@@ -113,6 +138,18 @@ public class QualityGuard {
         if (!textCheck.pass()) {
             return textCheck;
         }
+        QualityCheck detailCheck = validateFragments(result.getShop1Pros(), analysisType);
+        if (!detailCheck.pass()) {
+            return detailCheck;
+        }
+        detailCheck = validateFragments(result.getShop2Pros(), analysisType);
+        if (!detailCheck.pass()) {
+            return detailCheck;
+        }
+        detailCheck = validateFragments(result.getRiskNotes(), analysisType);
+        if (!detailCheck.pass()) {
+            return detailCheck;
+        }
         return QualityCheck.builder().decision(QualityDecision.PASS).build();
     }
 
@@ -126,10 +163,24 @@ public class QualityGuard {
         if (result.safeItems().isEmpty() && isBlank(result.getMessage())) {
             return reject(analysisType, "推荐结果为空");
         }
+        QualityCheck messageCheck = result.safeItems().isEmpty()
+                ? validateText(result.getMessage(), analysisType)
+                : validateOptionalFragment(result.getMessage(), analysisType);
+        if (!messageCheck.pass()) {
+            return messageCheck;
+        }
+        Set<Long> allowedCandidateShopIds = candidateShopIds == null ? Set.of() : candidateShopIds;
         Set<Integer> ranks = new HashSet<>();
+        Set<Long> recommendedShopIds = new HashSet<>();
         for (ShopRecommendationItem item : result.safeItems()) {
-            if (item.getShopId() == null || !candidateShopIds.contains(item.getShopId())) {
+            if (item == null) {
+                return reject(analysisType, "推荐项为空");
+            }
+            if (item.getShopId() == null || !allowedCandidateShopIds.contains(item.getShopId())) {
                 return reject(analysisType, "推荐项 shopId 不在候选店铺中");
+            }
+            if (!recommendedShopIds.add(item.getShopId())) {
+                return reject(analysisType, "推荐项 shopId 重复");
             }
             if (item.getRank() == null || item.getRank() <= 0 || !ranks.add(item.getRank())) {
                 return reject(analysisType, "推荐 rank 非法或重复");
@@ -137,10 +188,73 @@ public class QualityGuard {
             if (isBlank(item.getReason())) {
                 return reject(analysisType, "推荐理由为空");
             }
-            QualityCheck evidenceCheck = validateEvidenceIds(item.safeEvidenceIds(), evidence, analysisType);
+            QualityCheck evidenceCheck = validateRecommendationEvidenceIds(
+                    item.safeEvidenceIds(), evidence, item.getShopId(), analysisType);
             if (!evidenceCheck.pass()) {
                 return evidenceCheck;
             }
+            QualityCheck reasonCheck = validateFragment(item.getReason(), analysisType);
+            if (!reasonCheck.pass()) {
+                return reasonCheck;
+            }
+            QualityCheck suitableForCheck = validateOptionalFragment(item.getSuitableFor(), analysisType);
+            if (!suitableForCheck.pass()) {
+                return suitableForCheck;
+            }
+            QualityCheck uncertaintyCheck = validateOptionalFragment(item.getUncertainty(), analysisType);
+            if (!uncertaintyCheck.pass()) {
+                return uncertaintyCheck;
+            }
+        }
+        return QualityCheck.builder().decision(QualityDecision.PASS).build();
+    }
+
+    private QualityCheck validateOptionalFragment(String content, String analysisType) {
+        if (isBlank(content)) {
+            return QualityCheck.builder().decision(QualityDecision.PASS).build();
+        }
+        return validateFragment(content, analysisType);
+    }
+
+    private QualityCheck validateFragments(List<String> contents, String analysisType) {
+        if (contents == null || contents.isEmpty()) {
+            return QualityCheck.builder().decision(QualityDecision.PASS).build();
+        }
+        for (String content : contents) {
+            if (isBlank(content)) {
+                return reject(analysisType, "用户可见文本片段为空");
+            }
+            QualityCheck check = validateFragment(content, analysisType);
+            if (!check.pass()) {
+                return check;
+            }
+        }
+        return QualityCheck.builder().decision(QualityDecision.PASS).build();
+    }
+
+    private QualityCheck validateFragment(String content, String analysisType) {
+        AIResultQualityService.QualityCheckResult result = aiResultQualityService.validateContentFragment(content);
+        if (result.isValid()) {
+            return QualityCheck.builder().decision(QualityDecision.PASS).build();
+        }
+        return reject(analysisType, result.getReason());
+    }
+
+    private QualityCheck validateRecommendationEvidenceIds(List<String> evidenceIds,
+                                                            List<EvidenceItem> evidence,
+                                                            Long shopId,
+                                                            String analysisType) {
+        QualityCheck evidenceCheck = validateEvidenceIds(evidenceIds, evidence, analysisType);
+        if (!evidenceCheck.pass() || evidenceIds == null || evidenceIds.isEmpty()) {
+            return evidenceCheck;
+        }
+        Set<String> shopEvidenceIds = evidence == null ? Set.of() : evidence.stream()
+                .filter(item -> item != null && shopId.equals(item.getShopId()))
+                .map(EvidenceItem::getId)
+                .filter(id -> id != null && !id.trim().isEmpty())
+                .collect(Collectors.toSet());
+        if (evidenceIds.stream().anyMatch(id -> !shopEvidenceIds.contains(id))) {
+            return reject(analysisType, "推荐项 evidenceIds 与 shopId 不一致");
         }
         return QualityCheck.builder().decision(QualityDecision.PASS).build();
     }
@@ -149,6 +263,7 @@ public class QualityGuard {
                                              List<EvidenceItem> evidence,
                                              String analysisType) {
         Set<String> allowedIds = evidence == null ? Set.of() : evidence.stream()
+                .filter(item -> item != null)
                 .map(EvidenceItem::getId)
                 .filter(id -> id != null && !id.trim().isEmpty())
                 .collect(Collectors.toSet());
