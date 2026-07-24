@@ -66,6 +66,8 @@ hmdp:
     redisson-fallback: false
     model:
       timeout-seconds: ${HMDP_AI_MODEL_TIMEOUT_SECONDS:30}
+    stream:
+      max-response-chars: ${HMDP_AI_STREAM_MAX_RESPONSE_CHARS:100000}
     resilience:
       max-concurrent-calls: ${HMDP_AI_MAX_CONCURRENT_CALLS:8}
       rate-limit-period-seconds: ${HMDP_AI_RATE_LIMIT_PERIOD_SECONDS:1}
@@ -144,8 +146,8 @@ spring:
   application:
     name: hmdp
   datasource:
-    driver-class-name: com.mysql.jdbc.Driver
-    url: ${DB_URL:jdbc:mysql://127.0.0.1:3306/hmdp?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: ${DB_URL:jdbc:mysql://127.0.0.1:3307/hmdp?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true}
     username: ${DB_USERNAME:root}
     password: ${DB_PASSWORD:}
   redis:

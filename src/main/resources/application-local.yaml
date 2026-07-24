@@ -1,8 +1,17 @@
 spring:
   datasource:
-    url: ${DB_URL:jdbc:mysql://127.0.0.1:3306/hmdp?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true}
+    url: ${DB_URL:jdbc:mysql://127.0.0.1:3307/hmdp?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true}
     username: ${DB_USERNAME:root}
     password: ${DB_PASSWORD:}
+  redis:
+    port: ${REDIS_PORT:6381}
+hmdp:
+  ai:
+    redis:
+      business:
+        port: ${REDIS_PORT:6381}
+      memory:
+        port: ${MEMORY_REDIS_PORT:6381}
 logging:
   level:
     com.hmdp: info

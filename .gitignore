@@ -1,5 +1,6 @@
 HELP.md
 target/
+.local-backups/
 .env
 .env.*
 !.env.example

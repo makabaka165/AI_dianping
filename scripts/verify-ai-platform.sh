@@ -7,6 +7,10 @@ cd "$ROOT_DIR"
 COMPOSE_FILE="${AI_VERIFY_COMPOSE_FILE:-docker-compose.ai.yml}"
 APP_PORT="${AI_VERIFY_APP_PORT:-8081}"
 MODEL_PORT="${AI_VERIFY_MODEL_PORT:-18080}"
+COMPOSE_MYSQL_PORT="${AI_MYSQL_PORT:-3307}"
+COMPOSE_REDIS_PORT="${AI_REDIS_PORT:-6381}"
+COMPOSE_REDIS_STACK_PORT="${AI_REDIS_STACK_PORT:-6380}"
+COMPOSE_MINIO_PORT="${AI_MINIO_PORT:-9000}"
 APP_URL="http://127.0.0.1:${APP_PORT}"
 MODEL_URL="http://127.0.0.1:${MODEL_PORT}"
 VERIFY_PHONE="${AI_VERIFY_PHONE:-13686869696}"
@@ -18,6 +22,7 @@ APP_LOG="$WORK_DIR/application.log"
 MODEL_LOG="$WORK_DIR/model-stub.log"
 APP_PID=""
 MODEL_PID=""
+SSE_PID=""
 
 mkdir -p "$WORK_DIR"
 
@@ -36,7 +41,7 @@ fail() {
 
 cleanup() {
   local pid
-  for pid in "$APP_PID" "$MODEL_PID"; do
+  for pid in "$APP_PID" "$MODEL_PID" "$SSE_PID"; do
     if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
       kill "$pid" 2>/dev/null || true
       wait "$pid" 2>/dev/null || true
@@ -49,16 +54,39 @@ require_command() {
   command -v "$1" >/dev/null 2>&1 || fail "required command is missing: $1"
 }
 
+assert_compose_loopback_port() {
+  local service="$1"
+  local container_port="$2"
+  local expected_host_port="$3"
+  local setting="$4"
+  local endpoint
+  endpoint="$(docker compose -f "$COMPOSE_FILE" port "$service" "$container_port" 2>/dev/null | head -n 1 || true)"
+  [[ -n "$endpoint" ]] || \
+    fail "Compose ${service}:${container_port} is not published; recreate it with ${setting}=${expected_host_port}"
+  [[ "$endpoint" == "127.0.0.1:${expected_host_port}" ]] || \
+    fail "Compose ${service}:${container_port} is published at ${endpoint}, expected 127.0.0.1:${expected_host_port}"
+}
+
+export_verified_endpoint() {
+  local variable="$1"
+  local expected="$2"
+  local configured="${!variable:-}"
+  if [[ -n "$configured" && "$configured" != "$expected" ]]; then
+    fail "${variable}=${configured} does not target the verified Compose endpoint ${expected}"
+  fi
+  export "${variable}=${expected}"
+}
+
 for command in docker curl java mvn; do
   require_command "$command"
 done
 
-if command -v python3 >/dev/null 2>&1; then
+if command -v python3 >/dev/null 2>&1 && python3 -c 'import sys; assert sys.version_info >= (3, 8)' >/dev/null 2>&1; then
   PYTHON_BIN=python3
-elif command -v python >/dev/null 2>&1; then
+elif command -v python >/dev/null 2>&1 && python -c 'import sys; assert sys.version_info >= (3, 8)' >/dev/null 2>&1; then
   PYTHON_BIN=python
 else
-  fail "python3 or python is required for JSON assertions and the local model stub"
+  fail "Python 3.8 or newer is required for JSON assertions and the local model stub"
 fi
 
 json_value() {
@@ -111,6 +139,37 @@ if not payload.get("rerankMode"):
 '
 }
 
+assert_document_absent() {
+  local document_id="$1"
+  "$PYTHON_BIN" -c '
+import json
+import sys
+
+payload = json.load(sys.stdin)
+document_id = sys.argv[1]
+if any(item.get("documentId") == document_id for item in payload.get("results", [])):
+    raise SystemExit("deleted document was returned by hybrid retrieval")
+' "$document_id"
+}
+
+minio_object_count() {
+  docker compose -f "$COMPOSE_FILE" exec -T minio-init \
+    mc ls --recursive --json "local/$MINIO_BUCKET" | "$PYTHON_BIN" -c '
+import json
+import sys
+
+count = 0
+for line in sys.stdin:
+    if not line.strip():
+        continue
+    item = json.loads(line)
+    if item.get("status") != "success" or item.get("type") != "file":
+        raise SystemExit("unexpected MinIO listing response")
+    count += 1
+print(count)
+'
+}
+
 wait_for_url() {
   local url="$1"
   local pid="$2"
@@ -137,13 +196,47 @@ auth_curl() {
     "$@"
 }
 
+wait_for_ingestion_published() {
+  local job_id="$1"
+  local job_status=""
+  local job_response=""
+  local job_error=""
+  for _ in $(seq 1 120); do
+    job_response="$(auth_curl "$APP_URL/api/v1/ingestion-jobs/$job_id")"
+    job_status="$(printf '%s' "$job_response" | json_value status)"
+    case "$job_status" in
+      PUBLISHED) return 0 ;;
+      FAILED|CANCELLED)
+        job_error="$(printf '%s' "$job_response" | json_value errorCode)"
+        fail "knowledge ingestion reached $job_status ($job_error)"
+        ;;
+    esac
+    sleep 1
+  done
+  fail "knowledge ingestion did not become PUBLISHED"
+}
+
 log "checking Docker infrastructure"
 docker compose -f "$COMPOSE_FILE" ps
+assert_compose_loopback_port mysql 3306 "$COMPOSE_MYSQL_PORT" AI_MYSQL_PORT
+assert_compose_loopback_port redis 6379 "$COMPOSE_REDIS_PORT" AI_REDIS_PORT
+assert_compose_loopback_port redis-stack 6379 "$COMPOSE_REDIS_STACK_PORT" AI_REDIS_STACK_PORT
+assert_compose_loopback_port minio 9000 "$COMPOSE_MINIO_PORT" AI_MINIO_PORT
 docker compose -f "$COMPOSE_FILE" exec -T redis redis-cli ping | grep -q PONG
 docker compose -f "$COMPOSE_FILE" exec -T redis-stack redis-cli ping | grep -q PONG
 docker compose -f "$COMPOSE_FILE" exec -T mysql sh -c \
   'mysqladmin ping -h 127.0.0.1 -uroot -p"$MYSQL_ROOT_PASSWORD" --silent'
-curl --fail --silent "http://127.0.0.1:${AI_MINIO_PORT:-9000}/minio/health/live" >/dev/null
+curl --fail --silent "http://127.0.0.1:${COMPOSE_MINIO_PORT}/minio/health/live" >/dev/null
+
+EXPECTED_DB_URL="jdbc:mysql://127.0.0.1:${COMPOSE_MYSQL_PORT}/${AI_MYSQL_DATABASE:-hmdp}?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true"
+export_verified_endpoint DB_URL "$EXPECTED_DB_URL"
+export_verified_endpoint REDIS_HOST 127.0.0.1
+export_verified_endpoint REDIS_PORT "$COMPOSE_REDIS_PORT"
+export_verified_endpoint VECTOR_REDIS_HOST 127.0.0.1
+export_verified_endpoint VECTOR_REDIS_PORT "$COMPOSE_REDIS_STACK_PORT"
+export_verified_endpoint MEMORY_REDIS_HOST 127.0.0.1
+export_verified_endpoint MEMORY_REDIS_PORT "$COMPOSE_REDIS_PORT"
+export_verified_endpoint MINIO_ENDPOINT "http://127.0.0.1:${COMPOSE_MINIO_PORT}"
 
 log "building the executable backend"
 mvn -q -DskipTests package
@@ -156,16 +249,8 @@ log "starting local OpenAI-compatible verification provider"
 MODEL_PID=$!
 wait_for_url "$MODEL_URL/health" "$MODEL_PID" "model stub" 30
 
-export DB_URL="${DB_URL:-jdbc:mysql://127.0.0.1:${AI_MYSQL_PORT:-3306}/${AI_MYSQL_DATABASE:-hmdp}?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true}"
 export DB_USERNAME="${DB_USERNAME:-root}"
 export DB_PASSWORD="${DB_PASSWORD:-${AI_MYSQL_ROOT_PASSWORD:-change_me_local}}"
-export REDIS_HOST="${REDIS_HOST:-127.0.0.1}"
-export REDIS_PORT="${REDIS_PORT:-${AI_REDIS_PORT:-6379}}"
-export VECTOR_REDIS_HOST="${VECTOR_REDIS_HOST:-127.0.0.1}"
-export VECTOR_REDIS_PORT="${VECTOR_REDIS_PORT:-${AI_REDIS_STACK_PORT:-6380}}"
-export MEMORY_REDIS_HOST="${MEMORY_REDIS_HOST:-127.0.0.1}"
-export MEMORY_REDIS_PORT="${MEMORY_REDIS_PORT:-${AI_REDIS_PORT:-6379}}"
-export MINIO_ENDPOINT="${MINIO_ENDPOINT:-http://127.0.0.1:${AI_MINIO_PORT:-9000}}"
 export MINIO_ACCESS_KEY="${MINIO_ACCESS_KEY:-${AI_MINIO_ROOT_USER:-local_minio_user}}"
 export MINIO_SECRET_KEY="${MINIO_SECRET_KEY:-${AI_MINIO_ROOT_PASSWORD:-change_me_local_minio}}"
 export MINIO_BUCKET="${MINIO_BUCKET:-${AI_MINIO_BUCKET:-hmdp-ai}}"
@@ -231,28 +316,50 @@ done
 
 log "checking SSE replay and Last-Event-ID reconnection"
 SSE_HEADERS_1="$WORK_DIR/sse-first.headers"
+SSE_EVENTS_1="$WORK_DIR/sse-first.events"
 set +e
 SSE_FIRST="$(auth_curl --no-buffer --max-time 4 -D "$SSE_HEADERS_1" \
   -H 'Last-Event-ID: 0' "$APP_URL/api/v1/agent-runs/$RUN_ID/events" 2>/dev/null)"
 SSE_EXIT=$?
 set -e
+printf '%s\n' "$SSE_FIRST" >"$SSE_EVENTS_1"
 [[ "$SSE_EXIT" -eq 0 || "$SSE_EXIT" -eq 28 ]] || fail "initial SSE request failed with exit code $SSE_EXIT"
 grep -Eq '^HTTP/[^ ]+ 200' "$SSE_HEADERS_1" || fail "initial SSE request did not return HTTP 200"
-LAST_EVENT_ID="$(printf '%s\n' "$SSE_FIRST" | awk '/^id:/{gsub("\\r", "", $2); value=$2} END{print value}')"
+LAST_EVENT_ID="$(awk '/^id:/{value=$0; sub(/^id:[[:space:]]*/, "", value); sub(/\r$/, "", value)} END{print value}' "$SSE_EVENTS_1")"
 [[ "$LAST_EVENT_ID" =~ ^[0-9]+$ ]] || fail "SSE replay did not return sequenced events"
 
 SSE_HEADERS_2="$WORK_DIR/sse-reconnect.headers"
+SSE_EVENTS_2="$WORK_DIR/sse-reconnect.events"
+SSE_ERROR_2="$WORK_DIR/sse-reconnect.error"
 set +e
-SSE_SECOND="$(auth_curl --no-buffer --max-time 2 -D "$SSE_HEADERS_2" \
-  -H "Last-Event-ID: $LAST_EVENT_ID" "$APP_URL/api/v1/agent-runs/$RUN_ID/events" 2>/dev/null)"
+auth_curl --no-buffer --max-time 10 -D "$SSE_HEADERS_2" \
+  -H "Last-Event-ID: $LAST_EVENT_ID" "$APP_URL/api/v1/agent-runs/$RUN_ID/events" \
+  >"$SSE_EVENTS_2" 2>"$SSE_ERROR_2" &
+SSE_PID=$!
+set -e
+sleep 1
+CANCEL_RESPONSE="$(auth_curl -X POST "$APP_URL/api/v1/agent-runs/$RUN_ID/cancel")"
+[[ "$(printf '%s' "$CANCEL_RESPONSE" | json_value status)" == "CANCELLED" ]] || \
+  fail "Agent Run cancellation did not return CANCELLED"
+set +e
+wait "$SSE_PID"
 SSE_EXIT=$?
 set -e
+SSE_PID=""
 [[ "$SSE_EXIT" -eq 0 || "$SSE_EXIT" -eq 28 ]] || fail "reconnected SSE request failed with exit code $SSE_EXIT"
 grep -Eq '^HTTP/[^ ]+ 200' "$SSE_HEADERS_2" || fail "reconnected SSE request did not return HTTP 200"
-if printf '%s\n' "$SSE_SECOND" | awk -v last="$LAST_EVENT_ID" '
-  /^id:/ { gsub("\r", "", $2); if (($2 + 0) <= (last + 0)) bad=1 }
+grep -Eq '^id:' "$SSE_EVENTS_2" || fail "SSE reconnection did not receive the cancellation event"
+grep -Eq '^event:[[:space:]]*run\.cancelled' "$SSE_EVENTS_2" || \
+  fail "SSE reconnection did not receive run.cancelled"
+if awk -v last="$LAST_EVENT_ID" '
+  /^id:/ {
+    value=$0
+    sub(/^id:[[:space:]]*/, "", value)
+    sub(/\r$/, "", value)
+    if ((value + 0) <= (last + 0)) bad=1
+  }
   END { exit bad ? 0 : 1 }
-'; then
+' "$SSE_EVENTS_2"; then
   fail "SSE reconnection replayed an event at or before Last-Event-ID"
 fi
 
@@ -289,23 +396,34 @@ UPLOAD_RESPONSE="$(auth_curl -X POST \
   -F 'title=Refund policy verification' \
   -F "file=@${VERIFY_DOCUMENT};type=text/plain" \
   "$APP_URL/api/v1/knowledge-bases/$KB_ID/documents")"
+DOCUMENT_ID="$(printf '%s' "$UPLOAD_RESPONSE" | json_value documentId)"
 JOB_ID="$(printf '%s' "$UPLOAD_RESPONSE" | json_value jobId)"
+[[ -n "$DOCUMENT_ID" ]] || fail "knowledge upload did not return a document"
 [[ -n "$JOB_ID" ]] || fail "knowledge upload did not return an ingestion job"
+wait_for_ingestion_published "$JOB_ID"
 
-JOB_STATUS=""
-for _ in $(seq 1 120); do
-  JOB_RESPONSE="$(auth_curl "$APP_URL/api/v1/ingestion-jobs/$JOB_ID")"
-  JOB_STATUS="$(printf '%s' "$JOB_RESPONSE" | json_value status)"
-  case "$JOB_STATUS" in
-    PUBLISHED) break ;;
-    FAILED|CANCELLED)
-      JOB_ERROR="$(printf '%s' "$JOB_RESPONSE" | json_value errorCode)"
-      fail "knowledge ingestion reached $JOB_STATUS ($JOB_ERROR)"
-      ;;
-  esac
-  sleep 1
-done
-[[ "$JOB_STATUS" == "PUBLISHED" ]] || fail "knowledge ingestion did not become PUBLISHED"
+log "checking public document deletion across Redis Stack and MinIO"
+MINIO_OBJECTS_BEFORE_DELETE="$(minio_object_count)"
+[[ "$MINIO_OBJECTS_BEFORE_DELETE" =~ ^[0-9]+$ ]] || fail "MinIO object count was not numeric"
+CLEANUP_DOCUMENT="$WORK_DIR/delete-verification.txt"
+printf '%s\n' \
+  "deletion lifecycle sentinel ${RUN_STAMP}" \
+  'This temporary document must disappear from both object storage and hybrid retrieval.' \
+  >"$CLEANUP_DOCUMENT"
+CLEANUP_UPLOAD_RESPONSE="$(auth_curl -X POST \
+  -F 'knowledgeBaseVersion=1' \
+  -F 'title=Deletion lifecycle verification' \
+  -F "file=@${CLEANUP_DOCUMENT};type=text/plain" \
+  "$APP_URL/api/v1/knowledge-bases/$KB_ID/documents")"
+CLEANUP_DOCUMENT_ID="$(printf '%s' "$CLEANUP_UPLOAD_RESPONSE" | json_value documentId)"
+CLEANUP_JOB_ID="$(printf '%s' "$CLEANUP_UPLOAD_RESPONSE" | json_value jobId)"
+[[ -n "$CLEANUP_DOCUMENT_ID" ]] || fail "cleanup upload did not return a document"
+[[ -n "$CLEANUP_JOB_ID" ]] || fail "cleanup upload did not return an ingestion job"
+wait_for_ingestion_published "$CLEANUP_JOB_ID"
+auth_curl -X DELETE "$APP_URL/api/v1/documents/$CLEANUP_DOCUMENT_ID" >/dev/null
+MINIO_OBJECTS_AFTER_DELETE="$(minio_object_count)"
+[[ "$MINIO_OBJECTS_AFTER_DELETE" == "$MINIO_OBJECTS_BEFORE_DELETE" ]] || \
+  fail "document deletion left a MinIO object ($MINIO_OBJECTS_BEFORE_DELETE before, $MINIO_OBJECTS_AFTER_DELETE after)"
 
 log "publishing the verified index and executing hybrid retrieval"
 PUBLISH_RESPONSE="$(auth_curl -X POST \
@@ -316,6 +434,10 @@ SEARCH_RESPONSE="$(auth_curl -X POST "$APP_URL/api/v1/knowledge-bases/$KB_ID/sea
   -H 'Content-Type: application/json' \
   -d '{"query":"refund policy","knowledgeBaseVersion":1,"topK":5}')"
 printf '%s' "$SEARCH_RESPONSE" | assert_search_result
+DELETED_SEARCH_RESPONSE="$(auth_curl -X POST "$APP_URL/api/v1/knowledge-bases/$KB_ID/search" \
+  -H 'Content-Type: application/json' \
+  -d "{\"query\":\"deletion lifecycle sentinel ${RUN_STAMP}\",\"knowledgeBaseVersion\":1,\"topK\":5}")"
+printf '%s' "$DELETED_SEARCH_RESPONSE" | assert_document_absent "$CLEANUP_DOCUMENT_ID"
 
 log "checking Artifact download authorization"
 UNAUTH_ARTIFACT_STATUS="$(curl --silent --output /dev/null --write-out '%{http_code}' \
@@ -327,8 +449,6 @@ WRONG_WORKSPACE_STATUS="$(curl --silent --output /dev/null --write-out '%{http_c
   -H 'X-Workspace-Id: inaccessible-workspace' \
   "$APP_URL/api/v1/artifacts/not-present")"
 [[ "$WRONG_WORKSPACE_STATUS" == "403" ]] || fail "cross-workspace Artifact download was not rejected"
-
-auth_curl -X POST "$APP_URL/api/v1/agent-runs/$RUN_ID/cancel" >/dev/null
 
 log "verification passed"
 log "Flyway migrations: $FLYWAY_COUNT; runId: $RUN_ID; ingestionJobId: $JOB_ID; knowledgeBaseId: $KB_ID"

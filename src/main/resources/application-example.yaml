@@ -7,13 +7,13 @@ spring:
   application:
     name: hmdp
   datasource:
-    driver-class-name: com.mysql.jdbc.Driver
-    url: ${MYSQL_URL:jdbc:mysql://127.0.0.1:3306/hmdp?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: ${MYSQL_URL:jdbc:mysql://127.0.0.1:3307/hmdp?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true}
     username: ${MYSQL_USERNAME:root}
     password: ${MYSQL_PASSWORD:}
   redis:
     host: ${REDIS_HOST:127.0.0.1}
-    port: ${REDIS_PORT:6379}
+    port: ${REDIS_PORT:6381}
     password: ${REDIS_PASSWORD:}
     database: ${REDIS_DATABASE:0}
   flyway:
@@ -25,13 +25,15 @@ hmdp:
   redis:
     redisson:
       host: ${HMDP_REDIS_HOST:${REDIS_HOST:127.0.0.1}}
-      port: ${HMDP_REDIS_PORT:${REDIS_PORT:6379}}
+      port: ${HMDP_REDIS_PORT:${REDIS_PORT:6381}}
       password: ${HMDP_REDIS_PASSWORD:${REDIS_PASSWORD:}}
       database: ${HMDP_REDIS_DATABASE:${REDIS_DATABASE:0}}
       ssl: ${HMDP_REDIS_SSL:false}
   ai:
     redis-health-check: ${HMDP_AI_REDIS_HEALTH_CHECK:true}
     redisson-fallback: ${HMDP_AI_REDISSON_FALLBACK:false}
+    stream:
+      max-response-chars: ${HMDP_AI_STREAM_MAX_RESPONSE_CHARS:100000}
     quota:
       enabled: ${HMDP_AI_QUOTA_ENABLED:true}
       minute-permits: ${HMDP_AI_QUOTA_MINUTE_PERMITS:10}

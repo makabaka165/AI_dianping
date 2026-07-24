@@ -76,10 +76,9 @@
             <artifactId>micrometer-registry-prometheus</artifactId>
         </dependency>
         <dependency>
-            <groupId>mysql</groupId>
-            <artifactId>mysql-connector-java</artifactId>
+            <groupId>com.mysql</groupId>
+            <artifactId>mysql-connector-j</artifactId>
             <scope>runtime</scope>
-            <version>5.1.47</version>
         </dependency>
         <dependency>
             <groupId>org.flywaydb</groupId>
@@ -362,6 +361,10 @@
                             <include>src/main/java/com/hmdp/ai/runtime/tool/ApprovalService.java</include>
                             <include>src/main/java/com/hmdp/ai/runtime/tool/ToolExecutionPipeline.java</include>
                             <include>src/main/java/com/hmdp/ai/runtime/node/LlmNodeExecutor.java</include>
+                            <include>src/main/java/com/hmdp/ai/infrastructure/vector/RedisStackKnowledgeIndexAdapter.java</include>
+                            <include>src/main/java/com/hmdp/ai/infrastructure/vector/RedisKnowledgeIndexNaming.java</include>
+                            <include>src/main/java/com/hmdp/ai/config/LegacyAiServiceConfig.java</include>
+                            <include>src/main/java/com/hmdp/adapter/ai/LangChainAiModelServiceAdapter.java</include>
                         </includes>
                         <googleJavaFormat>
                             <version>1.17.0</version>
@@ -392,7 +395,12 @@
                             <includes>
                                 <include>**/*IntegrationTest.java</include>
                                 <include>**/*IT.java</include>
+                                <include>**/KnowledgeIndexOutboxRecoveryTest.java</include>
+                                <include>**/KnowledgeShadowIndexActivationTest.java</include>
                             </includes>
+                            <systemPropertyVariables>
+                                <api.version>1.44</api.version>
+                            </systemPropertyVariables>
                         </configuration>
                         <executions>
                             <execution>

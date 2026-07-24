@@ -21,14 +21,16 @@ PowerShell users can run the equivalent command directly:
 docker compose -f docker-compose.ai.yml up -d --wait
 ```
 
+Compose publishes business and memory Redis on `6381` and Redis Stack vector search on `6380`, leaving the conventional local Redis port `6379` available to an existing instance. All infrastructure ports are bound to `127.0.0.1` and are not exposed to the local network.
+
 Set the application variables to match Compose, then start the application:
 
 ```bash
-export DB_URL='jdbc:mysql://127.0.0.1:3306/hmdp?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true'
+export DB_URL='jdbc:mysql://127.0.0.1:3307/hmdp?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true'
 export DB_USERNAME=root
 export DB_PASSWORD=change_me_local
-export REDIS_HOST=127.0.0.1 REDIS_PORT=6379 REDIS_PASSWORD=
-export MEMORY_REDIS_HOST=127.0.0.1 MEMORY_REDIS_PORT=6379 MEMORY_REDIS_PASSWORD=
+export REDIS_HOST=127.0.0.1 REDIS_PORT=6381 REDIS_PASSWORD=
+export MEMORY_REDIS_HOST=127.0.0.1 MEMORY_REDIS_PORT=6381 MEMORY_REDIS_PASSWORD=
 export VECTOR_REDIS_HOST=127.0.0.1 VECTOR_REDIS_PORT=6380 VECTOR_REDIS_PASSWORD=
 export MINIO_ENDPOINT=http://127.0.0.1:9000
 export MINIO_ACCESS_KEY=local_minio_user
@@ -39,6 +41,19 @@ mvn spring-boot:run -Dspring-boot.run.profiles=local
 Model calls require published `ai_model_profile` records whose `secret_ref` points to an environment variable such as `env:AI_CHAT_API_KEY`. Default CI tests do not call external models.
 
 数据库初始化：先导入 `src/main/resources/db/hmdp.sql`。启动应用时 Flyway 会自动执行 `src/main/resources/db/migration` 补齐当前结构；不要只导入 `hmdp.sql` 后关闭 Flyway。
+
+Oracle MySQL 8 还需要一次显式兼容桥接。两个已发布的历史迁移使用了仅 MariaDB 支持的 `ADD COLUMN IF NOT EXISTS`，不能直接修改这些文件，否则已部署环境会出现 Flyway checksum mismatch。导入基础 SQL 后、首次启动应用前，在完成数据库备份并安排维护窗口后执行：
+
+```powershell
+.\scripts\repair-mysql8-flyway-compatibility.ps1 `
+  -MysqlPath 'C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe' `
+  -MysqlHost 127.0.0.1 -MysqlPort 3307 -Database hmdp `
+  -Username root -Password '<local-password>' -Confirm:$false
+```
+
+该脚本仅适用于 Oracle MySQL 8：它先把正常迁移推进到 `20260720.02`，在隔离的 Flyway 历史表中执行 MySQL 8 兼容脚本，再以原始 checksum 登记 `20260720.03` (`2143241596`) 和 `20260721.01` (`814957484`)，最后恢复普通 Flyway 迁移。对于两条精确匹配的已知预发布成功 checksum，脚本会在 schema 合同校验后做事务化 reconciliation；其他 checksum 一律拒绝，且不会调用全局 Flyway repair。
+
+脚本将已有 `flyway_schema_history` 备份到不会被 `mvn clean` 删除的 `.local-backups/flyway-compat`；可用 `-HistoryBackupDirectory` 指定其他非 `target` 目录。该 TSV 仅用于历史审计，不代替完整数据库备份；MariaDB 不应执行此桥接。
 
 ## Primary API flow
 
