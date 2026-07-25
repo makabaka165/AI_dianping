@@ -15,6 +15,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
@@ -53,6 +54,59 @@ public class JdbcRunRepository implements RunRepository {
         List<AgentRunRecord> values = jdbcTemplate.query("select " + COLUMNS + " from ai_run where tenant_id=? " +
                         "and workspace_id=? and id=? and deleted=0", rowMapper, tenantId, workspaceId, runId);
         return values.stream().findFirst();
+    }
+
+    @Override
+    public List<AgentRunRecord> findPage(String tenantId, String workspaceId, String userId, String agentId,
+                                         RunStatus status, Instant createdFrom, Instant createdTo,
+                                         int offset, int limit) {
+        StringBuilder sql = new StringBuilder("select " + COLUMNS + " from ai_run where tenant_id=? and workspace_id=? "
+                + "and deleted=0");
+        List<Object> args = new ArrayList<>();
+        args.add(tenantId);
+        args.add(workspaceId);
+        appendRunFilters(sql, args, userId, agentId, status, createdFrom, createdTo);
+        sql.append(" order by created_at desc,id desc limit ? offset ?");
+        args.add(limit);
+        args.add(offset);
+        return jdbcTemplate.query(sql.toString(), rowMapper, args.toArray());
+    }
+
+    @Override
+    public long countPage(String tenantId, String workspaceId, String userId, String agentId, RunStatus status,
+                          Instant createdFrom, Instant createdTo) {
+        StringBuilder sql = new StringBuilder("select count(1) from ai_run where tenant_id=? and workspace_id=? "
+                + "and deleted=0");
+        List<Object> args = new ArrayList<>();
+        args.add(tenantId);
+        args.add(workspaceId);
+        appendRunFilters(sql, args, userId, agentId, status, createdFrom, createdTo);
+        Long value = jdbcTemplate.queryForObject(sql.toString(), Long.class, args.toArray());
+        return value == null ? 0 : value;
+    }
+
+    private void appendRunFilters(StringBuilder sql, List<Object> args, String userId, String agentId,
+                                  RunStatus status, Instant createdFrom, Instant createdTo) {
+        if (userId != null && !userId.trim().isEmpty()) {
+            sql.append(" and user_id=?");
+            args.add(userId);
+        }
+        if (agentId != null && !agentId.trim().isEmpty()) {
+            sql.append(" and agent_id=?");
+            args.add(agentId);
+        }
+        if (status != null) {
+            sql.append(" and status=?");
+            args.add(status.name());
+        }
+        if (createdFrom != null) {
+            sql.append(" and created_at>=?");
+            args.add(Timestamp.from(createdFrom));
+        }
+        if (createdTo != null) {
+            sql.append(" and created_at<=?");
+            args.add(Timestamp.from(createdTo));
+        }
     }
 
     @Override

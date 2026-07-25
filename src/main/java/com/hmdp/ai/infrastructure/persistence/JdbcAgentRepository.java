@@ -84,10 +84,40 @@ public class JdbcAgentRepository implements AgentRepository {
     }
 
     @Override
+    public List<AgentDefinition> findRunnablePage(String tenantId, String workspaceId, int offset, int limit) {
+        return jdbcTemplate.query("select " + AGENT_COLUMNS + " from ai_agent a where a.tenant_id=? and a.workspace_id=? "
+                        + "and a.deleted=0 and a.status='ACTIVE' and exists ("
+                        + "select 1 from ai_agent_version v where v.tenant_id=a.tenant_id and v.workspace_id=a.workspace_id "
+                        + "and v.agent_id=a.id and v.status='PUBLISHED' and v.deleted=0) "
+                        + "order by a.updated_at desc,a.id limit ? offset ?",
+                agentMapper, tenantId, workspaceId, limit, offset);
+    }
+
+    @Override
     public long count(String tenantId, String workspaceId) {
         Long value = jdbcTemplate.queryForObject("select count(1) from ai_agent where tenant_id=? and " +
                         "workspace_id=? and deleted=0", Long.class, tenantId, workspaceId);
         return value == null ? 0 : value;
+    }
+
+    @Override
+    public long countRunnable(String tenantId, String workspaceId) {
+        Long value = jdbcTemplate.queryForObject(
+                "select count(1) from ai_agent a where a.tenant_id=? and a.workspace_id=? and a.deleted=0 "
+                        + "and a.status='ACTIVE' and exists ("
+                        + "select 1 from ai_agent_version v where v.tenant_id=a.tenant_id and v.workspace_id=a.workspace_id "
+                        + "and v.agent_id=a.id and v.status='PUBLISHED' and v.deleted=0)",
+                Long.class, tenantId, workspaceId);
+        return value == null ? 0 : value;
+    }
+
+    @Override
+    public Optional<Integer> findPublishedVersion(String tenantId, String workspaceId, String agentId) {
+        List<Integer> values = jdbcTemplate.query(
+                "select version from ai_agent_version where tenant_id=? and workspace_id=? and agent_id=? "
+                        + "and status='PUBLISHED' and deleted=0 order by version desc limit 1",
+                (rs, rowNum) -> rs.getInt("version"), tenantId, workspaceId, agentId);
+        return values.stream().findFirst();
     }
 
     @Override

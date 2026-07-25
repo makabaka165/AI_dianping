@@ -1,12 +1,54 @@
 openapi: 3.0.3
 info:
   title: AI Dianping Agent Platform API
-  version: 1.1.0
+  version: 1.2.0
 servers:
   - url: http://localhost:8081
 security:
   - bearerAuth: []
 paths:
+  /api/v1/session/bootstrap:
+    get:
+      summary: Bootstrap login session memberships and permissions
+      description: >
+        Requires a valid login token only. Do not send X-Tenant-Id / X-Workspace-Id.
+        Returns the caller's real memberships; defaultScope is null when no active membership exists.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Session bootstrap payload
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SessionBootstrapResponse' }
+        '401':
+          description: Not logged in
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AiError' }
+
+  /api/v1/runnable-agents:
+    get:
+      summary: List published agents the caller can run
+      parameters:
+        - { $ref: '#/components/parameters/TenantHeader' }
+        - { $ref: '#/components/parameters/WorkspaceHeader' }
+        - { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
+        - { name: size, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+      responses:
+        '200':
+          description: Runnable agents page
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/PageResponse' }
+                  - type: object
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: '#/components/schemas/RunnableAgent' }
+
   /api/v1/agents:
     get: { summary: List agents, responses: { '200': { $ref: '#/components/responses/Success' } } }
     post: { summary: Create agent, responses: { '200': { $ref: '#/components/responses/Success' } } }
@@ -34,8 +76,38 @@ paths:
     get: { summary: Diff agent versions, responses: { '200': { $ref: '#/components/responses/Success' } } }
 
   /api/v1/agent-runs:
+    get:
+      summary: List agent run history
+      description: >
+        Ordinary AGENT_RUN users only see their own runs.
+        RUN_INSPECT or ADMIN can inspect all runs inside the current scope.
+      parameters:
+        - { $ref: '#/components/parameters/TenantHeader' }
+        - { $ref: '#/components/parameters/WorkspaceHeader' }
+        - { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
+        - { name: size, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+        - { name: agentId, in: query, schema: { type: string } }
+        - { name: status, in: query, schema: { $ref: '#/components/schemas/RunStatus' } }
+        - { name: createdFrom, in: query, schema: { type: string, format: date-time } }
+        - { name: createdTo, in: query, schema: { type: string, format: date-time } }
+      responses:
+        '200':
+          description: Run history page
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/PageResponse' }
+                  - type: object
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: '#/components/schemas/AgentRunSummary' }
     post:
       summary: Create an Agent run
+      parameters:
+        - { $ref: '#/components/parameters/TenantHeader' }
+        - { $ref: '#/components/parameters/WorkspaceHeader' }
       requestBody:
         required: true
         content:
@@ -46,15 +118,33 @@ paths:
           description: Run queued
           content: { application/json: { schema: { $ref: '#/components/schemas/RunCreated' } } }
   /api/v1/agent-runs/{runId}:
-    parameters: [ { $ref: '#/components/parameters/RunIdPath' } ]
-    get: { summary: Get run details, responses: { '200': { $ref: '#/components/responses/Success' } } }
-  /api/v1/agent-runs/{runId}/events:
-    parameters: [ { $ref: '#/components/parameters/RunIdPath' } ]
+    parameters:
+      - { $ref: '#/components/parameters/RunIdPath' }
+      - { $ref: '#/components/parameters/TenantHeader' }
+      - { $ref: '#/components/parameters/WorkspaceHeader' }
     get:
-      summary: Stream run events
+      summary: Get run details
+      responses:
+        '200':
+          description: Run detail
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentRunDetail' }
+  /api/v1/agent-runs/{runId}/events:
+    parameters:
+      - { $ref: '#/components/parameters/RunIdPath' }
+      - { $ref: '#/components/parameters/TenantHeader' }
+      - { $ref: '#/components/parameters/WorkspaceHeader' }
+    get:
+      summary: Stream run lifecycle events
       parameters:
         - { name: Last-Event-ID, in: header, required: false, schema: { type: integer, format: int64, minimum: 0 } }
-      responses: { '200': { description: SSE stream, content: { text/event-stream: { schema: { type: string } } } } }
+      responses:
+        '200':
+          description: SSE stream of lifecycle events (not token streaming)
+          content:
+            text/event-stream:
+              schema: { $ref: '#/components/schemas/AgentRunEvent' }
   /api/v1/agent-runs/{runId}/cancel:
     parameters: [ { $ref: '#/components/parameters/RunIdPath' } ]
     post: { summary: Cancel run, responses: { '200': { content: { application/json: { schema: { $ref: '#/components/schemas/RunCreated' } } }, description: Run cancelled } } }
@@ -247,6 +337,120 @@ components:
       description: Successful response
       content: { application/json: { schema: { type: object } } }
   schemas:
+    AiError:
+      type: object
+      properties:
+        success: { type: boolean }
+        code:
+          oneOf:
+            - { type: string }
+            - { type: integer }
+        errorMsg: { type: string }
+        message: { type: string }
+    PageResponse:
+      type: object
+      required: [items, total, page, size]
+      properties:
+        items: { type: array, items: { type: object } }
+        total: { type: integer, format: int64, minimum: 0 }
+        page: { type: integer, minimum: 1 }
+        size: { type: integer, minimum: 1 }
+    SessionUser:
+      type: object
+      required: [id, nickName, icon]
+      properties:
+        id: { type: string }
+        nickName: { type: string }
+        icon: { type: string }
+    SessionScope:
+      type: object
+      required: [tenantId, workspaceId]
+      properties:
+        tenantId: { type: string }
+        workspaceId: { type: string }
+    SessionMembership:
+      type: object
+      required: [tenant, workspace, roles, permissions, isDefault, status]
+      properties:
+        tenant:
+          type: object
+          required: [id, name]
+          properties:
+            id: { type: string }
+            name: { type: string }
+        workspace:
+          type: object
+          required: [id, name]
+          properties:
+            id: { type: string }
+            name: { type: string }
+        roles:
+          type: array
+          items: { type: string }
+        permissions:
+          type: array
+          items: { type: string }
+          description: Open string set; clients must tolerate unknown future values
+        isDefault: { type: boolean }
+        status: { type: string }
+    SessionBootstrapResponse:
+      type: object
+      required: [user, memberships]
+      properties:
+        user: { $ref: '#/components/schemas/SessionUser' }
+        memberships:
+          type: array
+          items: { $ref: '#/components/schemas/SessionMembership' }
+        defaultScope:
+          allOf:
+            - { $ref: '#/components/schemas/SessionScope' }
+          nullable: true
+    RunnableAgent:
+      type: object
+      required: [id, code, name, description, publishedVersion]
+      properties:
+        id: { type: string }
+        code: { type: string }
+        name: { type: string }
+        description: { type: string }
+        publishedVersion: { type: integer, minimum: 1 }
+    RunStatus:
+      type: string
+      enum: [CREATED, QUEUED, RUNNING, WAITING_FOR_USER, WAITING_FOR_APPROVAL, COMPLETED, FAILED, CANCELLED, TIMED_OUT]
+    AgentRunSummary:
+      type: object
+      required: [runId, agentId, agentVersion, status, sessionId]
+      properties:
+        runId: { type: string }
+        agentId: { type: string }
+        agentVersion: { type: integer, minimum: 1 }
+        status: { $ref: '#/components/schemas/RunStatus' }
+        sessionId: { type: string }
+        errorCode: { type: string, nullable: true }
+        errorMessage: { type: string, nullable: true }
+        queuedAt: { type: string, format: date-time, nullable: true }
+        startedAt: { type: string, format: date-time, nullable: true }
+        finishedAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time, nullable: true }
+    AgentRunDetail:
+      allOf:
+        - { $ref: '#/components/schemas/AgentRunSummary' }
+        - type: object
+          properties:
+            conversationId: { type: string }
+            traceId: { type: string }
+            versionSnapshot: { type: object }
+            output: { type: object, nullable: true }
+            deadlineAt: { type: string, format: date-time, nullable: true }
+    AgentRunEvent:
+      type: object
+      required: [sequence, runId, type, payload, createdAt]
+      properties:
+        sequence: { type: integer, format: int64 }
+        runId: { type: string }
+        type: { type: string }
+        payload: { type: object }
+        createdAt: { type: string, format: date-time }
     AgentRunRequest:
       type: object
       additionalProperties: false
@@ -271,7 +475,7 @@ components:
       required: [runId, status, agentDefinitionId, agentCode, agentVersion]
       properties:
         runId: { type: string }
-        status: { type: string, enum: [QUEUED, CANCELLED] }
+        status: { $ref: '#/components/schemas/RunStatus' }
         agentDefinitionId: { type: string }
         agentCode: { type: string }
         agentVersion: { type: integer, minimum: 1 }

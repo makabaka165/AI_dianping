@@ -2,10 +2,12 @@ package com.hmdp.ai.application.agent;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.hmdp.ai.application.dto.PageResponse;
 import com.hmdp.ai.application.dto.agent.AgentRunCreatedResponse;
 import com.hmdp.ai.application.dto.agent.AgentRunDetailResponse;
 import com.hmdp.ai.application.dto.agent.AgentRunEventResponse;
 import com.hmdp.ai.application.dto.agent.AgentRunRequest;
+import com.hmdp.ai.application.dto.agent.AgentRunSummaryResponse;
 import com.hmdp.ai.application.dto.agent.ResumeAgentRunRequest;
 import com.hmdp.ai.shared.exception.AiPlatformException;
 import com.hmdp.ai.application.security.AiAccessGuard;
@@ -29,7 +31,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -107,6 +108,26 @@ public class AgentRunApplicationService {
         return detail(run);
     }
 
+    public PageResponse<AgentRunSummaryResponse> list(int page, int size, String agentId, String status,
+                                                      Instant createdFrom, Instant createdTo) {
+        AiSecurityContext context = accessGuard.require(AiPermission.AGENT_RUN);
+        int offset = Math.multiplyExact(page - 1, size);
+        String ownerFilter = context.getAuthorization().has(AiPermission.RUN_INSPECT)
+                || context.getAuthorization().has(AiPermission.ADMIN)
+                ? null
+                : context.getUserId();
+        RunStatus statusFilter = parseStatus(status);
+        String tenantId = context.getTenant().getTenantId();
+        String workspaceId = context.getWorkspace().getWorkspaceId();
+        List<AgentRunSummaryResponse> items = repository.findPage(tenantId, workspaceId, ownerFilter, agentId,
+                        statusFilter, createdFrom, createdTo, offset, size).stream()
+                .map(AgentRunSummaryResponse::new)
+                .collect(Collectors.toList());
+        long total = repository.countPage(tenantId, workspaceId, ownerFilter, agentId, statusFilter,
+                createdFrom, createdTo);
+        return new PageResponse<>(items, total, page, size);
+    }
+
     public AgentRunCreatedResponse cancel(String runId) {
         AiSecurityContext context = accessGuard.require(AiPermission.AGENT_RUN);
         AgentRunRecord run = requireRun(context, runId);
@@ -148,6 +169,17 @@ public class AgentRunApplicationService {
                 .orElseThrow(() -> new AiPlatformException(ErrorCode.AI_RESOURCE_NOT_FOUND, "run not found"));
         accessPolicy.requireRead(context, run);
         return run;
+    }
+
+    private RunStatus parseStatus(String status) {
+        if (status == null || status.trim().isEmpty()) {
+            return null;
+        }
+        try {
+            return RunStatus.valueOf(status.trim().toUpperCase());
+        } catch (IllegalArgumentException e) {
+            throw new AiPlatformException(ErrorCode.PARAM_ERROR, "invalid run status");
+        }
     }
 
     private AgentRunDetailResponse detail(AgentRunRecord run) {

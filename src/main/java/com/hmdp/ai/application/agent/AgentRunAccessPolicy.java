@@ -11,9 +11,13 @@ import org.springframework.stereotype.Component;
 public class AgentRunAccessPolicy {
 
     public void requireRead(AiSecurityContext context, AgentRunRecord run) {
-        if (!context.getUserId().equals(run.getUserId())
-                && !context.getAuthorization().has(AiPermission.ADMIN)) {
-            throw new BusinessException(ErrorCode.FORBIDDEN);
+        if (context.getUserId().equals(run.getUserId())) {
+            return;
         }
+        if (context.getAuthorization().has(AiPermission.ADMIN)
+                || context.getAuthorization().has(AiPermission.RUN_INSPECT)) {
+            return;
+        }
+        throw new BusinessException(ErrorCode.FORBIDDEN);
     }
 }

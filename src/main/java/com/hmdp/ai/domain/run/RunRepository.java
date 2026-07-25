@@ -1,5 +1,6 @@
 package com.hmdp.ai.domain.run;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
@@ -7,6 +8,12 @@ public interface RunRepository {
     AgentRunRecord create(AgentRunRecord run);
 
     Optional<AgentRunRecord> find(String tenantId, String workspaceId, String runId);
+
+    List<AgentRunRecord> findPage(String tenantId, String workspaceId, String userId, String agentId,
+                                  RunStatus status, Instant createdFrom, Instant createdTo, int offset, int limit);
+
+    long countPage(String tenantId, String workspaceId, String userId, String agentId, RunStatus status,
+                   Instant createdFrom, Instant createdTo);
 
     boolean claimQueued(String tenantId, String workspaceId, String runId);
 

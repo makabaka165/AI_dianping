@@ -10,7 +10,13 @@ public interface AgentRepository {
 
     List<AgentDefinition> findPage(String tenantId, String workspaceId, int offset, int limit);
 
+    List<AgentDefinition> findRunnablePage(String tenantId, String workspaceId, int offset, int limit);
+
     long count(String tenantId, String workspaceId);
+
+    long countRunnable(String tenantId, String workspaceId);
+
+    Optional<Integer> findPublishedVersion(String tenantId, String workspaceId, String agentId);
 
     int lockAndNextVersion(String tenantId, String workspaceId, String agentId);
 

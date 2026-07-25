@@ -464,6 +464,30 @@ final class RuntimeIntegrationTestSupport {
         }
 
         @Override
+        public List<AgentRunRecord> findPage(String tenantId, String workspaceId, String userId, String agentId,
+                                             RunStatus status, Instant createdFrom, Instant createdTo,
+                                             int offset, int limit) {
+            return runs.values().stream()
+                    .filter(run -> tenantId.equals(run.getTenantId()) && workspaceId.equals(run.getWorkspaceId()))
+                    .filter(run -> userId == null || userId.equals(run.getUserId()))
+                    .filter(run -> agentId == null || agentId.equals(run.getAgentId()))
+                    .filter(run -> status == null || status == run.getStatus())
+                    .filter(run -> createdFrom == null || !run.getCreatedAt().isBefore(createdFrom))
+                    .filter(run -> createdTo == null || !run.getCreatedAt().isAfter(createdTo))
+                    .sorted((left, right) -> right.getCreatedAt().compareTo(left.getCreatedAt()))
+                    .skip(Math.max(0, offset))
+                    .limit(Math.max(0, limit))
+                    .collect(Collectors.toList());
+        }
+
+        @Override
+        public long countPage(String tenantId, String workspaceId, String userId, String agentId, RunStatus status,
+                              Instant createdFrom, Instant createdTo) {
+            return findPage(tenantId, workspaceId, userId, agentId, status, createdFrom, createdTo, 0, Integer.MAX_VALUE)
+                    .size();
+        }
+
+        @Override
         public boolean claimQueued(String tenantId, String workspaceId, String runId) {
             AgentRunRecord current = find(tenantId, workspaceId, runId).orElse(null);
             if (current == null || current.getStatus() != RunStatus.QUEUED) return false;

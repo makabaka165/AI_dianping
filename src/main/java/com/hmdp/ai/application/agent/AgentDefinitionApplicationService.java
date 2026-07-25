@@ -8,6 +8,7 @@ import com.hmdp.ai.application.dto.agent.AgentVersionResponse;
 import com.hmdp.ai.application.dto.agent.CreateAgentRequest;
 import com.hmdp.ai.application.dto.agent.CreateAgentVersionRequest;
 import com.hmdp.ai.application.dto.agent.PublishValidationResponse;
+import com.hmdp.ai.application.dto.agent.RunnableAgentResponse;
 import com.hmdp.ai.shared.exception.AiPlatformException;
 import com.hmdp.ai.application.security.AiAccessGuard;
 import com.hmdp.ai.domain.agent.AgentDefinition;
@@ -73,6 +74,23 @@ public class AgentDefinitionApplicationService {
                 .map(AgentResponse::new).collect(Collectors.toList());
         return new PageResponse<>(items, repository.count(context.getTenant().getTenantId(),
                 context.getWorkspace().getWorkspaceId()), page, size);
+    }
+
+    public PageResponse<RunnableAgentResponse> listRunnable(int page, int size) {
+        AiSecurityContext context = accessGuard.require(AiPermission.AGENT_RUN);
+        int offset = Math.multiplyExact(page - 1, size);
+        String tenantId = context.getTenant().getTenantId();
+        String workspaceId = context.getWorkspace().getWorkspaceId();
+        List<RunnableAgentResponse> items = repository.findRunnablePage(tenantId, workspaceId, offset, size).stream()
+                .map(agent -> {
+                    int publishedVersion = repository.findPublishedVersion(tenantId, workspaceId, agent.getId())
+                            .orElseThrow(() -> new AiPlatformException(ErrorCode.AI_VERSION_NOT_FOUND,
+                                    "published agent version not found"));
+                    return new RunnableAgentResponse(agent.getId(), agent.getCode(), agent.getName(),
+                            agent.getDescription(), publishedVersion);
+                })
+                .collect(Collectors.toList());
+        return new PageResponse<>(items, repository.countRunnable(tenantId, workspaceId), page, size);
     }
 
     public AgentResponse get(String agentId) {
